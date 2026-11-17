@@ -2,7 +2,11 @@
 //!
 //! 流水线：源站详情页 → 发布要素（标题/副标题/简介/MediaInfo/链接）→ LuckAudit 三查
 //! （MediaInfo 非空、简介带 IMDb/豆瓣/TMDB、中字标签）→ 目标站 upload.php 表单提交
-//! → 新种详情页回推下载器 → 校验 → 格子落 Reseeded。
+//! → 发后自检（回读新种页核对标题/MediaInfo/链接）→ 新种详情页回推下载器 → 校验
+//! → 格子落 Reseeded。
+//!
+//! 另有审阅模式（`review_reseed`）：同一套解析/预检/字段构造跑到「将要提交什么」为止，
+//! 不 POST、不落账——先看清字段再决定发不发（CLI `bsend reseed` 默认、GUI「审阅」按钮）。
 //!
 //! 表单构造与 Swift 版 `NexusPHPAdapter.buildUploadFields` 同思路（hidden 透传、
 //! select 默认值、业务字段覆盖、标签动态匹配），但只做站点无关的通用层：
@@ -174,8 +178,9 @@ pub fn preflight(info: &mut ReleaseInfo, tags: &[String]) -> Preflight {
 
 /// 详情页解析：发布名/副标题/简介/MediaInfo/条目链接（Swift `parse` 的通用子集）
 pub fn parse_release_page(html: &str, name_fallback: &str) -> ReleaseInfo {
+    let raw_name = first_tag_text(html, "h1").unwrap_or_else(|| name_fallback.to_string());
     let mut info = ReleaseInfo {
-        name: first_tag_text(html, "h1").unwrap_or_else(|| name_fallback.to_string()),
+        name: strip_promo_suffix(&raw_name),
         ..Default::default()
     };
     // 副标题：行内「副标题」表行，或 small_descr 输入框
@@ -191,7 +196,11 @@ pub fn parse_release_page(html: &str, name_fallback: &str) -> ReleaseInfo {
         }
     }
     if info.descr.is_empty() {
-        info.descr = html.to_string();
+        // 退而求其次：「简介」表行 → 正文纯文本。绝不把整页 HTML 当简介提交
+        // （实测有站长页面容器不叫上面任何 id，兜底兜成 58KB 源码差点发出去）
+        info.descr = detail_row_value(html, "简介")
+            .or_else(|| detail_row_value(html, "簡介"))
+            .unwrap_or_else(|| body_text(html));
     }
     // MediaInfo：<pre>、引用框、code 块里含 Unique ID / DISC TITLE 特征的段
     info.mediainfo = extract_mediainfo(html, &info.descr);
@@ -345,22 +354,72 @@ fn detail_row_value(html: &str, label: &str) -> Option<String> {
 }
 
 fn input_value(html: &str, name: &str) -> Option<String> {
-    let key = format!("name=\"{name}\"");
-    let p = html.find(&key)?;
-    // 从该位置向前后找 value="…"
+    // name="…" 或 name='…'（实测有站用单引号，只认双引号会整段解析丢）
+    let p = html
+        .find(&format!("name=\"{name}\""))
+        .or_else(|| html.find(&format!("name='{name}'")))?;
+    // 从该位置向前后找 value="…" / value='…'
     let seg = &html[p..html.len().min(p + 600)];
-    let vkey = "value=\"";
-    let vp = seg.find(vkey)?;
-    let rest = &seg[vp + vkey.len()..];
-    let end = rest.find('"')?;
-    Some(decode_entities(&rest[..end]))
+    for (open, close) in [("value=\"", '"'), ("value='", '\'')] {
+        if let Some(vp) = seg.find(open) {
+            let rest = &seg[vp + open.len()..];
+            if let Some(end) = rest.find(close) {
+                return Some(decode_entities(&rest[..end]));
+            }
+        }
+    }
+    None
+}
+
+/// 标题尾部促销角标（`[50%]`/`[FREE]`/`[2x]`/`[免费]`…）：站点折扣标记混进发布名要剥掉，
+/// 但 `[中字]` 这类内容标签保留
+fn strip_promo_suffix(name: &str) -> String {
+    let mut s = name.trim_end().to_string();
+    loop {
+        let t = s.trim_end();
+        let Some(open) = t.rfind('[') else { break };
+        if !t.ends_with(']') {
+            break;
+        }
+        let inner = t[open + 1..t.len() - 1].trim();
+        if inner.is_empty() {
+            break;
+        }
+        let low = inner.to_lowercase();
+        let promo = low
+            .chars()
+            .all(|c| c.is_ascii_digit() || c == '%' || c == '.')
+            || low == "free"
+            || matches!(low.as_str(), "免费" | "折扣" | "促销" | "半价")
+            || (low.ends_with('x')
+                && low.len() <= 4
+                && low[..low.len() - 1].chars().all(|c| c.is_ascii_digit()));
+        if !promo {
+            break;
+        }
+        s = t[..open].trim_end().to_string();
+    }
+    s
+}
+
+/// `<body>` 内的纯文本（简介容器都找不到时的兜底；绝不返回标签源码）
+fn body_text(html: &str) -> String {
+    let lower = html.to_ascii_lowercase();
+    let start = match lower.find("<body") {
+        Some(p) => lower[p..].find('>').map(|i| p + i + 1).unwrap_or(0),
+        None => 0,
+    };
+    let end = lower.find("</body>").unwrap_or(html.len());
+    strip_tags(&html[start..end.min(html.len())])
 }
 
 /// 配对 div 内容（支持一层嵌套）。字节扫描 + ASCII 大小写不敏感比较：
 /// 索引始终落在字符边界上（UTF-8 多字节序列不含 ASCII 字节，逐字节安全）
 fn div_inner(html: &str, id: &str) -> Option<String> {
-    let key = format!("id=\"{id}\"");
-    let p = html.find(&key)?;
+    // id="…" 或 id='…'（hdsky 等站用单引号）
+    let p = html
+        .find(&format!("id=\"{id}\""))
+        .or_else(|| html.find(&format!("id='{id}'")))?;
     let open_end = html[..p].rfind('<')?;
     let content_start = html[open_end..].find('>').map(|i| open_end + i + 1)?;
     let b = html.as_bytes();
@@ -634,14 +693,19 @@ pub struct UploadResult {
     pub duplicate: bool,
 }
 
-/// 提交到目标站 upload.php。multipart 一次提交 + 「已丢失 POST」重投一次
-/// （Swift 版实测吐鲁番连续提交会偶发丢 POST，同字节重投即可）。
-pub fn upload_release(
-    target: &NexusPhp,
-    info: &ReleaseInfo,
-    torrent_data: &[u8],
-    filename: &str,
-) -> Result<UploadResult> {
+/// 上传准备：抓 upload.php 表单 + 构造提交字段（不 POST）。
+/// `upload_release`（真提交）与 `review_reseed`（审阅）共用这一段。
+pub struct PreparedUpload {
+    /// 表单 action 解析出的绝对提交地址
+    pub action: String,
+    /// upload.php 页面地址（作 Referer）
+    pub form_url: String,
+    pub fields: Vec<Field>,
+    pub picked_tags: Vec<String>,
+    pub tag_warn: Option<String>,
+}
+
+pub fn prepare_upload(target: &NexusPhp, info: &ReleaseInfo) -> Result<PreparedUpload> {
     let form_url = resolve_url("upload.php", &target.base);
     let form_html = target
         .fetch_html(&form_url, target.base.as_str())
@@ -659,11 +723,9 @@ pub fn upload_release(
         vec![]
     };
     let (fields, picked_tags) = build_upload_fields(info, &form_html, &tags_wanted);
-    // 表单里找不到「中字」复选框：只警告不阻断（有的站把标签放发布后编辑页）
-    let tag_warn = if tags_wanted
-        .iter()
-        .any(|t| !picked_tags.iter().any(|p| p.contains(t)))
-    {
+    // 想勾的标签一个都没匹配上才警告（复选框 value 多是数字编码，
+    // 拿 value 里含不含关键词来判会把勾上了的误报成漏勾）
+    let tag_warn = if !tags_wanted.is_empty() && picked_tags.is_empty() {
         Some(format!(
             "[{}] 表单里没找到「中字」类标签复选框，请发布后手动补",
             target.site_id
@@ -673,20 +735,46 @@ pub fn upload_release(
     };
 
     let action = form_action(&form_html, &target.base).unwrap_or_else(|| form_url.clone());
+    Ok(PreparedUpload {
+        action,
+        form_url,
+        fields,
+        picked_tags,
+        tag_warn,
+    })
+}
+
+/// 提交到目标站 upload.php。multipart 一次提交 + 「已丢失 POST」重投一次
+/// （Swift 版实测吐鲁番连续提交会偶发丢 POST，同字节重投即可）。
+pub fn upload_release(
+    target: &NexusPhp,
+    info: &ReleaseInfo,
+    torrent_data: &[u8],
+    filename: &str,
+) -> Result<UploadResult> {
+    let prep = prepare_upload(target, info)?;
     // 成功消息末尾追加标签警告（若有）
-    let note_suffix = tag_warn
+    let note_suffix = prep
+        .tag_warn
         .as_deref()
         .map(|w| format!("；{w}"))
         .unwrap_or_default();
     let mut last_err = String::new();
     for attempt in 0..2 {
         let resp = target
-            .post_upload(&action, &fields, "file", filename, torrent_data, &form_url)
+            .post_upload(
+                &prep.action,
+                &prep.fields,
+                "file",
+                filename,
+                torrent_data,
+                &prep.form_url,
+            )
             .with_context(|| format!("提交上传失败（第 {} 次）", attempt + 1))?;
         let body = resp.body;
         // 「已存在」先判：站点常跳回已有种子详情页，先判成功会误报转种成功
         if has_exist_marker(&body) {
-            let dup_url = sole_detail_url(&body, &resp.final_url, &action);
+            let dup_url = sole_detail_url(&body, &resp.final_url, &prep.action);
             return Ok(UploadResult {
                 detail_url: dup_url,
                 message: format!("站点提示种子已存在（视为已覆盖，不算本次转种）{note_suffix}"),
@@ -694,7 +782,7 @@ pub fn upload_release(
             });
         }
         // 成功：跳到详情页 / 发布成功提示
-        if let Some(u) = redirect_detail_url(&resp.final_url, &action) {
+        if let Some(u) = redirect_detail_url(&resp.final_url, &prep.action) {
             return Ok(UploadResult {
                 detail_url: Some(u),
                 message: format!("发布成功（跳转详情页）{note_suffix}"),
@@ -705,7 +793,7 @@ pub fn upload_release(
             || body.contains("new torrent")
             || body.contains("Torrent added")
         {
-            let u = sole_detail_url(&body, &resp.final_url, &action);
+            let u = sole_detail_url(&body, &resp.final_url, &prep.action);
             return Ok(UploadResult {
                 detail_url: u.clone(),
                 message: if u.is_some() {
@@ -811,6 +899,136 @@ fn sole_detail_url(body: &str, final_url: &str, action: &str) -> Option<String> 
     }
 }
 
+// ---------------- 审阅模式（不提交） ----------------
+
+/// 审阅结果：将要提交的全部内容摆出来，不 POST、不落账
+pub struct ReviewReport {
+    pub info: ReleaseInfo,
+    pub preflight: Preflight,
+    pub prepared: PreparedUpload,
+}
+
+impl ReviewReport {
+    /// 人看的审阅文本：预检结论 + 逐字段值（长值截断）
+    pub fn render(&self, max: usize) -> String {
+        let mut out = String::new();
+        out.push_str("==== 转种审阅（只审不发）====\n");
+        out.push_str(&format!("提交地址：{}\n", self.prepared.action));
+        out.push_str(&format!("预检：{}\n", self.preflight.summary()));
+        for e in &self.preflight.errors {
+            out.push_str(&format!("  阻断：{e}\n"));
+        }
+        for w in &self.preflight.warnings {
+            out.push_str(&format!("  警告：{w}\n"));
+        }
+        for f in &self.preflight.fixes {
+            out.push_str(&format!("  已自动补：{f}\n"));
+        }
+        if let Some(w) = &self.prepared.tag_warn {
+            out.push_str(&format!("  警告：{w}\n"));
+        }
+        if !self.prepared.picked_tags.is_empty() {
+            out.push_str(&format!(
+                "标签勾选：{}\n",
+                self.prepared.picked_tags.join("、")
+            ));
+        }
+        out.push_str("将提交的字段：\n");
+        for (n, v) in &self.prepared.fields {
+            out.push_str(&format!("  {n} = {}\n", truncate_chars(v, max)));
+        }
+        out
+    }
+}
+
+/// 长值截断（按字符切，中文不切半个）
+fn truncate_chars(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let head: String = s.chars().take(max).collect();
+    format!("{head}…（共 {} 字节）", s.len())
+}
+
+/// 审阅一条龙：源页解析 → 预检 → 构造上传字段，但不 POST。
+/// 预检不通过也照常返回报告（审阅就是要看清问题），调用方看 `preflight.ok()`。
+pub fn review_reseed(
+    cfg: &Config,
+    req: &ReseedRequest,
+    log: &mut dyn FnMut(&str),
+) -> Result<ReviewReport> {
+    let rel = prepare_released(cfg, req, log)?;
+    log("抓目标站上传表单，构造提交字段…");
+    let prepared = prepare_upload(&rel.tgt, &rel.info)?;
+    log(&format!(
+        "审阅完成：{} 个字段 → {}（未提交）",
+        prepared.fields.len(),
+        prepared.action
+    ));
+    Ok(ReviewReport {
+        info: rel.info,
+        preflight: rel.preflight,
+        prepared,
+    })
+}
+
+// ---------------- 发后自检 ----------------
+
+/// 发后自检：重读新种详情页，核对标题 / MediaInfo / 条目链接真的落上了。
+/// 只出警告不推翻上传结论（抓不到页面也算一条警告）。
+pub fn verify_posted(target: &NexusPhp, detail_url: &str, info: &ReleaseInfo) -> Vec<String> {
+    match target.fetch_html(detail_url, target.base.as_str()) {
+        Ok(html) => verify_posted_html(&html, info),
+        Err(e) => vec![format!("抓新种详情页失败（{e:#}），请手动核对发布结果")],
+    }
+}
+
+/// 发后自检的纯文本比对（单测友好）
+fn verify_posted_html(html: &str, info: &ReleaseInfo) -> Vec<String> {
+    let mut warns = Vec::new();
+    let posted = parse_release_page(html, "");
+    // 标题
+    let want = info.name.trim();
+    let got = posted.name.trim();
+    if got.is_empty() {
+        warns.push("新种页没解析出标题，无法核对".into());
+    } else if !want.is_empty() && got != want {
+        warns.push(format!("标题与预期不一致：预期「{want}」页面是「{got}」"));
+    }
+    // MediaInfo：独立块没有就退化成「页面里出现了原文行」
+    if !info.mediainfo.trim().is_empty() {
+        let landed = !posted.mediainfo.trim().is_empty()
+            || info
+                .mediainfo
+                .lines()
+                .map(str::trim)
+                .filter(|l| l.len() >= 8)
+                .take(5)
+                .any(|l| html.contains(l));
+        if !landed {
+            warns.push("MediaInfo 没落到新种页：确认技术信息/简介里带上了".into());
+        }
+    }
+    // 条目链接（按 id 本体找，页面展示形式可能带完整 URL）
+    if let Some(tt) = &info.imdb {
+        if !html.contains(tt) {
+            warns.push(format!("IMDb id {tt} 没在新种页出现"));
+        }
+    }
+    if let Some(db) = &info.douban {
+        if !html.contains(db) {
+            warns.push(format!("豆瓣 id {db} 没在新种页出现"));
+        }
+    }
+    if let Some(tm) = &info.tmdb {
+        let tail = tm.rsplit('/').next().unwrap_or("");
+        if !tail.is_empty() && !html.contains(tail) {
+            warns.push("TMDB 链接没在新种页出现".into());
+        }
+    }
+    warns
+}
+
 // ---------------- 转种流水线 ----------------
 
 pub struct ReseedRequest {
@@ -821,15 +1039,21 @@ pub struct ReseedRequest {
     pub name: String,
 }
 
-/// 转种一条龙：解析源页 → 预检 → 上传 → 推种校验 → 格子落账。
-/// `log` 收进度行；返回新种详情页链接。
-pub fn run_reseed(
+/// 源站解析 + 预检（`review_reseed` 与 `run_reseed` 共用）。
+/// 预检不通过不拦在这里，由调用方决定（审阅要出报告，正式转种要拦）。
+struct Released {
+    src: NexusPhp,
+    tgt: NexusPhp,
+    page: TorrentPage,
+    info: ReleaseInfo,
+    preflight: Preflight,
+}
+
+fn prepare_released(
     cfg: &Config,
-    qb: &QBittorrent,
     req: &ReseedRequest,
-    index: &mut ContentIndex,
     log: &mut dyn FnMut(&str),
-) -> Result<String> {
+) -> Result<Released> {
     let src = adapter_for(cfg, &req.source_site)?;
     let tgt = adapter_for(cfg, &req.target_site)?;
 
@@ -863,13 +1087,41 @@ pub fn run_reseed(
     for w in &pf.warnings {
         log(&format!("预检·警告：{w}"));
     }
-    if !pf.ok() {
-        for e in &pf.errors {
+    if pf.ok() {
+        log(&format!("预检通过（{}）", pf.summary()));
+    }
+    Ok(Released {
+        src,
+        tgt,
+        page,
+        info,
+        preflight: pf,
+    })
+}
+
+/// 转种一条龙：解析源页 → 预检 → 上传 → 发后自检 → 推种校验 → 格子落账。
+/// `log` 收进度行；返回新种详情页链接。
+pub fn run_reseed(
+    cfg: &Config,
+    qb: &QBittorrent,
+    req: &ReseedRequest,
+    index: &mut ContentIndex,
+    log: &mut dyn FnMut(&str),
+) -> Result<String> {
+    let rel = prepare_released(cfg, req, log)?;
+    if !rel.preflight.ok() {
+        for e in &rel.preflight.errors {
             log(&format!("预检·阻断：{e}"));
         }
-        bail!("预检未通过（{}）：补齐后重试", pf.summary());
+        bail!("预检未通过（{}）：补齐后重试", rel.preflight.summary());
     }
-    log(&format!("预检通过（{}）", pf.summary()));
+    let Released {
+        src,
+        tgt,
+        page,
+        info,
+        ..
+    } = rel;
 
     // ---- 3 下载源种 + 上传目标站 ----
     let torrent_data = src.download_torrent(&page, &req.source_url)?;
@@ -902,6 +1154,11 @@ pub fn run_reseed(
         }
     };
     log(&format!("新种详情页：{detail_url}"));
+
+    // ---- 发后自检：回读新种页核对标题/MediaInfo/链接（只警告不推翻）----
+    for w in verify_posted(&tgt, &detail_url, &info) {
+        log(&format!("发后自检·{w}"));
+    }
 
     // ---- 4 回推下载器并校验 ----
     let tpage = tgt.fetch_torrent_page(&detail_url)?;
@@ -1212,5 +1469,120 @@ Frame rate : 25</pre>
             find_tmdb("https://www.themoviedb.org/tv/61888"),
             Some("https://www.themoviedb.org/tv/61888".into())
         );
+    }
+
+    #[test]
+    fn strips_promo_suffix_not_content_tags() {
+        assert_eq!(
+            strip_promo_suffix("Show.S01 1080p-JING    [50%]"),
+            "Show.S01 1080p-JING"
+        );
+        assert_eq!(strip_promo_suffix("Movie.2024 [FREE]"), "Movie.2024");
+        assert_eq!(strip_promo_suffix("Movie.2024 [2x]"), "Movie.2024");
+        assert_eq!(strip_promo_suffix("Movie.2024 [免费]"), "Movie.2024");
+        // 内容标签保留
+        assert_eq!(strip_promo_suffix("Movie.2024 [中字]"), "Movie.2024 [中字]");
+        assert_eq!(
+            strip_promo_suffix("Movie.2024 [中字] [50%]"),
+            "Movie.2024 [中字]"
+        );
+    }
+
+    #[test]
+    fn single_quoted_ids_are_parsed() {
+        let page = r#"<html><body>
+<h1>T</h1>
+<div id='kdescr'>简介内容 <a href="x">链接</a></div>
+<input type='text' name='small_descr' value='副标题'>
+</body></html>"#;
+        let info = parse_release_page(page, "fallback");
+        assert_eq!(info.name, "T");
+        assert_eq!(info.subtitle, "副标题");
+        assert!(info.descr.contains("简介内容"), "{:?}", info.descr);
+        assert!(!info.descr.contains("<html"), "简介兜底不能带标签源码");
+    }
+
+    #[test]
+    fn descr_fallback_is_body_text_not_raw_html() {
+        // 无已知简介容器、也没有「简介」表行：兜底给正文纯文本，不给整页 HTML
+        let page = r#"<html><head><style>a{}</style></head><body>
+<div class="nav">菜单</div>
+<div class="post">真正的简介文字</div>
+</body></html>"#;
+        let info = parse_release_page(page, "fb");
+        assert!(info.descr.contains("真正的简介文字"), "{:?}", info.descr);
+        assert!(!info.descr.contains("<div"), "{:?}", info.descr);
+    }
+
+    #[test]
+    fn truncate_chars_keeps_char_boundary() {
+        assert_eq!(truncate_chars("短", 10), "短");
+        let t = truncate_chars("中文测试字符串", 3);
+        assert!(t.starts_with("中文测"), "{t}");
+        assert!(t.contains("…（共 "));
+    }
+
+    #[test]
+    fn review_render_lists_fields() {
+        let rep = ReviewReport {
+            info: ReleaseInfo::default(),
+            preflight: Preflight::default(),
+            prepared: PreparedUpload {
+                action: "https://x.example/takeupload.php".into(),
+                form_url: "https://x.example/upload.php".into(),
+                fields: vec![
+                    ("name".into(), "T".into()),
+                    ("descr".into(), "很长的简介".repeat(40)),
+                ],
+                picked_tags: vec!["cnsub".into()],
+                tag_warn: None,
+            },
+        };
+        let t = rep.render(10);
+        assert!(t.contains("只审不发"));
+        assert!(t.contains("takeupload.php"));
+        assert!(t.contains("name = T"));
+        assert!(t.contains("descr = "));
+        assert!(t.contains("…（共 "), "{t}");
+        assert!(t.contains("标签勾选：cnsub"));
+    }
+
+    #[test]
+    fn verify_posted_full_match_no_warn() {
+        let info = ReleaseInfo {
+            name: "Show.S01".into(),
+            mediainfo:
+                "Unique ID : 1\nFormat : AVC\nBit rate : 3500 Kbps\nWidth : 1920\nHeight : 1080"
+                    .into(),
+            imdb: Some("tt4823720".into()),
+            douban: Some("26302614".into()),
+            ..Default::default()
+        };
+        let good = r#"<h1>Show.S01</h1><div id="kdescr">tt4823720 26302614
+<pre>Unique ID : 1
+Format : AVC
+Bit rate : 3500 Kbps
+Width : 1920
+Height : 1080</pre></div>"#;
+        assert!(verify_posted_html(good, &info).is_empty());
+    }
+
+    #[test]
+    fn verify_posted_detects_missing_parts() {
+        let info = ReleaseInfo {
+            name: "Show.S01".into(),
+            mediainfo:
+                "Unique ID : 1\nFormat : AVC\nBit rate : 3500 Kbps\nWidth : 1920\nHeight : 1080"
+                    .into(),
+            imdb: Some("tt4823720".into()),
+            douban: Some("26302614".into()),
+            ..Default::default()
+        };
+        let bad = r#"<h1>别的名字</h1><div id="kdescr">什么都没有</div>"#;
+        let w = verify_posted_html(bad, &info);
+        assert!(w.iter().any(|x| x.contains("标题与预期不一致")), "{w:?}");
+        assert!(w.iter().any(|x| x.contains("MediaInfo")), "{w:?}");
+        assert!(w.iter().any(|x| x.contains("tt4823720")), "{w:?}");
+        assert!(w.iter().any(|x| x.contains("26302614")), "{w:?}");
     }
 }

@@ -2,8 +2,9 @@
 //!
 //! 三块内容：
 //! - 覆盖概览：内容/成员种子/各站格子与覆盖率，带状态图例；
-//! - 转种草稿：源站 + 详情页链接 + 目标站，「确认转种」原生走
-//!   预检 → 上传 → 推种 → 校验一条龙（LuckAudit 三查在预检里拦）；
+//! - 转种草稿：源站 + 详情页链接 + 目标站，「审阅」只审不发（字段清单进日志），
+//!   「确认转种」原生走 预检 → 上传 → 发后自检 → 推种 → 校验一条龙
+//!   （LuckAudit 三查在预检里拦）；
 //! - 后台任务：扫描 / 基线 / 跑一轮 / 转种，事件走 mpsc，GPUI 定时器轮询后更新视图。
 
 use std::path::PathBuf;
@@ -17,7 +18,7 @@ use bsend::coverage::{now_unix, prefetch_files, run_round, Event, RoundOptions};
 use bsend::index::{ContentIndex, CoverageStatus};
 use bsend::qbittorrent::QBittorrent;
 use bsend::report::{CoverageReport, DraftRow};
-use bsend::reseed::{request_from_draft, run_reseed};
+use bsend::reseed::{request_from_draft, review_reseed, run_reseed};
 use bsend::sites::nexusphp::NexusPhp;
 use gpui::{
     div, prelude::*, px, rgb, size, App, Application, AsyncApp, Bounds, ClipboardItem, FontWeight,
@@ -223,6 +224,53 @@ impl BsendGui {
             }
             if let Ok(s) = snapshot(&cfg) {
                 let _ = tx.send(GuiEvent::Snapshot(s));
+            }
+            let _ = tx.send(GuiEvent::Busy(false));
+        });
+    }
+
+    /// 审阅草稿：跑「源页解析 → 预检 → 构造上传字段」但不提交，字段清单打进日志
+    fn start_review(&mut self, draft: &DraftRow, cx: &mut Context<Self>) {
+        if self.busy {
+            self.push_log("已有任务在跑，请等它结束".into());
+            cx.notify();
+            return;
+        }
+        self.busy = true;
+        self.push_log(format!(
+            "审阅草稿：{}（{} → {}）。只审不发，字段清单随后打进日志",
+            draft.name, draft.source_site, draft.target_site
+        ));
+        cx.notify();
+
+        let cfg = self.config.clone();
+        let tx = self.tx.clone();
+        let req = request_from_draft(
+            &draft.content_key,
+            &draft.name,
+            &draft.source_site,
+            &draft.source_url,
+            &draft.target_site,
+        );
+        std::thread::spawn(move || {
+            let result: Result<()> = (|| {
+                let log_tx = tx.clone();
+                let mut log = move |line: &str| {
+                    let _ = log_tx.send(GuiEvent::Log(line.to_string()));
+                };
+                let rep = review_reseed(&cfg, &req, &mut log)?;
+                for line in rep.render(200).lines() {
+                    log(line);
+                }
+                if rep.preflight.ok() {
+                    log("审阅通过：点「确认转种」才会真正提交");
+                } else {
+                    log("审阅未通过：预检有阻断项，补齐后再发");
+                }
+                Ok(())
+            })();
+            if let Err(e) = result {
+                let _ = tx.send(GuiEvent::Log(format!("审阅中断：{e:#}")));
             }
             let _ = tx.send(GuiEvent::Busy(false));
         });
@@ -597,7 +645,7 @@ impl BsendGui {
                 div()
                     .text_xs()
                     .text_color(dim)
-                    .child("「确认转种」= 人工确认：原生跑 预检 → 上传 → 推种 → 校验。预检拦三类问题（MediaInfo 空 / 简介缺 IMDb·豆瓣·TMDB / 中字标签），不通过不会上传。"),
+                    .child("「审阅」= 只审不发：跑源页解析、预检、字段构造，把将提交的字段清单打进日志。核对没问题再点「确认转种」= 人工确认：预检 → 上传 → 发后自检 → 推种 → 校验。预检拦三类问题（MediaInfo 空 / 简介缺 IMDb·豆瓣·TMDB / 中字标签），不通过不会上传。"),
             );
         for (i, draft) in self.drafts.iter().enumerate() {
             let id = format!("draft-{i}");
@@ -632,6 +680,14 @@ impl BsendGui {
                                     d.source_url.clone(),
                                 ));
                             }
+                        }),
+                    ))
+                    .child(button(
+                        &format!("review-{id}"),
+                        "审阅",
+                        cx.listener({
+                            let d = draft.clone();
+                            move |this, _, _, cx| this.start_review(&d, cx)
                         }),
                     ))
                     .child(button_accent(
@@ -705,13 +761,15 @@ fn render_help() -> gpui::AnyElement {
         .bg(rgb(0x161b22))
         .rounded_lg()
         .child(div().text_base().font_weight(FontWeight(600.0)).child("转种全流程（Rust 原生）"))
-        .child(div().child("1. 「转种草稿」页点「确认转种」——这一次点击就是人工确认，随后全自动："))
+        .child(div().child("1. 「转种草稿」页先点「审阅」——只审不发：把将提交的字段清单打进日志，核对标题/副标题/简介/MediaInfo/链接/标签。"))
+        .child(div().child("2. 核对没问题再点「确认转种」——这一次点击就是人工确认，随后全自动："))
         .child(div().child("   ① 预检：MediaInfo 非空 / 简介带 IMDb·豆瓣·TMDB 链接 / 中字标签（检测到中文字幕时）——任何一条阻断都不会上传。"))
         .child(div().child("   ② 上传：拉目标站 upload.php 表单，透传 hidden 字段、填标题/副标题/简介/MediaInfo/条目链接/标签，multipart 提交。"))
-        .child(div().child("   ③ 推种：下载目标站的新种子，暂停加入下载器（dlLimit=1 兜底），启动校验。"))
-        .child(div().child("   ④ 收尾：校验到 100% 解除限速、格子记「已转种」；分片对不上就停掉/删掉；超时记「校验中」下一轮收尾。"))
-        .child(div().child("2. 「任务日志」实时显示每一步；失败原因（cookie 失效 / 限流 / 必填项缺失 / 种子已存在）都会写明。"))
-        .child(div().child("3. 上传后自动提交 MediaInfo 到独立表单字段（technical_info 等），没有独立字段就内嵌简介，避免「MediaInfo 为空」被打回。"))
+        .child(div().child("   ③ 发后自检：回读新种详情页，核对标题/MediaInfo/条目链接真的落上了（漏了会在日志里点名）。"))
+        .child(div().child("   ④ 推种：下载目标站的新种子，暂停加入下载器（dlLimit=1 兜底），启动校验。"))
+        .child(div().child("   ⑤ 收尾：校验到 100% 解除限速、格子记「已转种」；分片对不上就停掉/删掉；超时记「校验中」下一轮收尾。"))
+        .child(div().child("3. 「任务日志」实时显示每一步；失败原因（cookie 失效 / 限流 / 必填项缺失 / 种子已存在）都会写明。"))
+        .child(div().child("4. 上传后自动提交 MediaInfo 到独立表单字段（technical_info 等），没有独立字段就内嵌简介，避免「MediaInfo 为空」被打回。"))
         .child(div().text_color(rgb(0x8b949e)).child("说明：v1 表单引擎只做站点无关的通用字段；个别站的特殊下拉（质量档位/两步上传）预检会提示「表单不认识的必填项」，遇到再逐站补 override。"))
         .into_any_element()
 }

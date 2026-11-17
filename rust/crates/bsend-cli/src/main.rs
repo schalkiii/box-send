@@ -6,6 +6,8 @@
 //! bsend scan                     # 扫描下载器，建立/刷新内容索引（不动站点）
 //! bsend plan --limit 5           # 预演一轮：检索照跑、推送只出结论、不落盘
 //! bsend run --sites hdsky,pter   # 跑一整轮（辅种真推；转种只出草稿）
+//! bsend reseed --draft 1         # 审阅第 1 条转种草稿（只审不发）
+//! bsend reseed --draft 1 --yes   # 真提交：预检 → 上传 → 发后自检 → 推种校验
 //! bsend status                   # 看索引现状
 //! ```
 
@@ -88,6 +90,15 @@ enum Cmd {
     },
     /// 看索引现状：内容数、覆盖分布、转种草稿、待找源
     Status,
+    /// 转种草稿的审阅与提交（默认只审阅不提交）
+    Reseed {
+        /// 转第 N 条草稿（1 起编号；不带此参数只列草稿）
+        #[arg(long)]
+        draft: Option<usize>,
+        /// 真提交（预检 → 上传 → 发后自检 → 推种校验）；不带则只审阅
+        #[arg(long)]
+        yes: bool,
+    },
     /// 覆盖报告：逐站覆盖率、未覆盖最多清单、草稿与待找源（可导出 JSON）
     Report {
         /// 未覆盖清单显示多少条
@@ -121,6 +132,7 @@ fn main() -> Result<()> {
         Cmd::Prime => cmd_round(&cfg, Some(0), None, None, false, true),
         Cmd::Cookies { from, write, all } => cmd_cookies(&mut cfg, &from, write, all),
         Cmd::Status => cmd_status(&cfg),
+        Cmd::Reseed { draft, yes } => cmd_reseed(&cfg, draft, yes),
         Cmd::Report { top, json, sites } => cmd_report(&cfg, top, json, sites),
     }
 }
@@ -320,7 +332,7 @@ fn print_report(r: &RoundReport) {
     }
     if !r.reseed_drafts.is_empty() {
         println!(
-            "\n转种草稿（{} 条，不自动上传；到 Rust GUI「转种草稿」页点「确认转种」执行）：",
+            "\n转种草稿（{} 条，不自动上传；`bsend reseed --draft N` 审阅，GUI「转种草稿」页或加 --yes 执行）：",
             r.reseed_drafts.len()
         );
         for d in &r.reseed_drafts {
@@ -401,6 +413,67 @@ fn cmd_status(cfg: &Config) -> Result<()> {
         if wait_source.len() > 20 {
             println!("  … 共 {} 条", wait_source.len());
         }
+    }
+    Ok(())
+}
+
+/// 转种草稿的审阅与提交：`--draft N` 审阅第 N 条（不 POST），加 `--yes` 才真发
+fn cmd_reseed(cfg: &Config, draft: Option<usize>, yes: bool) -> Result<()> {
+    let mut index = ContentIndex::load(&cfg.coverage_state_path());
+    let path_text = cfg.coverage_state_path().display().to_string();
+    let report = CoverageReport::build(
+        &index,
+        &cfg.sites,
+        20,
+        bsend::coverage::now_unix(),
+        &path_text,
+    );
+    if report.drafts.is_empty() {
+        println!("没有转种草稿。先 `bsend run` 跑一轮，站里没有的段落定位到源种后会出草稿。");
+        return Ok(());
+    }
+    let Some(n) = draft else {
+        println!(
+            "转种草稿（{} 条）。`bsend reseed --draft N` 审阅第 N 条，加 `--yes` 真提交：",
+            report.drafts.len()
+        );
+        for (i, d) in report.drafts.iter().enumerate() {
+            println!(
+                "  #{} 「{}」{} → {}（源：{}）",
+                i + 1,
+                d.name,
+                d.source_site,
+                d.target_site,
+                d.source_url
+            );
+        }
+        return Ok(());
+    };
+    let d = report
+        .drafts
+        .get(n.checked_sub(1).unwrap_or(usize::MAX))
+        .ok_or_else(|| anyhow::anyhow!("没有第 {n} 条草稿（共 {} 条）", report.drafts.len()))?;
+    let req = bsend::reseed::request_from_draft(
+        &d.content_key,
+        &d.name,
+        &d.source_site,
+        &d.source_url,
+        &d.target_site,
+    );
+    let mut log = |line: &str| println!("  {line}");
+    if !yes {
+        let rep = bsend::reseed::review_reseed(cfg, &req, &mut log)?;
+        println!();
+        println!("{}", rep.render(200));
+        println!("以上为审阅（未提交）。确认无误后加 `--yes` 真提交。");
+        return Ok(());
+    }
+    let qb = connect_qb(cfg)?;
+    let url = bsend::reseed::run_reseed(cfg, &qb, &req, &mut index, &mut log)?;
+    if url.is_empty() {
+        println!("转种结束（站点已有该种子，格子记为已覆盖）");
+    } else {
+        println!("转种完成：{url}");
     }
     Ok(())
 }
