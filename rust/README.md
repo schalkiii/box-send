@@ -8,8 +8,8 @@ Swift GUI 版 box-send 的辅种引擎重写：把「已在做种的种子自动
 
 ```bash
 cd rust
-cargo build --release
-# 产物：target/release/bsend.exe（或 Linux 下的 bsend），单文件约 6 MB
+cargo build --release                 # CLI：target/release/bsend.exe（单文件约 6 MB）
+cargo build --release -p bsend-gui    # GUI：target/release/bsend-gui.exe（GPUI 0.2.2）
 ```
 
 ## 用法
@@ -48,6 +48,36 @@ bsend report --json coverage-report.json
 
 `--config` 默认读当前目录的 `boxsend.json`。每轮建议用 cron / 计划任务低频驱动；
 终态格子会被预筛跳过，增量轮次的花费很小。
+
+## Rust 版 GUI（GPUI）
+
+`bsend-gui` 是 CLI 之上的可视化外壳，与 CLI 共用同一份配置与 `coverage.json`：
+
+```bash
+bsend-gui /path/to/boxsend.json     # 缺省读当前目录 boxsend.json
+```
+
+- **概览**：内容数 / 成员种子 / 各站格子、覆盖率；
+- **转种草稿**：源站、目标站、详情页链接；「复制源站链接」和「确认交接 → GUI 版」；
+- **任务**：扫描 / 基线 / 跑一轮 / 刷新，后台线程执行，日志实时回流（不卡界面）；
+- **确认说明**：内置「人工确认后走 GUI 版转种」的四步操作提示。
+
+技术栈：GPUI 0.2.2（Zed 的 UI 框架，`Application::new().run` + `Render`），
+深色主题、mpsc 事件 + 200ms 轮询刷新视图。Rust 版转种仍只出草稿，GUI 不代发种。
+
+## 人工确认后走 GUI 版转种（Swift/WPF GUI）
+
+Rust 版转种臂产出 `reseed_draft`（源站 + 详情页链接 + 目标站 + 判定级别），
+**不上传**。要真发种，用已有 GUI 版做人工确认：
+
+1. 在 Rust GUI 的「转种草稿」页点「确认交接 → GUI 版」（源站链接会复制到剪贴板，
+   并尝试启动 `%ProgramFiles%\BoxSend\BoxSend.exe`）；或在 CLI 用
+   `bsend report --json` 取 `drafts[].sourceUrl` / `targetSite`。
+2. GUI 版进入「批量转种」页，把链接粘贴到「粘贴种子详情页链接」输入框；
+   源站一般按域名自动识别，识别不对就在「源站」菜单里手动指定。
+3. 在「转种分组」里勾选目标站（草稿里的 `targetSite`），确认「转种到目标站」已开。
+   该站若不在任何转种分组，先去「站点分组」页添加并启用。
+4. 点「开始运行」——上传、发布、推种都由 GUI 版完成。
 
 ## 配置：与 GUI 版同一份
 
