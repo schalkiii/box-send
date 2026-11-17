@@ -17,3 +17,10 @@ rust-version = "1.82"
 [profile.release]
 lto = "thin"
 strip = true
+
+# GPUI 0.2.2 在 Windows 的 release 构建会调用 fxc.exe 预编译 HLSL（需 Windows SDK）。
+# 该 profile 打开 debug-assertions，走 GPUI 的运行时着色器编译分支，无需 SDK。
+# 用法：cargo build --profile gui-release -p bsend-gui
+[profile.gui-release]
+inherits = "release"
+debug-assertions = true

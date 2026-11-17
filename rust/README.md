@@ -8,8 +8,8 @@ Swift GUI 版 box-send 的辅种引擎重写：把「已在做种的种子自动
 
 ```bash
 cd rust
-cargo build --release                 # CLI：target/release/bsend.exe（单文件约 6 MB）
-cargo build --release -p bsend-gui    # GUI：target/release/bsend-gui.exe（GPUI 0.2.2）
+cargo build --release                              # CLI：target/release/bsend.exe（单文件约 6 MB）
+cargo build --profile gui-release -p bsend-gui     # GUI：target/gui-release/bsend-gui.exe
 ```
 
 ## 用法
@@ -56,6 +56,10 @@ bsend report --json coverage-report.json
 ```bash
 bsend-gui /path/to/boxsend.json     # 缺省读当前目录 boxsend.json
 ```
+
+> 构建说明：GPUI 0.2.2 在 Windows 的标准 `--release` 下会调用 `fxc.exe`（Windows SDK）
+> 预编译 HLSL；没装 SDK 时用专用 profile `gui-release`（走运行时着色器编译），
+> 或直接 `cargo build -p bsend-gui` 用 debug 版——两者功能相同。
 
 - **概览**：内容数 / 成员种子 / 各站格子、覆盖率；
 - **转种草稿**：源站、目标站、详情页链接；「复制源站链接」和「确认交接 → GUI 版」；
