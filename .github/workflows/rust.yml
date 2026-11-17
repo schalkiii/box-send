@@ -32,10 +32,10 @@ jobs:
       # 且该 GUI 的交接目标是 Windows 版 BoxSend——Linux 只检查核心库与 CLI。
       - name: clippy（Linux：核心库 + CLI）
         if: runner.os == 'Linux'
-        run: cargo clippy --all-targets --exclude bsend-gui -- -D warnings
+        run: cargo clippy --workspace --all-targets --exclude bsend-gui -- -D warnings
       - name: test（Linux：核心库 + CLI）
         if: runner.os == 'Linux'
-        run: cargo test --exclude bsend-gui
+        run: cargo test --workspace --exclude bsend-gui
       - name: clippy（Windows：全部 crate，含 GPUI GUI）
         if: runner.os == 'Windows'
         run: cargo clippy --all-targets -- -D warnings
