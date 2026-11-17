@@ -1,0 +1,15 @@
+[package]
+name = "bsend-cli"
+version = "0.1.0"
+edition = "2021"
+description = "box-send 铺种引擎 CLI：内容索引 → 源种定位 → 辅种/转种"
+license = "MIT"
+
+[dependencies]
+bsend = { path = "../bsend" }
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+
+[[bin]]
+name = "bsend"
+path = "src/main.rs"
