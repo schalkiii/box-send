@@ -506,13 +506,15 @@ impl QBittorrent {
         let mut merged = existing.to_vec();
         merged.extend_from_slice(add);
         let fields = Self::tracker_patch_fields(hash, &merged);
-        let resp = self
+        let Ok(resp) = self
             .client
             .post(format!("{}/api/v2/torrents/setTrackers", self.base_url))
             .headers(self.referer_headers())
             .form(&fields)
             .send()
-            .ok()?;
+        else {
+            return Some("补挂请求没通（setTrackers）".to_string());
+        };
         let s = resp.status().as_u16();
         if s == 200 || s == 204 {
             None

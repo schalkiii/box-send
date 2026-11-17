@@ -60,6 +60,16 @@ pub struct SiteDef {
     pub default_enabled: bool,
 }
 
+/// tracker host 是否属于这个站点：相等，或 tracker 在站点域名的子域上。
+/// NexusPHP 站的 announce 常在 `tracker.xxx.com` 而页面在 `xxx.com`——
+/// 精确相等会把这类站全部漏判（已在做种预筛、源站优先排序都靠它）。
+pub fn host_matches(tracker_host: &str, site_host: &str) -> bool {
+    if tracker_host.is_empty() || site_host.is_empty() {
+        return false;
+    }
+    tracker_host == site_host || tracker_host.ends_with(&format!(".{site_host}"))
+}
+
 /// 内置站点表（顺序、条目与 Swift `SiteRegistry.prioritySites` 一致）
 static SITE_TABLE: &[SiteDef] = &[
     // --- 9 个优先站（Swift 端默认启用） ---
@@ -1163,5 +1173,20 @@ mod tests {
         assert_eq!(site_def_by_host("hdsky.me").unwrap().id, "hdsky");
         assert_eq!(site_def_by_host("www.uhddolby.com").unwrap().id, "hddolby");
         assert!(site_def_by_host("nonexistent.example.com").is_none());
+    }
+
+    #[test]
+    fn host_matches_exact_and_subdomain() {
+        // 精确相等
+        assert!(host_matches("hdsky.me", "hdsky.me"));
+        // tracker 在子域（NexusPHP 常见：tracker.xxx.com / t.xxx.org）
+        assert!(host_matches("tracker.pterclub.com", "pterclub.com"));
+        assert!(host_matches("t.abc.org", "abc.org"));
+        // 跨域不算；反方向（页面域是 tracker 的「父」才对，反过来不成立）
+        assert!(!host_matches("tracker.pterclub.com", "pterclub.net"));
+        assert!(!host_matches("pterclub.com", "tracker.pterclub.com"));
+        // 空值永不匹配
+        assert!(!host_matches("", "hdsky.me"));
+        assert!(!host_matches("hdsky.me", ""));
     }
 }

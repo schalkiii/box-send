@@ -54,6 +54,13 @@ pub struct DraftItem {
 #[allow(clippy::large_enum_variant)] // 事件走 mpsc 低频传递，装箱不值当
 pub enum Event {
     Log(String),
+    /// 本轮没查成的格子（预算耗尽一类）：**不写索引**，下轮从头来。
+    /// 与 Miss 的区别：Miss 是「查过了，站内确实没有」（可负缓存），Skipped 是「根本没查」
+    ItemSkipped {
+        site_id: String,
+        key: String,
+        reason: String,
+    },
     ItemDone {
         site_id: String,
         key: String,
@@ -64,6 +71,8 @@ pub enum Event {
         source: Option<SourceRecord>,
         /// 转种草稿
         draft: Option<DraftItem>,
+        /// 上轮推送暂停在下载器里那条种子的 hash（仅 Verifying 结论携带，收尾凭据）
+        verify_hash: Option<String>,
     },
 }
 
@@ -159,7 +168,11 @@ pub fn run_round(
     // ---- 2 已做种标记（tracker hosts ∩ 参与站点 → Seeding，零请求）----
     for entry in index.contents.values_mut() {
         for site in &active_sites {
-            if !entry.tracker_hosts.iter().any(|h| h == &site.announce_host) {
+            if !entry
+                .tracker_hosts
+                .iter()
+                .any(|h| crate::sites::host_matches(h, &site.announce_host))
+            {
                 continue;
             }
             let cur = entry.coverage.get(&site.id).map(|c| c.status);
@@ -179,8 +192,43 @@ pub fn run_round(
                         at: t0,
                         url: None,
                         note: Some("下载器里这条种子挂着该站 tracker".to_string()),
+                        verify_hash: None,
                     },
                 );
+            }
+        }
+    }
+
+    // ---- 2b 收尾上一轮「校验中」的格子（主线程直查下载器，不花站点预算）----
+    if !opts.dry_run {
+        for entry in index.contents.values_mut() {
+            for site in &active_sites {
+                let verdict = {
+                    let Some(cell) = entry.coverage.get(&site.id) else {
+                        continue;
+                    };
+                    if cell.status != CoverageStatus::Verifying {
+                        continue;
+                    }
+                    let Some(vh) = cell.verify_hash.as_deref().filter(|h| !h.is_empty()) else {
+                        continue;
+                    };
+                    collect_verifying(qb.as_ref(), vh, &cfg.coverage)
+                };
+                if let Some((status, note)) = verdict {
+                    let Some(cell) = entry.coverage.get_mut(&site.id) else {
+                        continue;
+                    };
+                    cell.status = status;
+                    cell.at = t0;
+                    cell.note = Some(note.clone());
+                    cell.verify_hash = None;
+                    *report.by_status.entry(status).or_insert(0) += 1;
+                    emit(Event::Log(format!(
+                        "[{}] 收尾「{}」：{}",
+                        site.id, entry.name, note
+                    )));
+                }
             }
         }
     }
@@ -217,11 +265,12 @@ pub fn run_round(
         let mut uncovered = 0;
         for site in &active_sites {
             let skip = match entry.coverage.get(&site.id).map(|c| c.status) {
+                // 终态（含 verifying——校验中格子由收尾 pass 负责）零请求跳过
                 Some(s) if s.is_settled() => true,
-                // miss / waitSource 负缓存期内不再问
-                Some(CoverageStatus::Miss) | Some(CoverageStatus::WaitSource) => {
-                    entry.coverage[&site.id].at > miss_cutoff
-                }
+                // miss/待找源/待人工/失败：missTTL 内不重试。
+                // 失败也歇一个 TTL——校验回滚类失败若每轮重推重删就是预算黑洞；
+                // C 级待人工同样：站点后来上了正确版本，7 天后自然重查
+                Some(_) => entry.coverage[&site.id].at > miss_cutoff,
                 _ => false,
             };
             if skip {
@@ -320,6 +369,19 @@ pub fn run_round(
     for ev in rx {
         match ev {
             Event::Log(m) => emit(Event::Log(m)),
+            // 预算耗尽一类：不写索引，只计入报告（下轮从头查）
+            Event::ItemSkipped {
+                site_id,
+                key,
+                reason,
+            } => {
+                report.preskipped += 1;
+                emit(Event::ItemSkipped {
+                    site_id,
+                    key,
+                    reason,
+                });
+            }
             Event::ItemDone {
                 site_id,
                 key,
@@ -328,6 +390,7 @@ pub fn run_round(
                 note,
                 source,
                 draft,
+                verify_hash,
             } => {
                 if let Some(src) = &source {
                     if let Some(e) = index.contents.get_mut(&key) {
@@ -346,6 +409,12 @@ pub fn run_round(
                             } else {
                                 Some(note.clone())
                             },
+                            // 非 Verifying 结论一律清空（收尾凭据只属于校验中格子）
+                            verify_hash: if status == CoverageStatus::Verifying {
+                                verify_hash.clone()
+                            } else {
+                                None
+                            },
                         },
                     );
                 }
@@ -361,6 +430,7 @@ pub fn run_round(
                     note,
                     source,
                     draft,
+                    verify_hash,
                 });
             }
         }
@@ -417,7 +487,6 @@ fn worker_loop(
                 &cov,
                 &dl,
                 dry_run,
-                &tx,
             );
             let _ = tx.send(ev);
         }
@@ -437,7 +506,6 @@ fn process_item(
     cov: &crate::config::CoverageSettings,
     dl: &DownloaderSettings,
     dry_run: bool,
-    _tx: &Sender<Event>,
 ) -> Event {
     let done = |status: CoverageStatus, note: String| Event::ItemDone {
         site_id: site_id.to_string(),
@@ -447,6 +515,7 @@ fn process_item(
         note,
         source: None,
         draft: None,
+        verify_hash: None,
     };
     let done_url = |status: CoverageStatus, note: String, url: String| Event::ItemDone {
         site_id: site_id.to_string(),
@@ -456,6 +525,13 @@ fn process_item(
         note,
         source: None,
         draft: None,
+        verify_hash: None,
+    };
+    // 预算耗尽：格子本轮没查成，不能记 Miss（那是查过才有的负缓存）
+    let skipped = |reason: &str| Event::ItemSkipped {
+        site_id: site_id.to_string(),
+        key: item.key.clone(),
+        reason: reason.to_string(),
     };
 
     // 本地指纹（本轮缓存；拿不到就没法逐文件比对）
@@ -468,7 +544,7 @@ fn process_item(
 
     // ---- 检索臂（方案第六节：先检索后转种）----
     if !throttle.acquire(site_id, BudgetKind::Search) {
-        return done(CoverageStatus::Miss, "本轮检索预算用完，下次接着跑".into());
+        return skipped("本轮检索预算用完，下次接着跑");
     }
     let mut found = match adapter.search(&item.name, "", false, "") {
         Ok(h) => h,
@@ -477,7 +553,7 @@ fn process_item(
     };
     if found.is_none() && cov.relaxed_retry_search {
         if !throttle.acquire(site_id, BudgetKind::Search) {
-            return done(CoverageStatus::Miss, "本轮检索预算用完，下次接着跑".into());
+            return skipped("本轮检索预算用完（宽松重试没跑），下次接着跑");
         }
         found = match adapter.search(&item.name, "", true, "") {
             Ok(h) => h,
@@ -495,13 +571,12 @@ fn process_item(
             adapters,
             cov,
             done,
-            done_url,
         );
     };
 
     // 命中 → 详情页 → 下载 .torrent（各一次预算）
     if !throttle.acquire(site_id, BudgetKind::Search) {
-        return done(CoverageStatus::Miss, "本轮检索预算用完，下次接着跑".into());
+        return skipped("本轮预算用完（检索已命中、详情页没读），下次接着跑");
     }
     let page = match adapter.fetch_torrent_page(&hit.detail_url) {
         Ok(p) => p,
@@ -513,7 +588,7 @@ fn process_item(
         }
     };
     if !throttle.acquire(site_id, BudgetKind::Search) {
-        return done(CoverageStatus::Miss, "本轮检索预算用完，下次接着跑".into());
+        return skipped("本轮预算用完（详情页已读、种子没下载），下次接着跑");
     }
     let data = match adapter.download_torrent(&page, &hit.detail_url) {
         Ok(d) => d,
@@ -676,15 +751,21 @@ fn push_tail(
         thread::sleep(Duration::from_secs(poll));
         waited += poll;
     }
-    // 落「校验中」：不落盘的话这一格重启就人间蒸发，那条暂停的种子也没人收尾
-    done_url(
-        CoverageStatus::Verifying,
-        format!(
+    // 落「校验中」：不落盘的话这一格重启就人间蒸发，那条暂停的种子也没人收尾。
+    // verify_hash 是下一轮「收尾 pass」的凭据（主线程直查下载器，不花站点预算）
+    Event::ItemDone {
+        site_id: site_id.to_string(),
+        key: item.key.clone(),
+        status: CoverageStatus::Verifying,
+        url: Some(detail_url.to_string()),
+        note: format!(
             "校验还没跑完（等了 {} 秒），下一轮接着收尾（{why}）",
             cov.verify_wait_sec
         ),
-        detail_url.to_string(),
-    )
+        source: None,
+        draft: None,
+        verify_hash: Some(site_hash),
+    }
 }
 
 /// 转种臂（站内没有）：v1 草稿模式——只定位源种、生成待发清单，不上传。
@@ -699,7 +780,6 @@ fn reseed_arm(
     adapters: &[Arc<NexusPhp>],
     cov: &crate::config::CoverageSettings,
     done: impl Fn(CoverageStatus, String) -> Event,
-    _done_url: impl Fn(CoverageStatus, String, String) -> Event,
 ) -> Event {
     if cov.reseed_mode == ReseedMode::Off {
         return done(CoverageStatus::Miss, "站内没有（转种臂关闭）".into());
@@ -733,6 +813,7 @@ fn reseed_arm(
                     target_site: site_id.to_string(),
                 })
             },
+            verify_hash: None,
         };
     // 源种已定位（本轮缓存或索引里）→ 直接出草稿
     let cached: Option<SourceRecord> = source_cache
@@ -833,6 +914,52 @@ fn reseed_arm(
             CoverageStatus::Miss,
             "站内没有；源种定位预算用完，下次接着试".into(),
         ),
+    }
+}
+
+/// 校验中格子的收尾判定（方案第七节「下一轮收尾」）：满 100% → 启动；
+/// 校验完仍不满 → 按 removeOnVerifyFail 回滚或保持暂停；还在校验/这次查询没通 →
+/// None（下轮再看）。qB 查询不过站点预算。
+fn collect_verifying(
+    qb: &QBittorrent,
+    hash: &str,
+    cov: &crate::config::CoverageSettings,
+) -> Option<(CoverageStatus, String)> {
+    match qb.torrent_progress(hash) {
+        Ok(Some((progress, state))) => {
+            if progress >= 0.999 {
+                let _ = qb.set_paused(&[hash], false);
+                Some((
+                    CoverageStatus::Assisted,
+                    "校验到 100%，已启动（上一轮推送收尾）".to_string(),
+                ))
+            } else if is_checking(&state) {
+                None
+            } else if cov.remove_on_verify_fail {
+                let _ = qb.remove_torrent(hash, true);
+                Some((
+                    CoverageStatus::Failed,
+                    format!(
+                        "校验后只到 {:.0}%，已删掉刚加的种子（文件保留）：内层路径与本地对不上",
+                        progress * 100.0
+                    ),
+                ))
+            } else {
+                Some((
+                    CoverageStatus::Failed,
+                    format!(
+                        "校验后只到 {:.0}%，种子保持暂停：文件对不上，别让它开始重下",
+                        progress * 100.0
+                    ),
+                ))
+            }
+        }
+        // 下载器里查无此种子（用户手删一类）：记失败，别永远挂着校验中
+        Ok(None) => Some((
+            CoverageStatus::Failed,
+            "下载器里已找不到那条种子（可能被手动删除），收尾失败".to_string(),
+        )),
+        Err(_) => None,
     }
 }
 

@@ -2,6 +2,8 @@
 //! 覆盖：辅种臂（检索命中 A 级 → 暂停推送 → 校验 100% → 启动）、
 //! 转种草稿臂（站内没有 → 源种定位 → ReseedDraft）、已做种预筛（零请求）、
 //! 索引落盘。HTTP 兼容补丁（hashes/hash 参数、[file]/[[file]] 回包）也在这里钉住。
+//! 另覆盖：已存在 409 → 补挂本站 tracker、校验中跨轮收尾（满 → 启动 / 不满 → 回滚）、
+//! 预算耗尽不记负缓存（格子跳过、下轮从头查）。
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -21,6 +23,9 @@ use bsend::sites::Framework;
 // ---------- 极简 mock HTTP 服务 ----------
 
 type Handler = Arc<dyn Fn(&str, &str, &[u8]) -> (u16, &'static str, Vec<u8>) + Send + Sync>;
+
+/// 收下的请求（路径 + 请求体）——409 补挂场景断言 addTrackers 带了什么
+type CapturedRequests = Arc<Mutex<Vec<(String, Vec<u8>)>>>;
 
 struct MockServer {
     port: u16,
@@ -161,6 +166,15 @@ const NAME: &str = "Black.Lagoon.S01.1080p.Blu-ray.x264-GROUP";
 const FILES: &[(&str, i64)] = &[("a.mkv", 100), ("s/ch.srt", 5)];
 
 fn qb_server(torrent_hash: String, tracker_hosts: Vec<String>) -> MockServer {
+    qb_server_ex(torrent_hash, tracker_hosts, None)
+}
+
+/// 同 qb_server，但单查（hashes=）的进度/状态可编程——收尾场景要在两轮之间翻 mock 状态。
+fn qb_server_ex(
+    torrent_hash: String,
+    tracker_hosts: Vec<String>,
+    progress: Option<Arc<Mutex<(f64, String)>>>,
+) -> MockServer {
     let torrent_hash = Arc::new(torrent_hash);
     let tracker_hosts = Arc::new(tracker_hosts);
     MockServer::start(Arc::new(move |method, path, body| {
@@ -176,11 +190,14 @@ fn qb_server(torrent_hash: String, tracker_hosts: Vec<String>) -> MockServer {
             );
         }
         if path.starts_with("/api/v2/torrents/info") {
-            // 单查（?hashes=H）回单条已完成的；全量回清单
+            // 单查（?hashes=H）回单条（进度可编程，默认已完成）；全量回清单
             if path.contains("hashes=") {
-                let json = format!(
-                    r#"[{{"hash":"{h}","progress":1.0,"state":"pausedUP","up_limit":-1}}]"#
-                );
+                let (p, st) = progress
+                    .as_ref()
+                    .map(|m| m.lock().unwrap().clone())
+                    .unwrap_or((1.0, "pausedUP".to_string()));
+                let json =
+                    format!(r#"[{{"hash":"{h}","progress":{p},"state":"{st}","up_limit":-1}}]"#);
                 return (200, "application/json", json.into_bytes());
             }
             let hosts = tracker_hosts
@@ -223,6 +240,60 @@ fn qb_server(torrent_hash: String, tracker_hosts: Vec<String>) -> MockServer {
     }))
 }
 
+/// add 永远回 409（同 hash 种子已在下载器）：现有 tracker 是「另一家」的，
+/// addTrackers 的请求体收进 captured——钉住「已存在 → 补挂本站 tracker」整条路。
+fn qb_server_409(torrent_hash: String, captured: CapturedRequests) -> MockServer {
+    let torrent_hash = Arc::new(torrent_hash);
+    MockServer::start(Arc::new(move |_method, path, body| {
+        let h = &*torrent_hash;
+        if path.starts_with("/api/v2/auth/login") {
+            return (200, "text/plain", b"Ok.".to_vec());
+        }
+        if path.starts_with("/api/v2/app/version") {
+            return (
+                200,
+                "application/json",
+                br#"{"version":"5.0.0-mock"}"#.to_vec(),
+            );
+        }
+        if path.starts_with("/api/v2/torrents/info") {
+            if path.contains("hashes=") {
+                let json = format!(
+                    r#"[{{"hash":"{h}","progress":1.0,"state":"pausedUP","up_limit":-1}}]"#
+                );
+                return (200, "application/json", json.into_bytes());
+            }
+            let json = format!(
+                r#"[{{"hash":"{h}","infohash_v2":"","name":"{NAME}","save_path":"/data/","category":"","tags":"","size":105,"progress":1.0,"tracker_hosts":[]}}]"#
+            );
+            return (200, "application/json", json.into_bytes());
+        }
+        if path.starts_with("/api/v2/torrents/files") {
+            let json = r#"[{"name":"Pack/a.mkv","size":100,"index":0},{"name":"Pack/s/ch.srt","size":5,"index":1}]"#;
+            return (200, "application/json", json.as_bytes().to_vec());
+        }
+        // addTrackers 要排在 add 前面（前缀会撞上）
+        if path.starts_with("/api/v2/torrents/addTrackers") {
+            captured
+                .lock()
+                .unwrap()
+                .push((path.to_string(), body.to_vec()));
+            return (200, "text/plain", Vec::new());
+        }
+        if path.starts_with("/api/v2/torrents/add") {
+            return (409, "text/plain", Vec::new()); // qB 5.2+：已在下载器
+        }
+        if path.starts_with("/api/v2/torrents/trackers") {
+            return (
+                200,
+                "application/json",
+                br#"[{"url":"https://existing.example/announce"}]"#.to_vec(),
+            );
+        }
+        (200, "text/plain", Vec::new())
+    }))
+}
+
 fn nexus_site_server(kind: &str, torrent: Arc<Vec<u8>>) -> MockServer {
     let torrent = torrent.clone();
     let kind = kind.to_string();
@@ -256,7 +327,6 @@ fn test_config(qb_port: u16, pter_port: u16, hdsky_port: u16, dir: &std::path::P
             password: "pass".into(),
             save_path: None,
             category: None,
-            skip_checking: true,
             default_up_limit: 0,
             site_up_limits: HashMap::new(),
         },
@@ -611,5 +681,277 @@ fn e2e_name_only_goes_to_review() {
         qb.requests("POST /api/v2/torrents/add").len(),
         0,
         "C 级绝不动下载器"
+    );
+}
+
+/// 场景五：add 回 409（同 hash 种子已在下载器）→ 不算失败，补挂本站 tracker 后记已辅。
+#[test]
+fn e2e_already_exists_attaches_tracker() {
+    let dir = temp_dir("exists409");
+    let t = Arc::new(torrent_bytes("Pack", FILES));
+    let hash = bencode::info_hash_v1(&t).unwrap();
+
+    let captured: CapturedRequests = Arc::new(Mutex::new(Vec::new()));
+    let qb = qb_server_409(hash, captured.clone());
+    let pter = nexus_site_server("hit", t.clone());
+    let hdsky = nexus_site_server("miss", t.clone());
+    let cfg = test_config(qb.port, pter.port, hdsky.port, &dir);
+
+    let qb_client = Arc::new(QBittorrent::new(&cfg.downloader.url, "admin", "pass").unwrap());
+    let ads = adapters(&cfg);
+    let mut index = ContentIndex::load(&cfg.coverage_state_path());
+    let _ = run_round(
+        &cfg,
+        qb_client,
+        &ads,
+        &mut index,
+        |_| {},
+        RoundOptions {
+            persist: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    let entry = index.contents.values().next().unwrap();
+    assert_eq!(
+        entry.coverage["pter"].status,
+        CoverageStatus::Assisted,
+        "已存在也算辅种落地"
+    );
+    let note = entry.coverage["pter"].note.as_deref().unwrap();
+    assert!(note.contains("已存在"), "note = {note}");
+    assert!(note.contains("补挂"), "note = {note}");
+    // 补挂请求真发出去了，带的正是本站 announce（tracker.example）
+    let adds = captured.lock().unwrap();
+    assert_eq!(adds.len(), 1, "只补挂一次");
+    let body = String::from_utf8_lossy(&adds[0].1).to_string();
+    assert!(body.contains("tracker.example"), "body = {body}");
+    drop(adds);
+    // 已存在路径不动启停：那条种子本来就在跑
+    assert_eq!(
+        qb.requests("POST /api/v2/torrents/resume").len(),
+        0,
+        "已存在的种子不碰启停"
+    );
+}
+
+/// 场景六：校验迟迟不结束 → 落「校验中」+ verify_hash 持久化；
+/// 下一轮收尾 pass 直查下载器（零站点请求）：校验满 → 启动 → 已辅。
+#[test]
+fn e2e_verifying_collect_assisted() {
+    let dir = temp_dir("verify-ok");
+    let t = Arc::new(torrent_bytes("Pack", FILES));
+    let hash = bencode::info_hash_v1(&t).unwrap();
+
+    let progress = Arc::new(Mutex::new((0.0f64, "checkingFiles".to_string())));
+    let qb = qb_server_ex(hash, Vec::new(), Some(progress.clone()));
+    let pter = nexus_site_server("hit", t.clone());
+    let hdsky = nexus_site_server("miss", t.clone());
+    let mut cfg = test_config(qb.port, pter.port, hdsky.port, &dir);
+    cfg.coverage.verify_wait_sec = 2;
+    cfg.coverage.verify_poll_sec = 1;
+
+    let qb_client = Arc::new(QBittorrent::new(&cfg.downloader.url, "admin", "pass").unwrap());
+    let ads = adapters(&cfg);
+    let mut index = ContentIndex::load(&cfg.coverage_state_path());
+    let _ = run_round(
+        &cfg,
+        qb_client.clone(),
+        &ads,
+        &mut index,
+        |_| {},
+        RoundOptions {
+            persist: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    // 第一轮：等到头没结论 → 校验中；收尾凭据必须落盘（否则重启就没人收尾了）
+    let entry = index.contents.values().next().unwrap();
+    assert_eq!(entry.coverage["pter"].status, CoverageStatus::Verifying);
+    assert!(
+        entry.coverage["pter"].verify_hash.is_some(),
+        "verify_hash 是下一轮收尾的凭据"
+    );
+    let idx2 = ContentIndex::load(&cfg.coverage_state_path());
+    let e2 = idx2.contents.values().next().unwrap();
+    assert_eq!(e2.coverage["pter"].status, CoverageStatus::Verifying);
+    assert!(
+        e2.coverage["pter"].verify_hash.is_some(),
+        "磁盘上也要有凭据"
+    );
+
+    // 第二轮：翻成校验完成 → 收尾 pass 启动它 → 已辅；全程零站点请求
+    *progress.lock().unwrap() = (1.0, "pausedUP".to_string());
+    let site_before =
+        pter.requests("GET /torrents.php").len() + hdsky.requests("GET /torrents.php").len();
+    let mut index2 = ContentIndex::load(&cfg.coverage_state_path());
+    let report2 = run_round(
+        &cfg,
+        qb_client,
+        &ads,
+        &mut index2,
+        |_| {},
+        RoundOptions {
+            persist: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let site_after =
+        pter.requests("GET /torrents.php").len() + hdsky.requests("GET /torrents.php").len();
+    assert_eq!(site_after, site_before, "收尾不花站点请求");
+    assert_eq!(report2.by_status[&CoverageStatus::Assisted], 1);
+    assert_eq!(
+        qb.requests("POST /api/v2/torrents/resume").len(),
+        1,
+        "校验满后启动"
+    );
+    let e3 = index2.contents.values().next().unwrap();
+    assert_eq!(e3.coverage["pter"].status, CoverageStatus::Assisted);
+    assert!(
+        e3.coverage["pter"]
+            .note
+            .as_deref()
+            .unwrap()
+            .contains("收尾"),
+        "note = {:?}",
+        e3.coverage["pter"].note
+    );
+    assert!(e3.coverage["pter"].verify_hash.is_none(), "凭据用掉即清");
+}
+
+/// 场景六 b：收尾时校验只跑到一半（文件对不上）→ 按设置删掉刚加的种子（保留文件）→ 失败。
+#[test]
+fn e2e_verifying_collect_rollback() {
+    let dir = temp_dir("verify-fail");
+    let t = Arc::new(torrent_bytes("Pack", FILES));
+    let hash = bencode::info_hash_v1(&t).unwrap();
+
+    let progress = Arc::new(Mutex::new((0.0f64, "checkingFiles".to_string())));
+    let qb = qb_server_ex(hash, Vec::new(), Some(progress.clone()));
+    let pter = nexus_site_server("hit", t.clone());
+    let hdsky = nexus_site_server("miss", t.clone());
+    let mut cfg = test_config(qb.port, pter.port, hdsky.port, &dir);
+    cfg.coverage.verify_wait_sec = 2;
+    cfg.coverage.verify_poll_sec = 1;
+
+    let qb_client = Arc::new(QBittorrent::new(&cfg.downloader.url, "admin", "pass").unwrap());
+    let ads = adapters(&cfg);
+    let mut index = ContentIndex::load(&cfg.coverage_state_path());
+    let _ = run_round(
+        &cfg,
+        qb_client.clone(),
+        &ads,
+        &mut index,
+        |_| {},
+        RoundOptions {
+            persist: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        index.contents.values().next().unwrap().coverage["pter"].status,
+        CoverageStatus::Verifying
+    );
+
+    // 第二轮：校验停在一半且不再 checking → 删种（保留文件）→ Failed
+    *progress.lock().unwrap() = (0.5, "pausedUP".to_string());
+    let site_before =
+        pter.requests("GET /torrents.php").len() + hdsky.requests("GET /torrents.php").len();
+    let mut index2 = ContentIndex::load(&cfg.coverage_state_path());
+    let report2 = run_round(
+        &cfg,
+        qb_client,
+        &ads,
+        &mut index2,
+        |_| {},
+        RoundOptions {
+            persist: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let site_after =
+        pter.requests("GET /torrents.php").len() + hdsky.requests("GET /torrents.php").len();
+    assert_eq!(site_after, site_before, "收尾不花站点请求");
+    assert_eq!(report2.by_status[&CoverageStatus::Failed], 1);
+    assert_eq!(
+        qb.requests("POST /api/v2/torrents/delete").len(),
+        1,
+        "按设置删掉刚加的种子"
+    );
+    let e3 = index2.contents.values().next().unwrap();
+    let note = e3.coverage["pter"].note.as_deref().unwrap();
+    assert!(note.contains("已删掉"), "note = {note}");
+    assert!(e3.coverage["pter"].verify_hash.is_none());
+}
+
+/// 场景七：检索预算耗尽的格子不写 Miss（那是查过才有的负缓存）——
+/// 本轮跳过、不落格子，下一轮预算回来从头查，该是什么结论就是什么结论。
+#[test]
+fn e2e_budget_exhaustion_not_cached() {
+    let dir = temp_dir("budget");
+    let t = Arc::new(torrent_bytes("Pack", FILES));
+    let hash = bencode::info_hash_v1(&t).unwrap();
+
+    let qb = qb_server(hash, Vec::new());
+    let pter = nexus_site_server("miss", t.clone());
+    let hdsky = nexus_site_server("miss", t.clone());
+    let mut cfg = test_config(qb.port, pter.port, hdsky.port, &dir);
+    cfg.coverage.search_budget = 1;
+    // 每站恰好一次检索，预算账好算（宽松重试也要吃检索预算）
+    cfg.coverage.relaxed_retry_search = false;
+
+    let qb_client = Arc::new(QBittorrent::new(&cfg.downloader.url, "admin", "pass").unwrap());
+    let ads = adapters(&cfg);
+    let mut index = ContentIndex::load(&cfg.coverage_state_path());
+    let report = run_round(
+        &cfg,
+        qb_client.clone(),
+        &ads,
+        &mut index,
+        |_| {},
+        RoundOptions {
+            persist: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    // 预算 1：只有一个站查上了（miss → 待找源），另一个站本轮跳过、不落任何结论
+    assert_eq!(report.preskipped, 1, "预算耗尽的格子算跳过，不算 miss");
+    assert_eq!(report.by_status.len(), 1);
+    assert_eq!(report.by_status[&CoverageStatus::WaitSource], 1);
+    let entry = index.contents.values().next().unwrap();
+    assert_eq!(entry.coverage.len(), 1, "被跳过的站不写格子（下次从头来）");
+
+    // 第二轮预算回来：剩下的那格照常查——站内没有 + 源种负缓存 → 待找源
+    cfg.coverage.search_budget = 2;
+    let mut index2 = ContentIndex::load(&cfg.coverage_state_path());
+    let report2 = run_round(
+        &cfg,
+        qb_client,
+        &ads,
+        &mut index2,
+        |_| {},
+        RoundOptions {
+            persist: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(report2.by_status[&CoverageStatus::WaitSource], 1);
+    let e2 = index2.contents.values().next().unwrap();
+    assert_eq!(e2.coverage.len(), 2, "两格都有了");
+    assert_eq!(
+        e2.coverage
+            .values()
+            .filter(|c| c.status == CoverageStatus::WaitSource)
+            .count(),
+        2
     );
 }

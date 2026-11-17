@@ -90,7 +90,11 @@ pub fn resolve_source(
     let mut clean = true;
     // 优先级：已在做种的源站排前面（其余保持给定顺序）
     let mut ordered: Vec<&SourceSite<'_>> = sites.iter().collect();
-    ordered.sort_by_key(|s| !tracker_hosts.iter().any(|h| h == &s.announce_host));
+    ordered.sort_by_key(|s| {
+        !tracker_hosts
+            .iter()
+            .any(|h| crate::sites::host_matches(h, &s.announce_host))
+    });
 
     for site in ordered {
         let site_id = site.client.site_id().to_string();

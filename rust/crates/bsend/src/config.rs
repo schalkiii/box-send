@@ -41,7 +41,6 @@ pub struct DownloaderSettings {
     pub password: String,
     pub save_path: Option<String>,
     pub category: Option<String>,
-    pub skip_checking: bool,
     pub default_up_limit: i64,
     /// 按源站点 id 的上传限速（bytes/s）
     pub site_up_limits: HashMap<String, i64>,
@@ -203,7 +202,6 @@ impl Config {
             password: v_str(&chosen, "password").unwrap_or_default(),
             save_path: v_str(&chosen, "savePath"),
             category: v_str(&chosen, "category"),
-            skip_checking: v_bool(&chosen, "skipChecking", true),
             default_up_limit: v_i64(&chosen, "defaultUpLimit", 0),
             site_up_limits: chosen
                 .get("siteUpLimits")
@@ -460,9 +458,58 @@ mod tests {
         assert!(cfg.cookie_header_for("nowhere.example").is_none());
     }
 
+    // cookies.json 相关断言要用独立目录：write_temp 所有测试共用一个目录，
+    // 谁写了 cookies.json 别的测试也会加载到
+    fn write_temp_isolated(tag: &str, name: &str, content: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("bsend-cfg-{}-{tag}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join(name);
+        let mut f = std::fs::File::create(&p).unwrap();
+        f.write_all(content.as_bytes()).unwrap();
+        p
+    }
+
     #[test]
     fn missing_source_sites_is_error() {
         let p = write_temp("bad.json", r#"{"downloader": {"url": "http://x"}}"#);
         assert!(Config::load(&p).is_err());
+    }
+
+    #[test]
+    fn cookies_json_accepts_pt_depiler_wrapper() {
+        let p = write_temp_isolated("wrap", "boxsend.json", BOXSEND);
+        // PT-depiler 备份格式：外层多包一层 {"cookies": {...}}，要能解开
+        let cookies = r#"{
+          "cookies": {
+            "hdsky.me": [{"name": "c_secure_uid", "value": "123", "domain": ".hdsky.me"}]
+          }
+        }"#;
+        write_temp_isolated("wrap", "cookies.json", cookies);
+        let cfg = Config::load(&p).unwrap();
+        assert_eq!(
+            cfg.cookie_header_for("hdsky.me").as_deref(),
+            Some("c_secure_uid=123")
+        );
+    }
+
+    #[test]
+    fn non_search_frameworks_are_filtered() {
+        // 缺 framework / "Other" / Unit3D 都不进 sites：v1 检索臂只认 NexusPHP
+        let p = write_temp_isolated(
+            "framework",
+            "boxsend.json",
+            r#"{
+          "sourceSites": [
+            {"id": "nofw", "name": "没写框架", "url": "https://nofw.example/", "enabled": true},
+            {"id": "other", "name": "其他", "url": "https://other.example/", "framework": "Other", "enabled": true},
+            {"id": "u3d", "name": "Unit3D", "url": "https://u3d.example/", "framework": "Unit3D", "enabled": true},
+            {"id": "nx", "name": "正常", "url": "https://nx.example/", "framework": "NexusPHP", "enabled": true}
+          ],
+          "downloader": {"url": "http://x"}
+        }"#,
+        );
+        let cfg = Config::load(&p).unwrap();
+        let ids: Vec<&str> = cfg.sites.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, vec!["nx"]);
     }
 }

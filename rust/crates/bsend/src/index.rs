@@ -97,6 +97,9 @@ pub struct SiteCoverage {
     pub url: Option<String>,
     /// 给人看的备注（判定原因/失败原因）
     pub note: Option<String>,
+    /// 校验中格子专属：上一轮推送暂停在下载器里那条种子的 hash（收尾 pass 的凭据）
+    #[serde(default)]
+    pub verify_hash: Option<String>,
 }
 
 /// 源种定位结果（方案第五节）
@@ -272,7 +275,7 @@ impl ContentIndex {
                     if target_key.is_none() {
                         let key = format!("m:{digest}");
                         self.contents
-                            .insert(key.clone(), Self::new_entry(&key, t, &fp, &digest, now));
+                            .insert(key.clone(), Self::new_entry(t, &fp, &digest, now));
                         d2k.insert(digest, key.clone());
                         delta.new_contents += 1;
                         created = true;
@@ -283,7 +286,7 @@ impl ContentIndex {
                     let key = format!("h:{}", t.hash);
                     let placeholder = TorrentFingerprint::new(String::new(), Vec::new());
                     self.contents
-                        .insert(key.clone(), Self::new_entry(&key, t, &placeholder, "", now));
+                        .insert(key.clone(), Self::new_entry(t, &placeholder, "", now));
                     delta.new_contents += 1;
                     created = true;
                     target_key = Some(key);
@@ -365,13 +368,11 @@ impl ContentIndex {
     }
 
     fn new_entry(
-        key: &str,
         t: &LocalTorrent,
         fp: &TorrentFingerprint,
         digest: &str,
         now: i64,
     ) -> ContentEntry {
-        let _ = key;
         ContentEntry {
             name: t.name.clone(),
             total_size: if fp.total_size > 0 {
@@ -599,6 +600,7 @@ mod tests {
                     at: 1234,
                     url: Some("https://hdsky.me/details.php?id=1".to_string()),
                     note: Some("info hash 一致".to_string()),
+                    verify_hash: None,
                 },
             );
             idx.save().unwrap();

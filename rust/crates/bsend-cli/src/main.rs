@@ -184,6 +184,13 @@ fn cmd_round(
 fn print_event(ev: Event) {
     match ev {
         Event::Log(m) => println!("{m}"),
+        Event::ItemSkipped {
+            site_id,
+            key,
+            reason,
+        } => {
+            println!("[{site_id}] 跳过 {}（{reason}）", short_key(&key));
+        }
         Event::ItemDone {
             site_id,
             key,
