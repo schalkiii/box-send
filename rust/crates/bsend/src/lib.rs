@@ -1,4 +1,4 @@
-//! BoxSend 铺种引擎（Rust 版）：内容索引 → 源种定位 → 转种/辅种一体化。
+//! BoxSend 辅种引擎（Rust 版）：内容索引 → 源种定位 → 转种/辅种一体化。
 //!
 //! 与 Swift 版 `BoxSendKit` 的关系：判定口径（`matcher`）、bencode 语义（`bencode`）、
 //! qB 字段兼容（`qbittorrent`）、NexusPHP 检索启发式（`sites::nexusphp`）全部逐函数对齐；

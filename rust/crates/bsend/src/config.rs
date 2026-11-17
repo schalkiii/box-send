@@ -1,6 +1,6 @@
 //! 配置加载：直接吃 GUI 版的 `boxsend.json` + `cookies.json`，不引入第二份配置格式
 //! （同一台机器上 Swift 版和 Rust 版可以共用一套配置）。
-//! 字段名与 Swift `Models/Config.swift` 一致；只认铺种需要的那些，其余字段忽略。
+//! 字段名与 Swift `Models/Config.swift` 一致；只认辅种需要的那些，其余字段忽略。
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -21,7 +21,7 @@ pub enum ReseedMode {
     Draft,
 }
 
-/// 参与铺种的站点（已按 enabled/白名单/框架过滤）
+/// 参与辅种的站点（已按 enabled/白名单/框架过滤）
 #[derive(Debug, Clone)]
 pub struct SiteConf {
     pub id: String,
@@ -64,7 +64,7 @@ pub struct DownloaderSettings {
     pub site_up_limits: HashMap<String, i64>,
 }
 
-/// 铺种节流与安全网参数。字段名跟 boxsend.json 的 assist 段一致，缺省值也一致。
+/// 辅种节流与安全网参数。字段名跟 boxsend.json 的 assist 段一致，缺省值也一致。
 #[derive(Debug, Clone)]
 pub struct CoverageSettings {
     /// 参与辅种的站点白名单（空 = 全部启用的源站）
@@ -154,7 +154,7 @@ pub struct Config {
     pub config_path: PathBuf,
     pub data_dir: Option<PathBuf>,
     pub downloader: DownloaderSettings,
-    /// 参与铺种的站点（已过滤：enabled + 白名单 + v1 支持检索的框架）
+    /// 参与辅种的站点（已过滤：enabled + 白名单 + v1 支持检索的框架）
     pub sites: Vec<SiteConf>,
     pub coverage: CoverageSettings,
     pub user_agent: String,
@@ -165,7 +165,7 @@ pub struct Config {
 }
 
 // boxsend.json 的键是驼峰（GUI 版 Swift Codable 默认）。这里用 serde_json::Value 动态取：
-// 配置里大量字段铺种不关心，逐字段声明结构体反而要跟着上游演进改代码。
+// 配置里大量字段辅种不关心，逐字段声明结构体反而要跟着上游演进改代码。
 
 fn v_str(v: &Value, key: &str) -> Option<String> {
     v.get(key).and_then(|x| x.as_str()).map(|s| s.to_string())
@@ -486,7 +486,7 @@ impl Config {
         Ok(path)
     }
 
-    /// 铺种索引的持久化路径（dataDir/coverage.json；没有 dataDir 就放配置旁边）
+    /// 辅种索引的持久化路径（dataDir/coverage.json；没有 dataDir 就放配置旁边）
     pub fn coverage_state_path(&self) -> PathBuf {
         self.data_dir
             .as_deref()

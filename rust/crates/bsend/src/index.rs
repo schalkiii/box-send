@@ -1,4 +1,4 @@
-//! 内容索引：铺种去重的核心（方案第四节）。
+//! 内容索引：辅种去重的核心（方案第四节）。
 //! 一段「内容」的身份不依赖任何站点：v1 hash、v2 hash、逐文件清单摘要三者任一相同
 //! 即同一内容（并查集合并）。各站重新打包（改 source/private 标记）hash 不同、manifest
 //! 全等 → 合并；同名不同压制 manifest 不同 → 天然分开。
@@ -173,7 +173,7 @@ impl ContentEntry {
         self.torrents.iter().next()
     }
 
-    /// 成员种子里最晚进下载器的时间：铺种优先级「新入库优先」用
+    /// 成员种子里最晚进下载器的时间：辅种优先级「新入库优先」用
     pub fn newest_added(&self) -> i64 {
         self.torrents
             .values()

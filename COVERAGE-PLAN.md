@@ -1,13 +1,13 @@
-# 铺种方案：内容索引 → 源种定位 → 转种/辅种一体化（v1 草案）
+# 辅种方案：内容索引 → 源种定位 → 转种/辅种一体化（v1 草案）
 
 目标一句话：**下载器里已有的文件，自动去重建索引；逐站判断「站内有就辅种、站内没有就转种」，
 把每一段文件铺满所有参与站点。** 不再需要手动贴源站链接——源种由软件自己去源站找回。
 
 与现有两条线的关系：
 
-- **转种（`ReseedPipeline`）**：输入是人工粘贴的源站详情页链接。铺种要把它变成「自动定位源种」。
+- **转种（`ReseedPipeline`）**：输入是人工粘贴的源站详情页链接。辅种要把它变成「自动定位源种」。
 - **辅种（`Assist/`，M0–M2 已落地、1.3 起 `AssistFeature.enabled = false` 收起）**：
-  扫描下载器 → 站内检索 → 判定 → 暂停添加 → 校验复核。铺种复用它的全部判定与推送机制，
+  扫描下载器 → 站内检索 → 判定 → 暂停添加 → 校验复核。辅种复用它的全部判定与推送机制，
   但把「一条种子」升级成「一段内容」，并在「站内没有」时不再收工，而是接着转种。
 
 ## 一、现状差距
@@ -98,7 +98,7 @@ state.json 再撑大）。原子写、后台节流落盘。条目结构：
 是对现有 `assisted`/`assistMiss`/`assistFail`/`uploaded`/`existing`/`targetURL`
 六张表的**内容级收拢**：旧表按 `站点|本地hash` 记账，本地代表种子一换就对不上号；
 新表按 `站点|contentKey` 记，换哪条种子做代表都成立。旧辅种表保留不动（那条线还收着），
-铺种是新表新账。
+辅种是新表新账。
 
 ## 五、源种定位（SourceResolver）
 
@@ -139,12 +139,12 @@ state.json 再撑大）。原子写、后台节流落盘。条目结构：
 ## 七、统一推送尾巴（转种与辅种收尾相同）
 
 现有转种推送假设「盒子是空的，推了就下」（`reseedDownloader.savePath` + `skipChecking`）。
-铺种的前提是**文件已经在辅种那台下载器上**，所以两条臂共用辅种那套保险丝：
+辅种的前提是**文件已经在辅种那台下载器上**，所以两条臂共用辅种那套保险丝：
 
 - `addTorrent(…, savePath: 本地内容的 savePath, paused: true)`（不是转种下载器的默认路径）；
 - 轮询校验 → 满 100% 才 `resume`；不满按 `removeOnVerifyFail` 回滚（保留文件）；
 - `AssistMatcher.layout` 检查同样作用于转种取回的 .torrent：内层目录名对不上就不硬加；
-- 大小检测（`SizeGuard`）对铺种**不适用**——文件已在盘上，不存在「下不下得动」的问题；
+- 大小检测（`SizeGuard`）对辅种**不适用**——文件已在盘上，不存在「下不下得动」的问题；
 - 站点刚发种、下载入口未就绪（实测 hdtime 要等几秒）：沿用 `pushRetryWaits`（15s/60s），
   再取不到就记「待取回」，下一轮只补取回，不重发种。
 
@@ -177,7 +177,7 @@ state.json 再撑大）。原子写、后台节流落盘。条目结构：
 
 **墙钟时间（当前最大的结构性问题）**：`AssistPipeline.run` 是全串行
 （站点外层 × 种子内层）。1,000 个内容 × 20 站、每站间隔 8s+抖动 ≈ 每站 2.5 小时、
-串行 20 站 ≈ 50 小时。铺种必须改成**站点 worker 模型**：每站一个串行队列（保持本站节奏），
+串行 20 站 ≈ 50 小时。辅种必须改成**站点 worker 模型**：每站一个串行队列（保持本站节奏），
 全局并发上限（默认 4 站同时），墙钟时间降到最慢那一站。这个改造在 Swift 里用
 `DispatchQueue` + 信号量即可完成，不需要换语言。
 
@@ -194,7 +194,7 @@ state.json 再撑大）。原子写、后台节流落盘。条目结构：
 | --- | --- |
 | `StateStore` / 新 `CoverageStore` | `coverage.json` 读写、原子落盘、`coverage.json` 与 `state.json` 的并发写互不干扰（各自锁） |
 | `AppConfig.coverage` | `CoverageConfig`：`sourceSiteIDs`、`siteIDs`、`sitePolicies`、三类预算、两个负缓存 TTL、草稿默认开、索引归档天数、并发站数、`autoRunMinutes`、优先级策略、IYUU 开关 |
-| 旧辅种表 | 原样保留；`AssistFeature.enabled` 何时翻回 true 独立决策（铺种 C2 上线后辅种页可由铺种页收编） |
+| 旧辅种表 | 原样保留；`AssistFeature.enabled` 何时翻回 true 独立决策（辅种 C2 上线后辅种页可由辅种页收编） |
 
 ## 十一、代码接缝
 
@@ -203,12 +203,12 @@ state.json 再撑大）。原子写、后台节流落盘。条目结构：
 | `Assist/ContentIndex.swift`（新） | `ContentKey`、并查集合并、扫描增量（新 hash 才读文件清单）、`coverage.json` 落盘、条目生命周期。纯逻辑，表驱动单测 |
 | `Assist/SourceResolver.swift`（新） | 优先级定位（trackerHost 站优先）、A/B 判定、`ReleaseInfo` 缓存、源站负缓存。适配器注入，假站单测 |
 | `Assist/CoveragePipeline.swift`（新） | 编排：索引 → 预筛 → 站点 worker 池 → 检索 → 辅种臂/转种臂 → 统一尾巴 → 回查。复用 `SiteThrottle`（加预算分类）、`AssistMatcher`、`AssistQueue`、`AssistRowStatus`（新增 `waitSource`/`reseedDraft`/`reseeded` 三态） |
-| `Pipeline/ReseedPipeline.swift` | 抽出「单站上传」段为 `uploadOne(target:release:torrentData:) -> UploadOutcome`（现 `run` 内联在循环里），铺种与手动转种共用；`run` 行为不变 |
+| `Pipeline/ReseedPipeline.swift` | 抽出「单站上传」段为 `uploadOne(target:release:torrentData:) -> UploadOutcome`（现 `run` 内联在循环里），辅种与手动转种共用；`run` 行为不变 |
 | `Downloader` 协议 | 不动（`listTorrents`/`torrentFiles`/`addTorrent(paused:)` 都已齐） |
 | `Sites/*` | 不动。`searchExists`/`fetchDetail`/`downloadTorrentFile`/`upload`/`previewUploadFields` 正是这条链需要的全部 |
 | `Bridge/AppService.swift` | `coverage.scan` / `coverage.index` / `coverage.plan` / `coverage.start` / `coverage.confirm`（草稿批量确认）/ `coverage.recheck` / `coverage.stop` / `coverage.tick`，照 `assist.*` 的写法：立即返回、后台跑、`snapshot` 带回 `coverage` 段 |
 | `BoxSendCLI/main.swift` | `box-send coverage scan\|plan\|run [--sites a,b] [--limit N] [--dry-run] [--auto-reseed]` |
-| mac 界面 | 「铺种」新标签（或收编辅种页）：索引统计、待找源清单、草稿确认列表、逐站进度 |
+| mac 界面 | 「辅种」新标签（或收编辅种页）：索引统计、待找源清单、草稿确认列表、逐站进度 |
 | Windows 界面 | `Views/CoverageView.xaml`，同一套信息结构，桥方法同名 |
 | Web 控制台 | `ServeApp` 加 `/api/coverage/*`（只读统计 + 草稿确认），盒子远程可看 |
 

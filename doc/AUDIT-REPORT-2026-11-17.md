@@ -1,4 +1,4 @@
-# 审计报告：Rust 铺种引擎 v1（rust/coverage @ 0a5b103）
+# 审计报告：Rust 辅种引擎 v1（rust/coverage @ 0a5b103）
 
 审计范围：`rust/` 工作区全部代码与文档（bsend 库 13 模块、bsend-cli、e2e 测试、Cargo 清单、
 CI workflow、rust/README.md），基准提交 `0a5b103`（46 单测 + 5 e2e 全绿、clippy -D warnings

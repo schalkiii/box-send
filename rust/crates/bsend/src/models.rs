@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::manifest;
 
 /// 下载器里的一条种子。字段取自 qBittorrent `/torrents/info`（Transmission 的映射在 Swift 版，
-/// Rust 版 v1 只做 qB——铺种扫描的前提本来就是 qB）。
+/// Rust 版 v1 只做 qB——辅种扫描的前提本来就是 qB）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LocalTorrent {
     /// v1 info hash（小写 40 位）
@@ -22,7 +22,7 @@ pub struct LocalTorrent {
     pub progress: f64,
     /// 该种子现有的 tracker host（小写）：判断「这份文件已经在哪些站做种」
     pub tracker_hosts: Vec<String>,
-    /// 加进下载器的时间（qB 的 added_on）：铺种优先级「新入库优先」看它
+    /// 加进下载器的时间（qB 的 added_on）：辅种优先级「新入库优先」看它
     pub added_on: i64,
 }
 

@@ -1,4 +1,4 @@
-//! bsend：box-send 的铺种引擎 CLI（Rust 版）。
+//! bsend：box-send 的辅种引擎 CLI（Rust 版）。
 //! 与 GUI 版共用同一份 `boxsend.json` / `cookies.json`，索引落在 dataDir/coverage.json。
 //!
 //! 用法：
@@ -28,7 +28,7 @@ use bsend::sites::nexusphp::NexusPhp;
 #[command(
     name = "bsend",
     version,
-    about = "铺种引擎：内容索引 → 源种定位 → 辅种/转种（box-send Rust 版）"
+    about = "辅种引擎：内容索引 → 源种定位 → 辅种/转种（box-send Rust 版）"
 )]
 struct Cli {
     /// boxsend.json 路径（与 GUI 版共用同一份配置）
@@ -57,7 +57,7 @@ enum Cmd {
         #[arg(long)]
         only: Option<String>,
     },
-    /// 跑一整轮铺种：辅种真推下载器，转种出草稿清单
+    /// 跑一整轮辅种：辅种真推下载器，转种出草稿清单
     Run {
         /// 最多处理多少格
         #[arg(long)]
@@ -575,7 +575,7 @@ fn commas(n: i64) -> String {
     }
 }
 
-/// 字节数 → 人看的大小（GB 起算，铺种看的都是大文件）
+/// 字节数 → 人看的大小（GB 起算，辅种看的都是大文件）
 fn size_text(bytes: i64) -> String {
     let gb = bytes as f64 / 1_073_741_824.0;
     if gb >= 1.0 {

@@ -1,4 +1,4 @@
-# 审计报告 R2：Rust 铺种引擎（rust/coverage @ 949ad91）
+# 审计报告 R2：Rust 辅种引擎（rust/coverage @ 949ad91）
 
 第二轮审计（第一轮见 `AUDIT-REPORT-2026-11-17.md`）。基准提交 `949ad91`（49 单测 + 9 e2e、
 clippy/fmt 零告警、CI 双矩阵绿）。本轮逐文件全文重读全部 13 个模块 + CLI + e2e + CI +
