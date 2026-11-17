@@ -7,6 +7,7 @@
 //! - addTrackers 带 `hash`+`hashes` 两份参数，老版本回退 setTrackers 整表重写。
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
@@ -22,6 +23,9 @@ pub struct QBittorrent {
     base_url: String,
     username: String,
     password: String,
+    /// 已登录（SID 在 cookie store 里）。免得每个 API 调用都重打一次 /auth/login，
+    /// 把对下载器的请求数翻倍
+    logged_in: AtomicBool,
 }
 
 /// 推种结果：`id` 是 v1 info hash（.torrent 解不出时为空），`note` 给人看（已存在/补挂/限速未生效…）
@@ -43,10 +47,16 @@ impl QBittorrent {
             base_url: base_url.trim_end_matches('/').to_string(),
             username: username.to_string(),
             password: password.to_string(),
+            logged_in: AtomicBool::new(false),
         })
     }
 
     fn login(&self) -> Result<()> {
+        // SID 已在 cookie store 里就别再登。会话失效（qB 重启回 403）由响应侧
+        // 清标记兜底，下一次调用自动重登
+        if self.logged_in.load(Ordering::Relaxed) {
+            return Ok(());
+        }
         let resp = self
             .client
             .post(format!("{}/api/v2/auth/login", self.base_url))
@@ -61,12 +71,20 @@ impl QBittorrent {
         // qBittorrent 5.2+: 客户端已有活动会话时返回 204（无内容），同样视为登录成功
         if (status == 200 && body.trim() == "Ok.") || status == 204 {
             // SID 已由 cookie store 自动保存
+            self.logged_in.store(true, Ordering::Relaxed);
             return Ok(());
         }
         let head: String = body.chars().take(80).collect();
         Err(anyhow!(
             "qBittorrent 登录失败 (HTTP {status} {head})，检查 url/账号/密码"
         ))
+    }
+
+    /// 响应 403 多半是 SID 失效（qB 重启）：清登录标记，下一次调用自动重登
+    fn session_died(&self, status: u16) {
+        if status == 403 {
+            self.logged_in.store(false, Ordering::Relaxed);
+        }
     }
 
     pub fn test_connection(&self) -> Result<String> {
@@ -89,6 +107,7 @@ impl QBittorrent {
         let status = resp.status().as_u16();
         let text = resp.text().unwrap_or_default();
         if status != 200 {
+            self.session_died(status);
             let head: String = text.chars().take(200).collect();
             return Err(anyhow!("HTTP {status} GET {path}: {head}"));
         }
@@ -179,7 +198,9 @@ impl QBittorrent {
             else {
                 continue;
             };
-            if resp.status().as_u16() != 200 {
+            let st = resp.status().as_u16();
+            if st != 200 {
+                self.session_died(st);
                 continue;
             }
             let Ok(text) = resp.text() else { continue };
@@ -223,7 +244,9 @@ impl QBittorrent {
             .headers(self.referer_headers())
             .send()
             .ok()?;
-        if resp.status().as_u16() != 200 {
+        let st = resp.status().as_u16();
+        if st != 200 {
+            self.session_died(st);
             return None;
         }
         let text = resp.text().ok()?;
@@ -323,6 +346,7 @@ impl QBittorrent {
             return Ok(self.verify(&hash, up_limit, true, data));
         }
         if status != 200 {
+            self.session_died(status);
             let head: String = body.chars().take(200).collect();
             return Err(anyhow!("HTTP {status} POST torrents/add: {head}"));
         }
@@ -457,7 +481,9 @@ impl QBittorrent {
             else {
                 continue;
             };
-            if resp.status().as_u16() != 200 {
+            let st = resp.status().as_u16();
+            if st != 200 {
+                self.session_died(st);
                 continue;
             }
             let Ok(text) = resp.text() else { continue };
@@ -496,6 +522,7 @@ impl QBittorrent {
             if s == 200 || s == 204 {
                 return None;
             }
+            self.session_died(s);
             if !(s == 404 || s == 400 || s == 405) {
                 return Some(format!("HTTP {s}"));
             }

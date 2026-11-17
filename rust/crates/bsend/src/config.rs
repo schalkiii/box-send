@@ -221,8 +221,9 @@ impl Config {
             site_ids: v_str_list(&assist, "siteIDs"),
             per_site_interval_sec: v_f64(&assist, "perSiteIntervalSec", d.per_site_interval_sec),
             jitter_sec: v_f64(&assist, "jitterSec", d.jitter_sec),
-            search_budget: v_i64(&assist, "roundBudget", d.search_budget as i64) as i32,
-            source_budget: v_i64(&assist, "roundBudget", d.source_budget as i64) as i32,
+            // 负值钳成 0：负预算会让 acquire 永远失败、整轮静默空转
+            search_budget: (v_i64(&assist, "roundBudget", d.search_budget as i64) as i32).max(0),
+            source_budget: (v_i64(&assist, "roundBudget", d.source_budget as i64) as i32).max(0),
             upload_budget: d.upload_budget,
             miss_ttl_days: v_i64(&assist, "missTTLDays", d.miss_ttl_days),
             source_miss_ttl_days: d.source_miss_ttl_days,
@@ -511,5 +512,24 @@ mod tests {
         let cfg = Config::load(&p).unwrap();
         let ids: Vec<&str> = cfg.sites.iter().map(|s| s.id.as_str()).collect();
         assert_eq!(ids, vec!["nx"]);
+    }
+
+    #[test]
+    fn negative_round_budget_is_clamped() {
+        // 配置笔误（负预算）不能变成「整轮静默空转」
+        let p = write_temp_isolated(
+            "negbudget",
+            "boxsend.json",
+            r#"{
+          "sourceSites": [
+            {"id": "nx", "name": "正常", "url": "https://nx.example/", "framework": "NexusPHP", "enabled": true}
+          ],
+          "downloader": {"url": "http://x"},
+          "assist": {"roundBudget": -5}
+        }"#,
+        );
+        let cfg = Config::load(&p).unwrap();
+        assert_eq!(cfg.coverage.search_budget, 0);
+        assert_eq!(cfg.coverage.source_budget, 0);
     }
 }

@@ -60,8 +60,8 @@ bsend status
    绝不碰下载器。
 4. **转种臂**（站内没有）：定位源种（已在做种的源站优先）→ v1 只出草稿
    （`reseedDraft`：源站 + 详情页链接 + 目标站清单），上传是后续版本的事。
-   哪都没有 → `waitSource` 并记 30 天负缓存；检索报错（cookie 失效等）标 `failed`，
-   不记负缓存。
+   哪都没有 → `waitSource` 并记 30 天负缓存；检索报错（cookie 失效——含 401/403 与
+   被跳到登录页——站点 5xx）标 `failed`，不记负缓存。
 
 ## 预算与节流（方案第九节）
 
@@ -70,7 +70,8 @@ bsend status
   不记任何结论——「没查成」不能当成「查过没有」，下轮预算回来从头查。
 - 每站串行（默认 8s 间隔 + 3s 抖动，`assist.perSiteIntervalSec` / `assist.jitterSec`），
   全局 worker 上限 4，替代 Swift 版的全流水线单线程。
-- 站点报限流 → 该站间隔翻倍退避（封顶 240s），一次成功请求恢复。
+- 站点报限流（HTTP 429/503 自动识别）→ 该站间隔翻倍退避（封顶 240s），
+  一次成功请求恢复。
 - 重试节流：`miss` / `waitSource` / `reviewPending` / `failed` 都歇
   `assist.missTTLDays` 天（默认 7）再重查；源种「定位不到」的负缓存 30 天
   （Rust 侧固定）。校验收尾 pass 不占任何预算。
@@ -92,18 +93,19 @@ bsend status
 
 - 移植：NexusPHP 检索启发式（查询词阶梯 / 归一化互含 / 词元宽容判定）、A/B/C 判定、
   布局门、推送尾巴（暂停添加 → 校验 → 启动/回滚）、qB WebAPI 兼容补丁（参数名两版、
-  回包两种包装、409 已存在补挂 tracker）、148 站识别表。
+  回包两种包装、409 已存在补挂 tracker、登录一次复用）、登录墙检测（401/403/被跳到
+  登录页 → 按 cookie 失效报错，绝不落「站内没有」负缓存）、148 站识别表。
 - 未移植（v1 范围外）：GUI、上传表单填充（转种只出草稿）、非 NexusPHP 框架的站点适配、
   Transmission。
 
 ## 测试
 
 ```bash
-cargo test          # 49 个单测（判定/分词/节流/索引/配置与 cookie 兼容）+ 9 个端到端
+cargo test          # 54 个单测（判定/分词/节流/索引/配置与 cookie 兼容/限流判定）+ 11 个端到端
                     #（mock qBittorrent + mock NexusPHP 走真实 TCP HTTP 跑完整一轮：
                     #  辅种全流程、已做种预筛、源站优先、负缓存、dry-run、C 级人工确认、
                     #  409 已存在补挂 tracker、校验中跨轮收尾（启动/回滚两分支）、
-                    #  预算耗尽不记负缓存）
+                    #  预算耗尽不记负缓存、登录墙不落负缓存、429 限流映射失败）
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 ```

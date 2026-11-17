@@ -92,7 +92,21 @@ impl NexusPhp {
         if let Some(c) = &self.cookie {
             req = req.header("Cookie", c);
         }
-        req.send().with_context(|| format!("请求没通：{url}"))
+        let resp = req.send().with_context(|| format!("请求没通：{url}"))?;
+        // Swift fetchHTML 语义：401/403 或被重定向到登录页 = cookie 失效——
+        // 这类响应绝不能当「站内没有」落成负缓存，得作为错误冒出去
+        let status = resp.status().as_u16();
+        if status == 401 || status == 403 {
+            return Err(anyhow!("站点回 HTTP {status}（多半是 cookie 失效）：{url}"));
+        }
+        let final_url = resp.url().as_str().to_lowercase();
+        if ["login", "enter.php", "signin", "auth/login"]
+            .iter()
+            .any(|hint| final_url.contains(hint))
+        {
+            return Err(anyhow!("被跳到登录页（cookie 可能已失效）：{url}"));
+        }
+        Ok(resp)
     }
 
     /// 站内检索找回已存在种子。`relaxed = true` 放宽到「按词元包含」判定：结果页常把长标题
@@ -159,9 +173,10 @@ impl NexusPhp {
         let resp = self.get(detail_url, self.base.as_str())?;
         let status = resp.status().as_u16();
         let html = resp.text().unwrap_or_default();
-        if status == 403 || status == 404 {
+        if status == 404 {
+            // 401/403 已在 get 里按 cookie 失效拦下；这里只剩详情页本身不存在
             return Err(anyhow!(
-                "站点返回 HTTP {status}（多半是 cookie 失效）：{detail_url}"
+                "详情页不存在（HTTP 404，种子可能已被删除）：{detail_url}"
             ));
         }
         if status != 200 {
@@ -178,9 +193,10 @@ impl NexusPhp {
         let resp = self.get(&page.download_url, referer)?;
         let status = resp.status().as_u16();
         let data = resp.bytes().unwrap_or_default().to_vec();
-        if status == 403 || status == 404 {
+        if status == 404 {
+            // 401/403 已在 get 里按 cookie 失效拦下
             return Err(anyhow!(
-                "下载种子被拒（HTTP {status}，多半是 cookie 失效）：{}",
+                "下载种子被拒（HTTP 404，链接可能已失效）：{}",
                 page.download_url
             ));
         }
@@ -201,6 +217,14 @@ impl NexusPhp {
         }
         Ok(data)
     }
+}
+
+/// 检索报错是不是站点在限流（429/503）：调用方据此给该站间隔退避，别按原节奏接着敲
+/// （PT 站对无视限流的行为会警告甚至封号）。Swift 版 `SiteThrottle.penalize` 预留了
+/// 同一机制但从未接线，Rust 版这里把它接上。
+pub fn error_is_rate_limited(e: &anyhow::Error) -> bool {
+    let msg = format!("{e:#}");
+    msg.contains("HTTP 429") || msg.contains("HTTP 503")
 }
 
 // ---------- 查询词阶梯 ----------
@@ -986,6 +1010,22 @@ mod tests {
         let sub = relaxed.last().unwrap();
         assert_eq!(sub.0, "黑礁 第一季");
         assert_eq!(sub.1, "黑礁 第一季");
+    }
+
+    #[test]
+    fn rate_limited_error_detection() {
+        let e = |m: &str| anyhow::anyhow!("{m}");
+        assert!(error_is_rate_limited(&e(
+            "HTTP 429 检索 https://x.example/torrents.php：Too Many Requests"
+        )));
+        assert!(error_is_rate_limited(&e(
+            "HTTP 503 检索 https://x.example/：维护中"
+        )));
+        // 非限流错误不算
+        assert!(!error_is_rate_limited(&e(
+            "HTTP 404 检索 https://x.example/：不存在"
+        )));
+        assert!(!error_is_rate_limited(&e("请求没通：connection refused")));
     }
 
     #[test]

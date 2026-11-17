@@ -110,6 +110,9 @@ pub fn resolve_source(
             Ok(h) => h,
             Err(e) => {
                 clean = false;
+                if crate::sites::nexusphp::error_is_rate_limited(&e) {
+                    throttle.note_rate_limited(&site_id);
+                }
                 attempts.push(SiteAttempt {
                     site_id,
                     note: format!("站内检索失败：{e:#}"),
@@ -130,6 +133,9 @@ pub fn resolve_source(
                 Ok(h) => h,
                 Err(e) => {
                     clean = false;
+                    if crate::sites::nexusphp::error_is_rate_limited(&e) {
+                        throttle.note_rate_limited(&site_id);
+                    }
                     attempts.push(SiteAttempt {
                         site_id,
                         note: format!("宽松检索失败：{e:#}"),
@@ -439,6 +445,37 @@ mod tests {
             }
             other => panic!("expected Miss, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn rate_limited_error_backs_off_the_site() {
+        // 站点回 429：不算 clean miss，且该站在 throttle 上要能看到间隔翻倍
+        let local = TorrentFingerprint::from_local_files(&[("Pack/a.mkv".to_string(), 100)]);
+        let a = MockSite {
+            id: "a.example",
+            search_result: RefCell::new(Err(
+                "HTTP 429 检索 https://a.example/torrents.php：Too Many Requests".to_string(),
+            )),
+            torrent_data: RefCell::new(Vec::new()),
+        };
+        let sites = [SourceSite {
+            client: &a,
+            announce_host: "a.example".into(),
+        }];
+        let t = SiteThrottle::new(Duration::from_secs(8), Duration::ZERO, 100, 10, 10);
+        match resolve_source("Show", &[], &["h".to_string()], &local, &sites, true, &t) {
+            ResolveOutcome::Miss { clean, .. } => assert!(!clean),
+            other => panic!("expected Miss, got {other:?}"),
+        }
+        // 退避已生效：拨钟到 1s 前，下次领号要等 8s×2 − 1s ≈ 15s（没接线的话只有 7s）
+        t.force_last("a.example", Duration::from_secs(1));
+        let wait = t.acquire_dur("a.example", BudgetKind::Source).unwrap();
+        let expect = Duration::from_secs(15);
+        let tol = Duration::from_millis(200);
+        assert!(
+            wait >= expect.saturating_sub(tol) && wait <= expect + tol,
+            "got {wait:?}, expected ~{expect:?}"
+        );
     }
 
     #[test]

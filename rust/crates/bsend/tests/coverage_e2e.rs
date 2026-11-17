@@ -103,11 +103,18 @@ fn serve_conn(mut stream: TcpStream, handler: Handler, log: Arc<Mutex<Vec<String
     let reason = match status {
         200 => "OK",
         204 => "No Content",
+        302 => "Found",
         409 => "Conflict",
         _ => "Error",
     };
+    // 3xx：payload 当 Location 用（登录墙场景的重定向）
+    let location = if (300..400).contains(&status) {
+        format!("Location: {}\r\n", String::from_utf8_lossy(&payload))
+    } else {
+        String::new()
+    };
     let resp = format!(
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: {ctype}\r\n{location}Content-Length: {}\r\nConnection: close\r\n\r\n",
         payload.len()
     );
     let _ = stream.write_all(resp.as_bytes());
@@ -442,6 +449,11 @@ fn e2e_assist_and_reseed_draft() {
     assert_eq!(report.by_status[&CoverageStatus::ReseedDraft], 1);
 
     // ---- 对下载器的副作用 ----
+    assert_eq!(
+        qb.requests("POST /api/v2/auth/login").len(),
+        1,
+        "登录一次就够（SID 复用，不每个请求都登）"
+    );
     assert_eq!(
         qb.requests("POST /api/v2/torrents/add").len(),
         1,
@@ -954,4 +966,106 @@ fn e2e_budget_exhaustion_not_cached() {
             .count(),
         2
     );
+}
+
+/// 场景八：cookie 失效——站点把检索 302 到登录页。必须记 failed（给人看的原因），
+/// 绝不能解析不出结果就当「站内没有」记 miss 负缓存；源种侧同样不能被投毒。
+#[test]
+fn e2e_login_wall_is_failed_not_miss() {
+    let dir = temp_dir("loginwall");
+    let t = Arc::new(torrent_bytes("Pack", FILES));
+    let hash = bencode::info_hash_v1(&t).unwrap();
+
+    let qb = qb_server(hash, Vec::new());
+    // pter：一切站点请求都 302 到 /login.php（cookie 失效的典型表现）
+    let pter = MockServer::start(Arc::new(move |_method, path, _body| {
+        if path.starts_with("/login.php") {
+            return (
+                200,
+                "text/html",
+                b"<html><body>please login</body></html>".to_vec(),
+            );
+        }
+        (302, "text/plain", b"/login.php".to_vec())
+    }));
+    let hdsky = nexus_site_server("miss", t.clone());
+    let cfg = test_config(qb.port, pter.port, hdsky.port, &dir);
+
+    let qb_client = Arc::new(QBittorrent::new(&cfg.downloader.url, "admin", "pass").unwrap());
+    let ads = adapters(&cfg);
+    let mut index = ContentIndex::load(&cfg.coverage_state_path());
+    let report = run_round(
+        &cfg,
+        qb_client,
+        &ads,
+        &mut index,
+        |_| {},
+        RoundOptions {
+            persist: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    let entry = index.contents.values().next().unwrap();
+    assert_eq!(
+        entry.coverage["pter"].status,
+        CoverageStatus::Failed,
+        "登录墙是错误，不是「站内没有」"
+    );
+    let note = entry.coverage["pter"].note.as_deref().unwrap();
+    assert!(note.contains("登录"), "note = {note}");
+    // 源种侧：pter 报错 → 定位没问成（不记负缓存）；hdsky 站内没有但源没找成 → 同样 failed
+    assert_eq!(entry.coverage["hdsky"].status, CoverageStatus::Failed);
+    assert!(
+        entry.source.is_none(),
+        "源种负缓存不能落（pter 的报错不是 clean miss）"
+    );
+    assert_eq!(report.by_status[&CoverageStatus::Failed], 2);
+}
+
+/// 场景九：站点限流（429）——记 failed 给人看、该站拿退避。
+/// 退避的数学在 throttle/resolver 单测里钉，这里钉编排层把 429 正确映射成错误。
+#[test]
+fn e2e_rate_limited_maps_to_failed() {
+    let dir = temp_dir("ratelimit");
+    let t = Arc::new(torrent_bytes("Pack", FILES));
+    let hash = bencode::info_hash_v1(&t).unwrap();
+
+    let qb = qb_server(hash, Vec::new());
+    let pter = MockServer::start(Arc::new(move |_method, path, _body| {
+        if path.starts_with("/torrents.php") {
+            return (429, "text/plain", b"Too Many Requests".to_vec());
+        }
+        (404, "text/plain", Vec::new())
+    }));
+    let hdsky = nexus_site_server("miss", t.clone());
+    let cfg = test_config(qb.port, pter.port, hdsky.port, &dir);
+
+    let qb_client = Arc::new(QBittorrent::new(&cfg.downloader.url, "admin", "pass").unwrap());
+    let ads = adapters(&cfg);
+    let mut index = ContentIndex::load(&cfg.coverage_state_path());
+    let _ = run_round(
+        &cfg,
+        qb_client,
+        &ads,
+        &mut index,
+        |_| {},
+        RoundOptions {
+            persist: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    let entry = index.contents.values().next().unwrap();
+    assert_eq!(
+        entry.coverage["pter"].status,
+        CoverageStatus::Failed,
+        "限流是错误，不是「站内没有」"
+    );
+    let note = entry.coverage["pter"].note.as_deref().unwrap();
+    assert!(note.contains("429"), "note = {note}");
+    // 源种侧同样不落负缓存
+    assert!(entry.source.is_none());
 }

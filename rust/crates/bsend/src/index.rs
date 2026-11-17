@@ -187,6 +187,12 @@ struct IndexFile {
     contents: BTreeMap<String, ContentEntry>,
 }
 
+/// 落盘用的借用视图：save 不为序列化把整个索引深拷贝一遍
+#[derive(Serialize)]
+struct IndexFileRef<'a> {
+    contents: &'a BTreeMap<String, ContentEntry>,
+}
+
 pub struct ContentIndex {
     path: PathBuf,
     pub contents: BTreeMap<String, ContentEntry>,
@@ -194,11 +200,22 @@ pub struct ContentIndex {
 
 impl ContentIndex {
     pub fn load(path: &Path) -> Self {
-        let contents = std::fs::read_to_string(path)
-            .ok()
-            .and_then(|t| serde_json::from_str::<IndexFile>(&t).ok())
-            .map(|f| f.contents)
-            .unwrap_or_default();
+        let contents = match std::fs::read_to_string(path) {
+            // 没有文件 = 初次运行，正常给空索引
+            Err(_) => BTreeMap::new(),
+            Ok(text) => match serde_json::from_str::<IndexFile>(&text) {
+                Ok(f) => f.contents,
+                // 损坏（半截写入一类）：把原文件挪开留证，别让下一次 save 无声覆盖掉——
+                // 「已辅/已转」的记录还能从备份里捞回来
+                Err(_) => {
+                    let backup = path.with_extension("json.corrupt");
+                    if std::fs::rename(path, &backup).is_err() {
+                        let _ = std::fs::copy(path, &backup);
+                    }
+                    BTreeMap::new()
+                }
+            },
+        };
         Self {
             path: path.to_path_buf(),
             contents,
@@ -211,8 +228,8 @@ impl ContentIndex {
             std::fs::create_dir_all(dir).ok();
         }
         let tmp = self.path.with_extension("json.tmp");
-        let body = serde_json::to_string_pretty(&IndexFile {
-            contents: self.contents.clone(),
+        let body = serde_json::to_string_pretty(&IndexFileRef {
+            contents: &self.contents,
         })
         .context("索引序列化失败")?;
         std::fs::write(&tmp, body.as_bytes())
@@ -265,6 +282,8 @@ impl ContentIndex {
             let hashes = t.all_hashes();
             let mut target_key = hashes.iter().find_map(|h| h2k.get(h).cloned());
             let mut created = false;
+            // 本轮内 files_of 已对该种子失败过就别再问（qB API 抖动时请求会翻倍）
+            let mut files_failed = false;
 
             if target_key.is_none() {
                 // hash 查不到不急着建新条目：先算 manifest，可能是别的站的重新打包
@@ -283,6 +302,7 @@ impl ContentIndex {
                     }
                 } else {
                     // 拿不到文件清单（下载器 API 出问题）：退回 hash-only 条目，摘要下次扫描补
+                    files_failed = true;
                     let key = format!("h:{}", t.hash);
                     let placeholder = TorrentFingerprint::new(String::new(), Vec::new());
                     self.contents
@@ -302,7 +322,7 @@ impl ContentIndex {
                     entry.name = t.name.clone();
                 }
                 // 老条目还没有摘要（hash-only 建的）而这次拿到了文件清单 → 补上
-                if entry.manifest_digest.is_empty() {
+                if entry.manifest_digest.is_empty() && !files_failed {
                     if let Some(files) = files_of(t) {
                         let fp = TorrentFingerprint::from_local_files(&files);
                         entry.manifest_digest = manifest_digest(&comparable_key(&fp));
@@ -618,9 +638,39 @@ mod tests {
             &text[..text.len().min(200)]
         );
         assert!(text.contains("\"manifestDigest\""));
-        // 坏文件容错（不炸，给空索引）
+        // 坏文件容错（不炸，给空索引；原文件挪成 .corrupt 留证，不被新 save 覆盖）
         std::fs::write(&path, b"not json").unwrap();
         assert!(ContentIndex::load(&path).contents.is_empty());
+        let backup = dir.join("coverage.json.corrupt");
+        assert_eq!(
+            std::fs::read_to_string(&backup).unwrap(),
+            "not json",
+            "坏文件要留备份"
+        );
+        // 原文件已挪走：再 load 还是空（不会把备份当索引读）
+        assert!(ContentIndex::load(&path).contents.is_empty());
         let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&backup);
+    }
+
+    #[test]
+    fn files_of_failure_is_called_once_per_torrent() {
+        let mut idx = ContentIndex {
+            path: PathBuf::from("/dev/null"),
+            contents: BTreeMap::new(),
+        };
+        // 下载器 API 出问题（拿不到文件清单）：同一次扫描里对同一条种子只许问一次
+        let mut calls = 0;
+        idx.merge_scan(
+            &[torrent("aaaa", None, 100, &[])],
+            |_| {
+                calls += 1;
+                None
+            },
+            1000,
+            30,
+        );
+        assert_eq!(calls, 1, "hash-only 失败路径不该二次调 files_of");
+        assert!(idx.contents.contains_key("h:aaaa"));
     }
 }

@@ -472,6 +472,10 @@ fn worker_loop(
         let next = { pool.lock().unwrap().pop() };
         let Some((site_id, items)) = next else { break };
         let Some(adapter) = adapters.iter().find(|a| a.site_id == site_id) else {
+            // 理论不可达（队列按 adapters 建），真发生了也别静默丢一整站的工作
+            let _ = tx.send(Event::Log(format!(
+                "[{site_id}] 队列没有对应适配器，本轮跳过该站（理论不可达）"
+            )));
             continue;
         };
         for item in items {
@@ -548,8 +552,14 @@ fn process_item(
     }
     let mut found = match adapter.search(&item.name, "", false, "") {
         Ok(h) => h,
-        // 「检索报错」与「站内没有」是两回事：cookie 失效、站点 500 不能记成负缓存
-        Err(e) => return done(CoverageStatus::Failed, format!("站内检索失败：{e:#}")),
+        // 「检索报错」与「站内没有」是两回事：cookie 失效、站点 500 不能记成负缓存；
+        // 限流（429/503）还要给该站退避，别按原节奏接着敲
+        Err(e) => {
+            if crate::sites::nexusphp::error_is_rate_limited(&e) {
+                throttle.note_rate_limited(site_id);
+            }
+            return done(CoverageStatus::Failed, format!("站内检索失败：{e:#}"));
+        }
     };
     if found.is_none() && cov.relaxed_retry_search {
         if !throttle.acquire(site_id, BudgetKind::Search) {
@@ -557,7 +567,12 @@ fn process_item(
         }
         found = match adapter.search(&item.name, "", true, "") {
             Ok(h) => h,
-            Err(e) => return done(CoverageStatus::Failed, format!("宽松检索失败：{e:#}")),
+            Err(e) => {
+                if crate::sites::nexusphp::error_is_rate_limited(&e) {
+                    throttle.note_rate_limited(site_id);
+                }
+                return done(CoverageStatus::Failed, format!("宽松检索失败：{e:#}"));
+            }
         };
     }
     let Some(hit) = found else {

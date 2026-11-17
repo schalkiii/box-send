@@ -38,9 +38,16 @@ pub fn read_int(data: &[u8], i0: usize) -> Option<(i64, usize)> {
     Some((v, i + 1))
 }
 
-/// 递归跳过一个完整值，返回结束位置（不含）。
+/// 真实种子的嵌套深度远小于这个数；超深嵌套只可能是恶意/损坏数据，用它挡住栈溢出
+const MAX_DEPTH: usize = 64;
+
+/// 递归跳过一个完整值，返回结束位置（不含）。嵌套超过 64 层返回 None。
 pub fn skip_value(data: &[u8], i0: usize) -> Option<usize> {
-    if i0 >= data.len() {
+    skip_value_depth(data, i0, 0)
+}
+
+fn skip_value_depth(data: &[u8], i0: usize, depth: usize) -> Option<usize> {
+    if i0 >= data.len() || depth > MAX_DEPTH {
         return None;
     }
     match data[i0] {
@@ -51,7 +58,7 @@ pub fn skip_value(data: &[u8], i0: usize) -> Option<usize> {
                     return Some(i + 1);
                 }
                 let (_, ni) = read_string(data, i)?;
-                i = skip_value(data, ni)?;
+                i = skip_value_depth(data, ni, depth + 1)?;
             }
             None
         }
@@ -61,7 +68,7 @@ pub fn skip_value(data: &[u8], i0: usize) -> Option<usize> {
                 if data[i] == b'e' {
                     return Some(i + 1);
                 }
-                i = skip_value(data, i)?;
+                i = skip_value_depth(data, i, depth + 1)?;
             }
             None
         }
@@ -576,6 +583,27 @@ pub(crate) mod tests {
         assert!(info_hash_v1(b"d3:fooi1ee").is_none()); // 无 info
         let truncated = &torrent_multi()[..40];
         assert!(file_list(truncated).is_none());
+    }
+
+    #[test]
+    fn deep_nesting_is_rejected() {
+        // 恶意/损坏数据：超深嵌套列表直接拒绝，不会栈溢出也不会误判
+        let mut data = vec![b'l'; 300];
+        data.extend_from_slice(b"1:a");
+        data.extend_from_slice(&vec![b'e'; 300]);
+        assert!(skip_value(&data, 0).is_none());
+        // 正常深度照常解析
+        let ok = enc(&BVal::d(vec![(
+            "info",
+            BVal::d(vec![
+                (
+                    "files",
+                    BVal::L(vec![BVal::d(vec![("length", BVal::I(1))])]),
+                ),
+                ("name", BVal::s("x")),
+            ]),
+        )]));
+        assert!(skip_value(&ok, 0).is_some());
     }
 
     #[test]
