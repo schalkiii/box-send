@@ -15,6 +15,7 @@ pub mod matcher;
 pub mod models;
 pub mod qbittorrent;
 pub mod report;
+pub mod reseed;
 pub mod resolver;
 pub mod sites;
 pub mod throttle;

@@ -59,6 +59,15 @@ pub struct TorrentPage {
     pub download_url: String,
 }
 
+/// 上传表单 multipart 提交的响应（转种流水线用）
+#[derive(Debug, Clone)]
+pub struct UploadResponse {
+    pub status: u16,
+    pub body: String,
+    /// 跟随后的最终 URL
+    pub final_url: String,
+}
+
 /// 检索结果。必须区分「站内没有」与「预算不够没查完」——后者绝不能落负缓存。
 #[derive(Debug, Clone)]
 pub enum SearchOutcome {
@@ -142,6 +151,61 @@ impl NexusPhp {
             ));
         }
         Ok(resp)
+    }
+
+    /// 抓任意页面的原始 HTML（转种流水线用：上传表单页 / 详情页全文）
+    pub fn fetch_html(&self, url: &str, referer: &str) -> Result<String> {
+        let resp = self.get(url, referer)?;
+        let status = resp.status().as_u16();
+        let html = resp.text().unwrap_or_default();
+        if status != 200 {
+            let head: String = html.chars().take(120).collect();
+            return Err(anyhow!("HTTP {status} 抓页面 {url}：{head}"));
+        }
+        Ok(html)
+    }
+
+    /// 上传表单 multipart 提交。`file_field` 是种子文件框的 name（NexusPHP 默认 file）。
+    /// 返回状态码、响应体、最终 URL（跟跳后）。
+    pub fn post_upload(
+        &self,
+        action: &str,
+        fields: &[(String, String)],
+        file_field: &str,
+        filename: &str,
+        torrent: &[u8],
+        referer: &str,
+    ) -> Result<UploadResponse> {
+        let mut form = reqwest::blocking::multipart::Form::new();
+        for (n, v) in fields {
+            form = form.text(n.clone(), v.clone());
+        }
+        let part = reqwest::blocking::multipart::Part::bytes(torrent.to_vec())
+            .file_name(filename.to_string())
+            .mime_str("application/x-bittorrent")
+            .context("mime 类型构造失败")?;
+        form = form.part(file_field.to_string(), part);
+
+        let mut req = self
+            .client
+            .post(action)
+            .header(REFERER, referer)
+            .header("User-Agent", &self.user_agent)
+            .multipart(form);
+        if let Some(c) = &self.cookie {
+            req = req.header("Cookie", c);
+        }
+        let resp = req
+            .send()
+            .with_context(|| format!("上传请求没通：{action}"))?;
+        let status = resp.status().as_u16();
+        let final_url = resp.url().as_str().to_string();
+        let body = resp.text().unwrap_or_default();
+        Ok(UploadResponse {
+            status,
+            body,
+            final_url,
+        })
     }
 
     /// 站内检索找回已存在种子。`relaxed = true` 放宽到「按词元包含」判定：结果页常把长标题

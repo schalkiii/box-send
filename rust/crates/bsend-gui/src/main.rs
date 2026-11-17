@@ -1,11 +1,10 @@
-//! bsend 的 GPUI 图形界面（R0/R1 能力的可视化外壳）。
+//! bsend 的 GPUI 图形界面（全功能 Rust 原生，不再交接 GUI 版）。
 //!
 //! 三块内容：
-//! - 覆盖概览：内容/成员种子/各站格子与覆盖率；
-//! - 转种草稿：源站 + 详情页链接 + 目标站，「复制源站链接并打开 GUI 版」完成人工确认交接；
-//! - 后台任务：扫描 / 基线 / 跑一轮，事件走 mpsc，GPUI 定时器轮询后更新视图。
-//!
-//! 注意：Rust 版转种只到草稿（v1 不上传）；真发种必须人工到 GUI 版「批量转种」页确认。
+//! - 覆盖概览：内容/成员种子/各站格子与覆盖率，带状态图例；
+//! - 转种草稿：源站 + 详情页链接 + 目标站，「确认转种」原生走
+//!   预检 → 上传 → 推种 → 校验一条龙（LuckAudit 三查在预检里拦）；
+//! - 后台任务：扫描 / 基线 / 跑一轮 / 转种，事件走 mpsc，GPUI 定时器轮询后更新视图。
 
 use std::path::PathBuf;
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -15,16 +14,15 @@ use std::time::Duration;
 use anyhow::{Context as _, Result};
 use bsend::config::Config;
 use bsend::coverage::{now_unix, prefetch_files, run_round, Event, RoundOptions};
-use bsend::index::ContentIndex;
+use bsend::index::{ContentIndex, CoverageStatus};
 use bsend::qbittorrent::QBittorrent;
 use bsend::report::{CoverageReport, DraftRow};
+use bsend::reseed::{request_from_draft, run_reseed};
 use bsend::sites::nexusphp::NexusPhp;
 use gpui::{
     div, prelude::*, px, rgb, size, App, Application, AsyncApp, Bounds, ClipboardItem, FontWeight,
     SharedString, Timer, WeakEntity, Window, WindowBounds, WindowOptions,
 };
-
-const GUI_EXE: &str = r"C:\Program Files\BoxSend\BoxSend.exe";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tab {
@@ -42,12 +40,20 @@ enum Job {
 }
 
 #[derive(Clone)]
+struct StatusChip {
+    label: &'static str,
+    count: usize,
+    color: u32,
+}
+
+#[derive(Clone)]
 struct SiteRow {
     site: String,
     cells: usize,
     covered: usize,
     pending: usize,
     ratio: f64,
+    chips: Vec<StatusChip>,
 }
 
 #[derive(Clone)]
@@ -160,6 +166,68 @@ impl BsendGui {
         });
     }
 
+    /// 原生转种：预检 → 上传 → 推种 → 校验 → 格子落账（按钮点击即人工确认）
+    fn start_reseed(&mut self, draft: &DraftRow, cx: &mut Context<Self>) {
+        if self.busy {
+            self.push_log("已有任务在跑，请等它结束".into());
+            cx.notify();
+            return;
+        }
+        self.busy = true;
+        self.push_log(format!(
+            "确认转种：{}（{} → {}）。预检 → 上传 → 推种 → 校验，进度见日志",
+            draft.name, draft.source_site, draft.target_site
+        ));
+        cx.notify();
+
+        let cfg = self.config.clone();
+        let tx = self.tx.clone();
+        let req = request_from_draft(
+            &draft.content_key,
+            &draft.name,
+            &draft.source_site,
+            &draft.source_url,
+            &draft.target_site,
+        );
+        std::thread::spawn(move || {
+            let result: Result<()> = (|| {
+                let qb = QBittorrent::new(
+                    &cfg.downloader.url,
+                    &cfg.downloader.username,
+                    &cfg.downloader.password,
+                )
+                .context("连不上下载器")?;
+                let _ = tx.send(GuiEvent::Log(qb.test_connection().context("连不上下载器")?));
+                let mut index = ContentIndex::load(&cfg.coverage_state_path());
+                let log_tx = tx.clone();
+                let mut log = move |line: &str| {
+                    let _ = log_tx.send(GuiEvent::Log(line.to_string()));
+                };
+                match run_reseed(&cfg, &qb, &req, &mut index, &mut log) {
+                    Ok(url) => {
+                        if url.is_empty() {
+                            log("转种结束（站点已有该种子，格子记为已覆盖）");
+                        } else {
+                            log(&format!("转种完成：{url}"));
+                        }
+                    }
+                    Err(e) => {
+                        log(&format!("转种失败：{e:#}"));
+                        return Err(e);
+                    }
+                }
+                Ok(())
+            })();
+            if let Err(e) = result {
+                let _ = tx.send(GuiEvent::Log(format!("转种流程中断：{e:#}")));
+            }
+            if let Ok(s) = snapshot(&cfg) {
+                let _ = tx.send(GuiEvent::Snapshot(s));
+            }
+            let _ = tx.send(GuiEvent::Busy(false));
+        });
+    }
+
     /// 轮询后台事件并刷新视图
     fn start_polling(&mut self, cx: &mut Context<Self>) {
         let rx = self.rx.clone();
@@ -191,22 +259,6 @@ impl BsendGui {
         )
         .detach();
     }
-
-    /// 人工确认交接：复制源站链接 + 拉起 GUI 版「批量转种」页
-    fn handoff(&mut self, draft: &DraftRow, cx: &mut Context<Self>) {
-        cx.write_to_clipboard(ClipboardItem::new_string(draft.source_url.clone()));
-        let mut log = format!(
-            "已复制源站链接（{} → {}）：{}；请在 GUI 版「批量转种」页粘贴、勾选目标站并确认",
-            draft.source_site, draft.target_site, draft.source_url
-        );
-        match std::process::Command::new(GUI_EXE).spawn() {
-            Ok(_) => log.push_str("（已启动 GUI 版）"),
-            Err(e) => log.push_str(&format!("（GUI 版启动失败：{e}；可手动打开 {GUI_EXE}）")),
-        }
-        self.tab = Tab::Help;
-        self.push_log(log);
-        cx.notify();
-    }
 }
 
 fn button(
@@ -226,6 +278,29 @@ fn button(
         .cursor_pointer()
         .text_sm()
         .text_color(rgb(0xe6edf3))
+        .on_click(on_click)
+        .child(label.into())
+}
+
+/// 主色调按钮（确认/运行类动作）
+fn button_accent(
+    id: &str,
+    label: impl Into<SharedString>,
+    on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    div()
+        .id(SharedString::from(id.to_string()))
+        .flex_none()
+        .px_3()
+        .py_1()
+        .bg(rgb(0x238636))
+        .hover(|s| s.bg(rgb(0x2ea043)))
+        .active(|s| s.opacity(0.8))
+        .rounded_md()
+        .cursor_pointer()
+        .text_sm()
+        .font_weight(FontWeight(600.0))
+        .text_color(rgb(0xffffff))
         .on_click(on_click)
         .child(label.into())
 }
@@ -357,7 +432,122 @@ impl BsendGui {
     fn render_overview(&self, _cx: &mut Context<Self>) -> gpui::AnyElement {
         let panel = rgb(0x161b22);
         let dim = rgb(0x8b949e);
-        let mut col = div()
+        let line = rgb(0x30363d);
+
+        // 表头：列宽与数据行一致（固定宽度列，整列左/右对齐）
+        let header_row = div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .px_2()
+            .py_1()
+            .border_b_1()
+            .border_color(line)
+            .text_xs()
+            .text_color(dim)
+            .child(cell_text(px(240.), "站点", false))
+            .child(cell_text(px(70.), "格子", true))
+            .child(cell_text(px(80.), "已覆盖", true))
+            .child(cell_text(px(80.), "未判定", true))
+            .child(cell_text(px(90.), "覆盖率", true))
+            .child(div().flex_1().child("状态分布"));
+
+        let mut rows = div().flex().flex_col();
+        for row in &self.sites {
+            let bar_w = px(80. * row.ratio.clamp(0.0, 1.0) as f32);
+            let chips = row.chips.iter().map(|c| {
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .child(div().size(px(8.)).rounded_full().bg(rgb(c.color)))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(dim)
+                            .child(format!("{} {}", c.label, c.count)),
+                    )
+            });
+            rows = rows.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .px_2()
+                    .py_1()
+                    .border_b_1()
+                    .border_color(rgb(0x21262d))
+                    .child(cell_text(px(240.), row.site.clone(), false))
+                    .child(cell_text(px(70.), row.cells.to_string(), true))
+                    .child(cell_text(px(80.), row.covered.to_string(), true))
+                    .child(cell_text(px(80.), row.pending.to_string(), true))
+                    .child(
+                        div()
+                            .flex_none()
+                            .w(px(90.))
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .w(px(80.))
+                                    .h(px(6.))
+                                    .rounded_full()
+                                    .bg(rgb(0x21262d))
+                                    .child(
+                                        div().w(bar_w).h(px(6.)).rounded_full().bg(rgb(0x58a6ff)),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(dim)
+                                    .child(format!("{:.0}%", row.ratio * 100.0)),
+                            ),
+                    )
+                    .child(div().flex_1().flex().items_center().gap_3().children(chips)),
+            );
+        }
+
+        // 图例：格子是什么 + 各状态含义
+        let legend_items = [
+            (0x3fb950, "已在做种", "下载器里该种子挂着这个站的 tracker"),
+            (0x58a6ff, "已辅种", "从这个站找回种子并跨种成功"),
+            (0xbc8cff, "已转种", "发种到这个站且校验通过"),
+            (0xd29922, "校验中", "推上去了还没等到校验结论"),
+            (0xf0883e, "待人工确认", "站内命中但文件清单对不上（C 级）"),
+            (0x8b949e, "人工否决", "人工确认不是同一内容"),
+            (
+                0x484f58,
+                "站内没有",
+                "查过了，站内确实没有（负缓存期内不重搜）",
+            ),
+            (0x39c5cf, "待找源", "站内没有，源站也没定位到源种"),
+            (0xf85149, "失败", "推送/上传失败，原因在格子备注里"),
+            (0xdb61a2, "转种草稿", "源种已定位，等「转种草稿」页确认"),
+        ];
+        let legend = {
+            let mut items = div().flex().flex_wrap().gap_x_4().gap_y_1();
+            for (color, label, meaning) in legend_items {
+                items = items.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .child(div().size(px(8.)).rounded_full().bg(rgb(color)))
+                        .child(div().text_xs().child(label))
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(dim)
+                                .child(format!("—— {meaning}")),
+                        ),
+                );
+            }
+            items
+        };
+
+        div()
             .flex()
             .flex_1()
             .min_w(px(0.))
@@ -372,19 +562,17 @@ impl BsendGui {
                     .font_weight(FontWeight(600.0))
                     .child("索引概览"),
             )
-            .child(div().text_color(dim).child(self.stats.clone()));
-        for row in &self.sites {
-            let line = format!(
-                "{:<12} 格子 {:>5}   已覆盖 {:>5}   未判定 {:>5}   覆盖率 {:>6.1}%",
-                row.site,
-                row.cells,
-                row.covered,
-                row.pending,
-                row.ratio * 100.0
-            );
-            col = col.child(div().child(line));
-        }
-        col.into_any_element()
+            .child(div().text_color(dim).child(self.stats.clone()))
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(dim)
+                    .child("格子 = 一段内容 × 一个站点 的判定单元：按文件清单去重的每段内容，对每个参与站记一个结论。"),
+            )
+            .child(header_row)
+            .child(rows)
+            .child(div().pt_2().border_t_1().border_color(line).child(legend))
+            .into_any_element()
     }
 
     fn render_drafts(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
@@ -403,17 +591,16 @@ impl BsendGui {
                 div()
                     .text_base()
                     .font_weight(FontWeight(600.0))
-                    .child(format!(
-                        "转种草稿（{} 条；本版只出草稿，上传需人工确认）",
-                        self.drafts.len()
-                    )),
+                    .child(format!("转种草稿（{} 条）", self.drafts.len())),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(dim)
+                    .child("「确认转种」= 人工确认：原生跑 预检 → 上传 → 推种 → 校验。预检拦三类问题（MediaInfo 空 / 简介缺 IMDb·豆瓣·TMDB / 中字标签），不通过不会上传。"),
             );
         for (i, draft) in self.drafts.iter().enumerate() {
             let id = format!("draft-{i}");
-            let label = format!(
-                "{}｜{} → {}｜源站链接：{}",
-                draft.name, draft.source_site, draft.target_site, draft.source_url
-            );
             col = col.child(
                 div()
                     .flex()
@@ -422,7 +609,19 @@ impl BsendGui {
                     .p_2()
                     .bg(rgb(0x1c2128))
                     .rounded_md()
-                    .child(div().flex_1().min_w(px(0.)).child(label))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.))
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(div().child(draft.name.clone()))
+                            .child(div().text_xs().text_color(dim).child(format!(
+                                "{} → {}｜源站：{}",
+                                draft.source_site, draft.target_site, draft.source_url
+                            ))),
+                    )
                     .child(button(
                         &format!("copy-{id}"),
                         "复制源站链接",
@@ -435,12 +634,12 @@ impl BsendGui {
                             }
                         }),
                     ))
-                    .child(button(
-                        &format!("handoff-{id}"),
-                        "确认交接 → GUI 版",
+                    .child(button_accent(
+                        &format!("reseed-{id}"),
+                        "确认转种",
                         cx.listener({
                             let d = draft.clone();
-                            move |this, _, _, cx| this.handoff(&d, cx)
+                            move |this, _, _, cx| this.start_reseed(&d, cx)
                         }),
                     )),
             );
@@ -487,6 +686,15 @@ impl BsendGui {
     }
 }
 
+/// 固定宽度文本列（数字右对齐）
+fn cell_text(width: gpui::Pixels, text: impl Into<SharedString>, right: bool) -> impl IntoElement {
+    let mut d = div().flex_none().w(width).text_sm();
+    if right {
+        d = d.text_right();
+    }
+    d.child(text.into())
+}
+
 fn render_help() -> gpui::AnyElement {
     div()
         .flex()
@@ -496,13 +704,36 @@ fn render_help() -> gpui::AnyElement {
         .p_4()
         .bg(rgb(0x161b22))
         .rounded_lg()
-        .child(div().text_base().font_weight(FontWeight(600.0)).child("人工确认后走 GUI 版转种"))
-        .child(div().child("1. 在「转种草稿」页点「确认交接 → GUI 版」：源站详情页链接会复制到剪贴板，并尝试启动 BoxSend GUI 版。"))
-        .child(div().child("2. GUI 版进入「批量转种」页，把链接粘贴到「种子详情页链接」输入框；源站一般自动识别，不对就手动指定。"))
-        .child(div().child("3. 在「转种分组」里勾选目标站（草稿里写的那个站），确认「转种到目标站」已勾选。"))
-        .child(div().child("4. 点「开始运行」——上传、发布、推种都由 GUI 版完成，本 Rust 版不代你发种。"))
-        .child(div().text_color(rgb(0x8b949e)).child("说明：Rust 版转种臂按方案只到草稿；源站链接/判定级别/目标站都在草稿里，避免误发。"))
+        .child(div().text_base().font_weight(FontWeight(600.0)).child("转种全流程（Rust 原生）"))
+        .child(div().child("1. 「转种草稿」页点「确认转种」——这一次点击就是人工确认，随后全自动："))
+        .child(div().child("   ① 预检：MediaInfo 非空 / 简介带 IMDb·豆瓣·TMDB 链接 / 中字标签（检测到中文字幕时）——任何一条阻断都不会上传。"))
+        .child(div().child("   ② 上传：拉目标站 upload.php 表单，透传 hidden 字段、填标题/副标题/简介/MediaInfo/条目链接/标签，multipart 提交。"))
+        .child(div().child("   ③ 推种：下载目标站的新种子，暂停加入下载器（dlLimit=1 兜底），启动校验。"))
+        .child(div().child("   ④ 收尾：校验到 100% 解除限速、格子记「已转种」；分片对不上就停掉/删掉；超时记「校验中」下一轮收尾。"))
+        .child(div().child("2. 「任务日志」实时显示每一步；失败原因（cookie 失效 / 限流 / 必填项缺失 / 种子已存在）都会写明。"))
+        .child(div().child("3. 上传后自动提交 MediaInfo 到独立表单字段（technical_info 等），没有独立字段就内嵌简介，避免「MediaInfo 为空」被打回。"))
+        .child(div().text_color(rgb(0x8b949e)).child("说明：v1 表单引擎只做站点无关的通用字段；个别站的特殊下拉（质量档位/两步上传）预检会提示「表单不认识的必填项」，遇到再逐站补 override。"))
         .into_any_element()
+}
+
+fn status_chip(status: CoverageStatus, count: usize) -> StatusChip {
+    let (label, color) = match status {
+        CoverageStatus::Seeding => ("已在做种", 0x3fb950),
+        CoverageStatus::Assisted => ("已辅种", 0x58a6ff),
+        CoverageStatus::Reseeded => ("已转种", 0xbc8cff),
+        CoverageStatus::Verifying => ("校验中", 0xd29922),
+        CoverageStatus::ReviewPending => ("待人工确认", 0xf0883e),
+        CoverageStatus::Rejected => ("人工否决", 0x8b949e),
+        CoverageStatus::Miss => ("站内没有", 0x484f58),
+        CoverageStatus::WaitSource => ("待找源", 0x39c5cf),
+        CoverageStatus::Failed => ("失败", 0xf85149),
+        CoverageStatus::ReseedDraft => ("转种草稿", 0xdb61a2),
+    };
+    StatusChip {
+        label,
+        count,
+        color,
+    }
 }
 
 fn snapshot(cfg: &Config) -> Result<Snapshot> {
@@ -523,6 +754,12 @@ fn snapshot(cfg: &Config) -> Result<Snapshot> {
             covered: s.covered,
             pending: s.pending,
             ratio: s.covered_ratio,
+            chips: s
+                .by_status
+                .into_iter()
+                .filter(|(_, n)| *n > 0)
+                .map(|(st, n)| status_chip(st, n))
+                .collect(),
         })
         .collect();
     Ok(Snapshot {

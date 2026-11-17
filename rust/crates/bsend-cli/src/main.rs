@@ -320,7 +320,7 @@ fn print_report(r: &RoundReport) {
     }
     if !r.reseed_drafts.is_empty() {
         println!(
-            "\n转种草稿（{} 条，v1 不自动上传，人工确认后走 GUI 版转种）：",
+            "\n转种草稿（{} 条，不自动上传；到 Rust GUI「转种草稿」页点「确认转种」执行）：",
             r.reseed_drafts.len()
         );
         for d in &r.reseed_drafts {
