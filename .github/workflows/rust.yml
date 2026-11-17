@@ -28,5 +28,17 @@ jobs:
         with:
           workspaces: rust
       - run: cargo fmt --check
-      - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test
+      # GPUI 的 Linux 传递依赖 xattr 0.2.3 与新版 libc 不兼容（ENOATTR 消失），
+      # 且该 GUI 的交接目标是 Windows 版 BoxSend——Linux 只检查核心库与 CLI。
+      - name: clippy（Linux：核心库 + CLI）
+        if: runner.os == 'Linux'
+        run: cargo clippy --all-targets --exclude bsend-gui -- -D warnings
+      - name: test（Linux：核心库 + CLI）
+        if: runner.os == 'Linux'
+        run: cargo test --exclude bsend-gui
+      - name: clippy（Windows：全部 crate，含 GPUI GUI）
+        if: runner.os == 'Windows'
+        run: cargo clippy --all-targets -- -D warnings
+      - name: test（Windows：全部 crate）
+        if: runner.os == 'Windows'
+        run: cargo test
