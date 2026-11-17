@@ -242,6 +242,10 @@ fn qb_server_ex(
         if path.starts_with("/api/v2/torrents/trackers") {
             return (200, "application/json", b"[]".to_vec());
         }
+        // qB 4.x 形态：start/stop 不存在（404），启停走 resume/pause 兜底
+        if path.starts_with("/api/v2/torrents/start") || path.starts_with("/api/v2/torrents/stop") {
+            return (404, "text/plain", Vec::new());
+        }
         // pause / resume / delete / addTrackers / setTrackers
         (200, "text/plain", Vec::new())
     }))
@@ -296,6 +300,10 @@ fn qb_server_409(torrent_hash: String, captured: CapturedRequests) -> MockServer
                 "application/json",
                 br#"[{"url":"https://existing.example/announce"}]"#.to_vec(),
             );
+        }
+        // qB 4.x 形态：start/stop 不存在，启停走 resume/pause 兜底
+        if path.starts_with("/api/v2/torrents/start") || path.starts_with("/api/v2/torrents/stop") {
+            return (404, "text/plain", Vec::new());
         }
         (200, "text/plain", Vec::new())
     }))
@@ -855,8 +863,8 @@ fn e2e_verifying_collect_assisted() {
     assert_eq!(report2.by_status[&CoverageStatus::Assisted], 1);
     assert_eq!(
         qb.requests("POST /api/v2/torrents/resume").len(),
-        1,
-        "校验满后启动"
+        2,
+        "推送时 start 一次触发校验 + 收尾时再 start 一次"
     );
     let e3 = index2.contents.values().next().unwrap();
     assert_eq!(e3.coverage["pter"].status, CoverageStatus::Assisted);
@@ -1256,5 +1264,85 @@ fn e2e_returnto_redirect_is_login_wall() {
     assert!(
         note.contains("跳") && note.contains("cookie"),
         "note 要说清是跳转（并且两种成因都提）：{note}"
+    );
+}
+
+/// qB 5.x 形态的下载器 mock：start/stop 回 200，resume/pause 回 404（旧名已删）
+fn qb_server_qb5(torrent_hash: String) -> MockServer {
+    let torrent_hash = Arc::new(torrent_hash);
+    MockServer::start(Arc::new(move |_method, path, _body| {
+        let h = &*torrent_hash;
+        if path.starts_with("/api/v2/auth/login") {
+            return (200, "text/plain", b"Ok.".to_vec());
+        }
+        if path.starts_with("/api/v2/app/version") {
+            return (200, "text/plain", b"v5.3.0".to_vec());
+        }
+        if path.starts_with("/api/v2/torrents/info") {
+            if path.contains("hashes=") {
+                let json = format!(
+                    r#"[{{"hash":"{h}","progress":1.0,"state":"pausedUP","up_limit":-1}}]"#
+                );
+                return (200, "application/json", json.into_bytes());
+            }
+            let json = format!(
+                r#"[{{"hash":"{h}","infohash_v2":"","name":"{NAME}","save_path":"/data/","category":"","tags":"","size":105,"progress":1.0,"tracker_hosts":["localhost"]}}]"#
+            );
+            return (200, "application/json", json.into_bytes());
+        }
+        if path.starts_with("/api/v2/torrents/files") {
+            let json = r#"[{"name":"Pack/a.mkv","size":100,"index":0},{"name":"Pack/s/ch.srt","size":5,"index":1}]"#;
+            return (200, "application/json", json.as_bytes().to_vec());
+        }
+        if path.starts_with("/api/v2/torrents/resume") || path.starts_with("/api/v2/torrents/pause")
+        {
+            return (404, "text/plain", Vec::new());
+        }
+        (200, "text/plain", Vec::new())
+    }))
+}
+
+/// 场景十三：qB 5.x 的启停端点（start/stop，旧的 resume/pause 已 404）。
+/// 实机 qB 5.3：只用旧名会静默失败——校验完的种子永远停着不作种、停止态的种子
+/// 永远不会开始校验（这正是真实辅种第一跑失败的根因）。
+#[test]
+fn e2e_qb5_start_stop_endpoints() {
+    let dir = temp_dir("qb5-start");
+    let t = Arc::new(torrent_bytes("Pack", FILES));
+    let hash = bencode::info_hash_v1(&t).unwrap();
+
+    // qB 5.x 形态：start/stop 回 200，resume/pause 回 404
+    let qb = qb_server_qb5(hash);
+    let pter = nexus_site_server("hit", t.clone());
+    let hdsky = nexus_site_server("miss", t.clone());
+    let cfg = test_config(qb.port, pter.port, hdsky.port, &dir);
+
+    let qb_client = Arc::new(QBittorrent::new(&cfg.downloader.url, "admin", "pass").unwrap());
+    let ads = adapters(&cfg);
+    let mut index = ContentIndex::load(&cfg.coverage_state_path());
+    let _ = run_round(
+        &cfg,
+        qb_client,
+        &ads,
+        &mut index,
+        |_| {},
+        RoundOptions {
+            persist: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    let entry = index.contents.values().next().unwrap();
+    assert_eq!(entry.coverage["pter"].status, CoverageStatus::Assisted);
+    assert_eq!(
+        qb.requests("POST /api/v2/torrents/start").len(),
+        1,
+        "qB 5.x 用 start 触发校验"
+    );
+    assert_eq!(
+        qb.requests("POST /api/v2/torrents/resume").len(),
+        0,
+        "start 成功就不再试旧名"
     );
 }

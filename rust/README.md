@@ -95,8 +95,10 @@ bsend report --json coverage-report.json
    解析层对 `tracker_hosts` / `trackers` / `tracker` 三种形态都认。
 3. **辅种臂**（站内检索）：严格查询 → 未命中且开了宽松重试再来一轮 → 命中后下
    .torrent 逐文件判定（A=hash 一致 / B=重新打包清单全等 / C=只有名字像）。
-   A、B 且目录布局一致 → 暂停添加 → 轮询校验 → 满 100% 才启动（`assisted`）；
-   不满则按 `assist.removeOnVerifyFail` 删种保文件（`failed`）或保持暂停。
+   A、B 且目录布局一致 → 停止态添加（`dlLimit=1` 下载兜底）→ `start` 触发校验 →
+   满 100% 解除限速、已在做种（`assisted`）；不满则停住，按 `assist.removeOnVerifyFail`
+   删种保文件（`failed`）或保持停止。qB 5.x 起停止态的种子不会自校验，必须 start 一次；
+   校验期间的 1 B/s 兜底保证「分片结构不同」时不会开始狂下。
    轮询等到头还没结论 → 落 `verifying`（记下那条种子的 hash）；下一轮开头的
    收尾 pass 凭它直查下载器收尾，不花站点请求。C 级与布局对不上的 → `reviewPending`，
    绝不碰下载器。
@@ -153,6 +155,7 @@ NexusPHP 的 `index.php?returnto=…` 跳转）、站点限流页（HTTP 200 但
 
 - 移植：NexusPHP 检索启发式（查询词阶梯 / 归一化互含 / 词元宽容判定）、CookieCloud
   （两种加密格式 + host 归一化 + 合并）、A/B/C 判定、
+  qB 5.x 启停端点（`start`/`stop`，旧 `resume`/`pause` 已删，404 回退兼容 4.x）、
   布局门、推送尾巴（暂停添加 → 校验 → 启动/回滚）、qB WebAPI 兼容补丁（参数名两版并记住
   可用的那个、回包两种包装、409 已存在补挂 tracker、登录一次复用）、登录墙检测
   （401/403、登录页跳转、`returnto=`）、站点限流页检测、148 站识别表。

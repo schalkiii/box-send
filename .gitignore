@@ -33,3 +33,5 @@ windows/installer/version.inc
 # Rust 构建产物
 rust/target/
 .workbuddy/
+# 实机调试下载的站点种子（含 passkey，绝不入库；Tests/ 的固定样例不受影响）
+/*.torrent

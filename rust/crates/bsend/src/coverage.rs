@@ -111,11 +111,21 @@ pub fn now_unix() -> i64 {
         .unwrap_or(0)
 }
 
-/// qB 状态是不是还在校验/分配（没跑完就别下结论）
+/// qB 状态是不是还在校验/分配（没跑完就别下结论）。
+/// 5.x 的状态名：`checkingDL` / `checkingUP` / `queuedForChecking` / `metaDL`——
+/// 少一个都会把「还在排队校验」误判成「校验不过」，把好种子删掉。
 fn is_checking(state: &str) -> bool {
     matches!(
         state,
-        "checking" | "checkingFiles" | "checkingResumeData" | "allocating" | "metadownload"
+        "checking"
+            | "checkingFiles"
+            | "checkingResumeData"
+            | "checkingDL"
+            | "checkingUP"
+            | "queuedForChecking"
+            | "allocating"
+            | "metadownload"
+            | "metaDL"
     )
 }
 
@@ -772,26 +782,31 @@ fn push_tail(
             detail_url.to_string(),
         );
     }
+    // qB 5.x：停止态的种子不会开始校验，必须 start 一次才会核对数据（实机 qB 5.3 验证）。
+    // 核对期间的下载兜底由 add 时的 dlLimit=1 保证——内容对不上也不会开始狂下。
+    let _ = qb.set_paused(&[&site_hash], false);
     let poll = cov.verify_poll_sec.max(1);
     let mut waited: u64 = 0;
     while waited < cov.verify_wait_sec {
         if let Ok(Some((progress, state))) = qb.torrent_progress(&site_hash) {
             if progress >= 0.999 {
-                let _ = qb.set_paused(&[&site_hash], false);
+                // 核对通过：解除兜底限速，种子已经在跑（做种中）
+                let _ = qb.set_download_limit(&site_hash, 0);
                 return done_url(
                     CoverageStatus::Assisted,
-                    format!("校验到 100%，已启动（{why}）"),
+                    format!("校验到 100%，已在做种（{why}）"),
                     detail_url.to_string(),
                 );
             }
-            // 校验跑完仍不满：文件对不上
+            // 校验跑完仍不满：文件对不上——先停住再决定去留，别让它开始重下
             if waited > 0 && !is_checking(&state) {
+                let _ = qb.set_paused(&[&site_hash], true);
                 if cov.remove_on_verify_fail {
                     let _ = qb.remove_torrent(&site_hash, true);
                     return done_url(
                         CoverageStatus::Failed,
                         format!(
-                            "校验后只到 {:.0}%，已删掉刚加的种子（文件保留）：内层路径与本地对不上",
+                            "校验后只到 {:.0}%，已删掉刚加的种子（文件保留）：分片结构与本地不同，无法跨种",
                             progress * 100.0
                         ),
                         detail_url.to_string(),
@@ -800,7 +815,7 @@ fn push_tail(
                 return done_url(
                     CoverageStatus::Failed,
                     format!(
-                        "校验后只到 {:.0}%，种子保持暂停：文件对不上，别让它开始重下",
+                        "校验后只到 {:.0}%，种子已停止：分片结构与本地不同，别让它开始重下",
                         progress * 100.0
                     ),
                     detail_url.to_string(),
@@ -992,27 +1007,30 @@ fn collect_verifying(
     match qb.torrent_progress(hash) {
         Ok(Some((progress, state))) => {
             if progress >= 0.999 {
+                let _ = qb.set_download_limit(hash, 0);
                 let _ = qb.set_paused(&[hash], false);
                 Some((
                     CoverageStatus::Assisted,
-                    "校验到 100%，已启动（上一轮推送收尾）".to_string(),
+                    "校验到 100%，已在做种（上一轮推送收尾）".to_string(),
                 ))
             } else if is_checking(&state) {
                 None
             } else if cov.remove_on_verify_fail {
+                let _ = qb.set_paused(&[hash], true);
                 let _ = qb.remove_torrent(hash, true);
                 Some((
                     CoverageStatus::Failed,
                     format!(
-                        "校验后只到 {:.0}%，已删掉刚加的种子（文件保留）：内层路径与本地对不上",
+                        "校验后只到 {:.0}%，已删掉刚加的种子（文件保留）：分片结构与本地不同，无法跨种",
                         progress * 100.0
                     ),
                 ))
             } else {
+                let _ = qb.set_paused(&[hash], true);
                 Some((
                     CoverageStatus::Failed,
                     format!(
-                        "校验后只到 {:.0}%，种子保持暂停：文件对不上，别让它开始重下",
+                        "校验后只到 {:.0}%，种子已停止：分片结构与本地不同，别让它开始重下",
                         progress * 100.0
                     ),
                 ))

@@ -327,14 +327,48 @@ impl QBittorrent {
         }))
     }
 
+    /// 启停种子。qB 5.x 把 pause/resume 改名 stop/start（5.0 起旧名 404，实机 qB 5.3 验证）——
+    /// 只用旧名会静默失败：校验完的种子一直停着不作种、停止态的种子永远不会开始校验。
+    /// 新名优先，回 404/405 再试旧名（qB 4.x）。
     pub fn set_paused(&self, hashes: &[&str], paused: bool) -> Result<()> {
         self.login()?;
-        let path = if paused { "pause" } else { "resume" };
+        let body = [("hashes", hashes.join("|"))];
+        let (primary, legacy) = if paused {
+            ("stop", "pause")
+        } else {
+            ("start", "resume")
+        };
+        if let Some(st) = self.post_form_status(&format!("/api/v2/torrents/{primary}"), &body) {
+            if st != 404 && st != 405 {
+                return Ok(());
+            }
+        }
+        self.post_form_ignoring_errors(&format!("/api/v2/torrents/{legacy}"), &body);
+        Ok(())
+    }
+
+    /// 下载限速（B/s，0 = 不限）。辅种校验期间给 1 B/s 兜底：文件不全也不会开始狂下。
+    pub fn set_download_limit(&self, hash: &str, limit: i64) -> Result<()> {
+        self.login()?;
         self.post_form_ignoring_errors(
-            &format!("/api/v2/torrents/{path}"),
-            &[("hashes", hashes.join("|"))],
+            "/api/v2/torrents/setDownloadLimit",
+            &[("hashes", hash.to_string()), ("limit", limit.to_string())],
         );
         Ok(())
+    }
+
+    /// POST 表单并返回 HTTP 状态码（请求没通返回 None）
+    fn post_form_status(&self, path: &str, fields: &[(&str, String)]) -> Option<u16> {
+        let resp = self
+            .client
+            .post(format!("{}{}", self.base_url, path))
+            .headers(self.referer_headers())
+            .form(fields)
+            .send()
+            .ok()?;
+        let st = resp.status().as_u16();
+        self.session_died(st);
+        Some(st)
     }
 
     pub fn remove_torrent(&self, hash: &str, keep_files: bool) -> Result<()> {
@@ -374,10 +408,12 @@ impl QBittorrent {
                 if skip_checking { "true" } else { "false" }.to_string(),
             )
             .text("upLimit", up_limit.to_string())
-            // 4.3+：显式启动标志，避免下载器默认「添加后暂停」导致推送了却不跑
-            .text("started", if paused { "false" } else { "true" }.to_string());
+            // 校验期间 1 B/s 下载兜底：内容对不上时不会开始狂下（通过后由 setDownloadLimit 解除）
+            .text("dlLimit", "1")
+            // 启停三套参数名都发：5.x 认 stopped，4.3+/4.4+ 认 started / paused
+            .text("started", if paused { "false" } else { "true" }.to_string())
+            .text("stopped", if paused { "true" } else { "false" }.to_string());
         if paused {
-            // qB 4.4+ 的 torrents/add 直接收 paused；辅种靠它把「先暂停等校验」落到实处
             form = form.text("paused", "true".to_string());
         }
         let file_part = reqwest::blocking::multipart::Part::bytes(data.to_vec())
