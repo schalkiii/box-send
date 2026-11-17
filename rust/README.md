@@ -194,6 +194,12 @@ NexusPHP 的 `index.php?returnto=…` 跳转）、站点限流页（HTTP 200 但
 
 ## 测试
 
+改 CI / 依赖 / workspace 成员后，先在仓库根目录跑本地彩排（与 workflow 完全同一组命令）：
+
+```bash
+bash scripts/ci-check.sh
+```
+
 ```bash
 cargo test          # 70 个单测（判定/分词/节流/索引/配置与 cookie 兼容/限流与拦截页/
                     # CookieCloud 解密/报告/站点别名）+ 14 个端到端
