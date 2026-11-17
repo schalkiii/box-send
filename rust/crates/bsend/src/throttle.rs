@@ -34,6 +34,9 @@ struct SitePace {
     last: Option<Instant>,
     /// 限流退避倍数（1 = 正常；每次被限流翻倍，封顶 30）
     backoff: u32,
+    /// 该站本轮的最低间隔（被限流页警告过就抬到 60 秒）。
+    /// hdsky 实机：HTTP 200 + 「请求过于频繁，限制访问间隔 60 秒/次」——8 秒节奏只会反复撞墙。
+    min_interval: Duration,
 }
 
 impl SitePace {
@@ -41,12 +44,16 @@ impl SitePace {
         Self {
             last: None,
             backoff: 1,
+            min_interval: Duration::ZERO,
         }
     }
 }
 
 /// 限流退避封顶：240s = 8s × 30
 const MAX_BACKOFF: u32 = 30;
+
+/// 收到限流信号后该站本轮的最低请求间隔的缺省值（PT 站常见的「60 秒/次」）
+const DEFAULT_RATE_LIMIT_FLOOR: Duration = Duration::from_secs(60);
 
 /// 纯函数：距上次请求 `elapsed` 后还要等多久。`last=None`（首访）立即放行。
 fn next_wait(has_last: bool, elapsed: Duration, interval: Duration, backoff: u32) -> Duration {
@@ -59,6 +66,10 @@ fn next_wait(has_last: bool, elapsed: Duration, interval: Duration, backoff: u32
 pub struct SiteThrottle {
     interval: Duration,
     jitter: Duration,
+    /// 逐站覆盖的请求间隔（站点明说 60 秒/次的，别用全局 8 秒去撞）
+    site_intervals: HashMap<String, Duration>,
+    /// 被限流后该站本轮的最低间隔
+    rate_limit_floor: Duration,
     pace: Mutex<HashMap<String, SitePace>>,
     used: Mutex<HashMap<BudgetKind, i32>>,
     max: HashMap<BudgetKind, i32>,
@@ -72,9 +83,31 @@ impl SiteThrottle {
         source_budget: i32,
         upload_budget: i32,
     ) -> Self {
-        Self {
+        Self::with_rate_limit_floor(
             interval,
             jitter,
+            search_budget,
+            source_budget,
+            upload_budget,
+            DEFAULT_RATE_LIMIT_FLOOR,
+        )
+    }
+
+    /// 带「限流最低间隔」的构造（配置可调；测试把它压到 1s 免得白等）
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_rate_limit_floor(
+        interval: Duration,
+        jitter: Duration,
+        search_budget: i32,
+        source_budget: i32,
+        upload_budget: i32,
+        rate_limit_floor: Duration,
+    ) -> Self {
+        Self {
+            interval,
+            site_intervals: HashMap::new(),
+            jitter,
+            rate_limit_floor,
             pace: Mutex::new(HashMap::new()),
             used: Mutex::new(HashMap::new()),
             max: [
@@ -85,6 +118,12 @@ impl SiteThrottle {
             .into_iter()
             .collect(),
         }
+    }
+
+    /// 逐站覆盖请求间隔（链式构造：全局默认 + 少数站单独放宽）
+    pub fn with_site_intervals(mut self, map: HashMap<String, Duration>) -> Self {
+        self.site_intervals = map;
+        self
     }
 
     /// 预算余量（纯查询，报告用）
@@ -101,20 +140,23 @@ impl SiteThrottle {
         self.max[&kind]
     }
 
-    /// 站点报了限流（429 / 登录墙）：该站下次请求间隔翻倍。上限 240s，免得永远等下去。
+    /// 站点报了限流（429 / 503 / 限流提示页）：该站下次请求间隔翻倍，并把本轮最低间隔
+    /// 抬到 60 秒（站点明说「限制访问间隔 60 秒/次」时，8 秒节奏只会反复撞墙）。
     pub fn note_rate_limited(&self, site_id: &str) {
         let mut pace = self.pace.lock().unwrap();
         let p = pace
             .entry(site_id.to_string())
             .or_insert_with(SitePace::new);
         p.backoff = (p.backoff * 2).min(MAX_BACKOFF);
+        p.min_interval = p.min_interval.max(self.rate_limit_floor);
     }
 
-    /// 站点一切正常时恢复原节奏（一次成功的请求就该松开退避）
+    /// 站点一切正常时恢复原节奏（一次成功的请求就该松开退避与最低间隔）
     pub fn note_ok(&self, site_id: &str) {
         let mut pace = self.pace.lock().unwrap();
         if let Some(p) = pace.get_mut(site_id) {
             p.backoff = 1;
+            p.min_interval = Duration::ZERO;
         }
     }
 
@@ -139,12 +181,17 @@ impl SiteThrottle {
         };
         let wait = match p.last {
             None => Duration::ZERO,
-            Some(last) => next_wait(
-                true,
-                now.saturating_duration_since(last),
-                self.interval,
-                p.backoff,
-            ),
+            Some(last) => {
+                let elapsed = now.saturating_duration_since(last);
+                // 退避倍数与「该站本轮最低间隔」取较大者；站间隔按该站自己的算
+                let base = self
+                    .site_intervals
+                    .get(site_id)
+                    .copied()
+                    .unwrap_or(self.interval);
+                next_wait(true, elapsed, base, p.backoff)
+                    .max(p.min_interval.saturating_sub(elapsed))
+            }
         };
         // 抖动在等待之上再加：让并行 worker 的节奏彼此错开
         let jitter = if self.jitter.is_zero() {
@@ -283,10 +330,11 @@ mod tests {
     fn rate_limit_backoff_doubles_with_cap() {
         let t = paced();
         t.acquire_dur("hdsky", BudgetKind::Search).unwrap();
-        t.note_rate_limited("hdsky"); // ×2
+        t.note_rate_limited("hdsky"); // ×2，且本轮最低间隔抬到 60s
         t.force_last("hdsky", Duration::from_secs(1));
-        assert_near(t.acquire_dur("hdsky", BudgetKind::Search).unwrap(), 15); // 8×2 − 1
-                                                                              // 连着限流翻到封顶 30 倍
+        // max(8×2 − 1, 60 − 1) = 59：站点说 60 秒/次，就别按 15 秒去撞墙
+        assert_near(t.acquire_dur("hdsky", BudgetKind::Search).unwrap(), 59);
+        // 连着限流翻到封顶 30 倍
         t.note_rate_limited("hdsky");
         t.note_rate_limited("hdsky");
         t.note_rate_limited("hdsky");

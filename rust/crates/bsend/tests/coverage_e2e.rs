@@ -301,6 +301,40 @@ fn qb_server_409(torrent_hash: String, captured: CapturedRequests) -> MockServer
     }))
 }
 
+/// qB 5.3 实机形态的下载器 mock：`/torrents/info` 只给 `tracker`（当前那条 announce），
+/// `/app/version` 回纯文本版本号。
+fn qb_server_single_tracker(torrent_hash: String, tracker_url: &str) -> MockServer {
+    let torrent_hash = Arc::new(torrent_hash);
+    let tracker = Arc::new(tracker_url.to_string());
+    MockServer::start(Arc::new(move |_method, path, _body| {
+        let h = &*torrent_hash;
+        let u = &*tracker;
+        if path.starts_with("/api/v2/auth/login") {
+            return (200, "text/plain", b"Ok.".to_vec());
+        }
+        if path.starts_with("/api/v2/app/version") {
+            return (200, "text/plain", b"v5.3.0".to_vec());
+        }
+        if path.starts_with("/api/v2/torrents/info") {
+            if path.contains("hashes=") {
+                let json = format!(
+                    r#"[{{"hash":"{h}","progress":1.0,"state":"pausedUP","up_limit":-1}}]"#
+                );
+                return (200, "application/json", json.into_bytes());
+            }
+            let json = format!(
+                r#"[{{"hash":"{h}","infohash_v2":"","name":"{NAME}","save_path":"/data/","category":"","tags":"","size":105,"progress":1.0,"tracker":"{u}"}}]"#
+            );
+            return (200, "application/json", json.into_bytes());
+        }
+        if path.starts_with("/api/v2/torrents/files") {
+            let json = r#"[{"name":"Pack/a.mkv","size":100,"index":0},{"name":"Pack/s/ch.srt","size":5,"index":1}]"#;
+            return (200, "application/json", json.as_bytes().to_vec());
+        }
+        (200, "text/plain", Vec::new())
+    }))
+}
+
 fn nexus_site_server(kind: &str, torrent: Arc<Vec<u8>>) -> MockServer {
     let torrent = torrent.clone();
     let kind = kind.to_string();
@@ -345,7 +379,7 @@ fn test_config(qb_port: u16, pter_port: u16, hdsky_port: u16, dir: &std::path::P
                 framework: Framework::NexusPHP,
                 search_url: None,
                 api_key: None,
-                announce_host: "127.0.0.1".into(),
+                announce_hosts: vec!["127.0.0.1".into()],
             },
             SiteConf {
                 id: "hdsky".into(),
@@ -354,7 +388,7 @@ fn test_config(qb_port: u16, pter_port: u16, hdsky_port: u16, dir: &std::path::P
                 framework: Framework::NexusPHP,
                 search_url: None,
                 api_key: None,
-                announce_host: "localhost".into(),
+                announce_hosts: vec!["localhost".into()],
             },
         ],
         coverage: CoverageSettings {
@@ -362,6 +396,8 @@ fn test_config(qb_port: u16, pter_port: u16, hdsky_port: u16, dir: &std::path::P
             jitter_sec: 0.0,
             verify_wait_sec: 3,
             verify_poll_sec: 1,
+            // 限流最低间隔压到 1s：退避数学在单测里钉，e2e 不必真等 60 秒
+            rate_limit_floor_sec: 1,
             ..CoverageSettings::default()
         },
         user_agent: "bsend-e2e-test".into(),
@@ -902,8 +938,9 @@ fn e2e_verifying_collect_rollback() {
     assert!(e3.coverage["pter"].verify_hash.is_none());
 }
 
-/// 场景七：检索预算耗尽的格子不写 Miss（那是查过才有的负缓存）——
-/// 本轮跳过、不落格子，下一轮预算回来从头查，该是什么结论就是什么结论。
+/// 场景七：检索预算按「真实请求」记账（一次站内检索要发多条查询词），
+/// 预算在半路用完的格子不写 Miss（那是查过才有的负缓存）——本轮跳过、不落格子，
+/// 下一轮预算回来从头查，该是什么结论就是什么结论。
 #[test]
 fn e2e_budget_exhaustion_not_cached() {
     let dir = temp_dir("budget");
@@ -914,8 +951,8 @@ fn e2e_budget_exhaustion_not_cached() {
     let pter = nexus_site_server("miss", t.clone());
     let hdsky = nexus_site_server("miss", t.clone());
     let mut cfg = test_config(qb.port, pter.port, hdsky.port, &dir);
+    // 只给一发请求：严格检索的第一条查询词能出去，第二条就被预算挡下
     cfg.coverage.search_budget = 1;
-    // 每站恰好一次检索，预算账好算（宽松重试也要吃检索预算）
     cfg.coverage.relaxed_retry_search = false;
 
     let qb_client = Arc::new(QBittorrent::new(&cfg.downloader.url, "admin", "pass").unwrap());
@@ -934,15 +971,18 @@ fn e2e_budget_exhaustion_not_cached() {
     )
     .unwrap();
 
-    // 预算 1：只有一个站查上了（miss → 待找源），另一个站本轮跳过、不落任何结论
-    assert_eq!(report.preskipped, 1, "预算耗尽的格子算跳过，不算 miss");
-    assert_eq!(report.by_status.len(), 1);
-    assert_eq!(report.by_status[&CoverageStatus::WaitSource], 1);
+    // 预算一发：一条查询词出门就耗完，检索没查完 → 跳过、不落任何结论
+    assert_eq!(
+        report.skipped_no_budget, 2,
+        "预算一发：两个站都查不完，各记一次「没排上」"
+    );
+    assert_eq!(report.preskipped, 0, "预算耗尽不是「预筛跳过」");
+    assert_eq!(report.by_status.len(), 0);
     let entry = index.contents.values().next().unwrap();
-    assert_eq!(entry.coverage.len(), 1, "被跳过的站不写格子（下次从头来）");
+    assert!(entry.coverage.is_empty(), "没查完的格子不写索引");
 
-    // 第二轮预算回来：剩下的那格照常查——站内没有 + 源种负缓存 → 待找源
-    cfg.coverage.search_budget = 2;
+    // 第二轮预算给足：两个站都查成 → 站内没有 + 源站也没有 → 待找源
+    cfg.coverage.search_budget = 40;
     let mut index2 = ContentIndex::load(&cfg.coverage_state_path());
     let report2 = run_round(
         &cfg,
@@ -956,16 +996,9 @@ fn e2e_budget_exhaustion_not_cached() {
         },
     )
     .unwrap();
-    assert_eq!(report2.by_status[&CoverageStatus::WaitSource], 1);
+    assert_eq!(report2.by_status[&CoverageStatus::WaitSource], 2);
     let e2 = index2.contents.values().next().unwrap();
     assert_eq!(e2.coverage.len(), 2, "两格都有了");
-    assert_eq!(
-        e2.coverage
-            .values()
-            .filter(|c| c.status == CoverageStatus::WaitSource)
-            .count(),
-        2
-    );
 }
 
 /// 场景八：cookie 失效——站点把检索 302 到登录页。必须记 failed（给人看的原因），
@@ -1068,4 +1101,156 @@ fn e2e_rate_limited_maps_to_failed() {
     assert!(note.contains("429"), "note = {note}");
     // 源种侧同样不落负缓存
     assert!(entry.source.is_none());
+}
+
+/// 场景十：qB 5.3 实机形态——`/torrents/info` 只有 `tracker`（当前那条 announce），
+/// 没有 `tracker_hosts` / `trackers`；`/app/version` 回纯文本 `v5.3.0`。
+/// 这两条都是实机踩到的：前者不兜底会让「已在做种」预筛全失效，后者会让连下载器直接失败。
+#[test]
+fn e2e_single_tracker_field_and_plain_version() {
+    let dir = temp_dir("tracker-field");
+    let t = Arc::new(torrent_bytes("Pack", FILES));
+    let hash = bencode::info_hash_v1(&t).unwrap();
+
+    let qb = qb_server_single_tracker(hash, "http://localhost:9091/announce");
+    let pter = nexus_site_server("miss", t.clone());
+    let hdsky = nexus_site_server("hit", t.clone());
+    let cfg = test_config(qb.port, pter.port, hdsky.port, &dir);
+    let qb_client = Arc::new(QBittorrent::new(&cfg.downloader.url, "admin", "pass").unwrap());
+
+    // 连下载器：5.x 的纯文本版本号也要认
+    let hello = qb_client.test_connection().expect("能连上");
+    assert!(hello.contains("v5.3.0"), "hello = {hello}");
+
+    let ads = adapters(&cfg);
+    let mut index = ContentIndex::load(&cfg.coverage_state_path());
+    let _ = run_round(
+        &cfg,
+        qb_client,
+        &ads,
+        &mut index,
+        |_| {},
+        RoundOptions {
+            persist: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    let entry = index.contents.values().next().unwrap();
+    assert_eq!(
+        entry.coverage["hdsky"].status,
+        CoverageStatus::Seeding,
+        "只有 tracker 字段也要认出「已在做种」"
+    );
+    // 预筛生效的硬证据：hdsky 站内其实有这条种子，若预筛失效会被当目标站 A 级推送。
+    // （hdsky 上仍会有请求——那是 pter 的转种臂把它当源站检索了一轮，属正常）
+    assert_eq!(
+        qb.requests("POST /api/v2/torrents/add").len(),
+        0,
+        "已做种的格子绝不推送"
+    );
+    assert_eq!(
+        entry.coverage["pter"].status,
+        CoverageStatus::ReseedDraft,
+        "另一站照常走转种草稿"
+    );
+}
+
+/// 场景十一：站点限流页（HTTP 200 + 「请求过于频繁，限制访问间隔 60 秒/次」）。
+/// 实机 hdsky 就是这个形态。必须记 failed（并让该站退避），绝不能记成「站内没有」。
+#[test]
+fn e2e_block_page_is_failed_not_miss() {
+    let dir = temp_dir("blockpage");
+    let t = Arc::new(torrent_bytes("Pack", FILES));
+    let hash = bencode::info_hash_v1(&t).unwrap();
+
+    let qb = qb_server(hash, Vec::new());
+    let pter = MockServer::start(Arc::new(move |_method, path, _body| {
+        if path.starts_with("/torrents.php") {
+            let page = "<html><head><title>403</title></head>\
+                        <body><h3>请求过于频繁，限制访问间隔 60 秒/次</h3></body></html>";
+            return (200, "text/html", page.as_bytes().to_vec());
+        }
+        (404, "text/plain", Vec::new())
+    }));
+    let hdsky = nexus_site_server("miss", t.clone());
+    let cfg = test_config(qb.port, pter.port, hdsky.port, &dir);
+
+    let qb_client = Arc::new(QBittorrent::new(&cfg.downloader.url, "admin", "pass").unwrap());
+    let ads = adapters(&cfg);
+    let mut index = ContentIndex::load(&cfg.coverage_state_path());
+    let _ = run_round(
+        &cfg,
+        qb_client,
+        &ads,
+        &mut index,
+        |_| {},
+        RoundOptions {
+            persist: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    let entry = index.contents.values().next().unwrap();
+    assert_eq!(
+        entry.coverage["pter"].status,
+        CoverageStatus::Failed,
+        "限流页是错误，不是「站内没有」"
+    );
+    let note = entry.coverage["pter"].note.as_deref().unwrap();
+    assert!(note.contains("限流"), "note = {note}");
+}
+
+/// 场景十二：cookie 失效的老版 NexusPHP 形态——302 到 `index.php?returnto=…`。
+/// 实机 pter 就是这样；只看 URL 里的 login/signin 会漏判，把整站投毒成「站内没有」。
+#[test]
+fn e2e_returnto_redirect_is_login_wall() {
+    let dir = temp_dir("returnto");
+    let t = Arc::new(torrent_bytes("Pack", FILES));
+    let hash = bencode::info_hash_v1(&t).unwrap();
+
+    let qb = qb_server(hash, Vec::new());
+    let pter = MockServer::start(Arc::new(move |_method, path, _body| {
+        if path.starts_with("/torrents.php") {
+            return (
+                302,
+                "text/plain",
+                b"/index.php?returnto=torrents.php".to_vec(),
+            );
+        }
+        // 落地页是首页（登录后的入口），不是 login.php
+        if path.starts_with("/index.php") {
+            return (
+                200,
+                "text/html",
+                b"<html><title>PT</title><body>welcome</body></html>".to_vec(),
+            );
+        }
+        (404, "text/plain", Vec::new())
+    }));
+    let hdsky = nexus_site_server("miss", t.clone());
+    let cfg = test_config(qb.port, pter.port, hdsky.port, &dir);
+
+    let qb_client = Arc::new(QBittorrent::new(&cfg.downloader.url, "admin", "pass").unwrap());
+    let ads = adapters(&cfg);
+    let mut index = ContentIndex::load(&cfg.coverage_state_path());
+    let _ = run_round(
+        &cfg,
+        qb_client,
+        &ads,
+        &mut index,
+        |_| {},
+        RoundOptions {
+            persist: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    let entry = index.contents.values().next().unwrap();
+    assert_eq!(entry.coverage["pter"].status, CoverageStatus::Failed);
+    let note = entry.coverage["pter"].note.as_deref().unwrap();
+    assert!(note.contains("登录"), "note = {note}");
 }

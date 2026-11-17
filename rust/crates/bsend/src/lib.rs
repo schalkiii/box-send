@@ -13,6 +13,7 @@ pub mod manifest;
 pub mod matcher;
 pub mod models;
 pub mod qbittorrent;
+pub mod report;
 pub mod resolver;
 pub mod sites;
 pub mod throttle;
@@ -24,6 +25,7 @@ pub use index::{
 };
 pub use models::{JudgeLevel, Layout, LocalTorrent, TorrentFingerprint};
 pub use qbittorrent::{AddTorrentResult, QBittorrent};
+pub use report::CoverageReport;
 pub use resolver::{resolve_source, ResolveOutcome, SiteClient, SourceSite};
 pub use sites::{builtin_sites, url_host, Framework, SiteDef};
 pub use throttle::{BudgetKind, SiteThrottle};

@@ -19,10 +19,10 @@ use crate::bencode;
 use crate::config::{Config, DownloaderSettings, ReseedMode};
 use crate::index::{ContentIndex, CoverageStatus, ScanDelta, SiteCoverage, SourceRecord};
 use crate::matcher;
-use crate::models::{JudgeLevel, Layout, TorrentFingerprint};
+use crate::models::{JudgeLevel, Layout, LocalTorrent, TorrentFingerprint};
 use crate::qbittorrent::QBittorrent;
 use crate::resolver::{resolve_source, ResolveOutcome, SourceSite};
-use crate::sites::nexusphp::NexusPhp;
+use crate::sites::nexusphp::{NexusPhp, SearchOutcome};
 use crate::throttle::{BudgetKind, SiteThrottle};
 
 /// 一轮结束的报告
@@ -36,6 +36,8 @@ pub struct RoundReport {
     pub reseed_drafts: Vec<DraftItem>,
     /// 预筛跳过的格子数（零请求）
     pub preskipped: usize,
+    /// 预算耗尽、本轮根本没查成的格子数（不写索引，下轮从头来）
+    pub skipped_no_budget: usize,
     /// 各预算 (已用, 上限)
     pub budget: BTreeMap<&'static str, (i32, i32)>,
 }
@@ -128,6 +130,8 @@ pub struct RoundOptions {
     pub dry_run: bool,
     /// 是否把结论落盘（plan 预演不落，避免污染索引）
     pub persist: bool,
+    /// 只处理这些内容（contentKey 前缀或名称包含，实机调试/单条重试用）
+    pub content_filter: Option<String>,
 }
 
 /// 跑一整轮：扫描 → 合并索引 → 预筛 → 站点 worker 池 → 应用结论 → 落盘。
@@ -146,8 +150,24 @@ pub fn run_round(
     // ---- 1 扫描 + 增量合并 ----
     let torrents = qb.list_torrents()?;
     report.scanned_torrents = torrents.len();
-    let files_of = |t: &crate::models::LocalTorrent| qb.torrent_files(&t.hash).ok();
+    // 首扫描（或索引里还没有摘要的种子）要把文件清单抓回来算 manifest。qB 一次一条，
+    // 4 万条串行十几分钟，这里按 scanConcurrency 并发；已有摘要的种子增量跳过。
+    let files = prefetch_files(
+        qb.as_ref(),
+        &torrents,
+        index,
+        cfg.coverage.scan_concurrency,
+        |done, total| {
+            if total >= 500 && (done % 1000 == 0 || done == total) {
+                emit(Event::Log(format!("读取文件清单 {done}/{total}")));
+            }
+        },
+    );
+    let files_of = |t: &LocalTorrent| files.get(&t.hash).cloned();
     report.delta = index.merge_scan(&torrents, files_of, t0, cfg.coverage.archive_days);
+    // 文件清单（4 万条约 200MB）只在合并这一次用得上，worker 阶段靠逐条指纹缓存；
+    // 不释放的话常驻进程（将来的 daemon）会一直背着它
+    drop(files);
     emit(Event::Log(format!(
         "扫描 {} 条种子：新内容 {}、并入 {}、移除 {}、归档 {}、跳过未完成 {}",
         torrents.len(),
@@ -168,11 +188,7 @@ pub fn run_round(
     // ---- 2 已做种标记（tracker hosts ∩ 参与站点 → Seeding，零请求）----
     for entry in index.contents.values_mut() {
         for site in &active_sites {
-            if !entry
-                .tracker_hosts
-                .iter()
-                .any(|h| crate::sites::host_matches(h, &site.announce_host))
-            {
+            if !entry.tracker_hosts.iter().any(|h| site.matches_tracker(h)) {
                 continue;
             }
             let cur = entry.coverage.get(&site.id).map(|c| c.status);
@@ -241,6 +257,11 @@ pub fn run_round(
         if entry.torrents.is_empty() {
             continue; // 全部成员已消失，归档倒计时中，不占请求
         }
+        if let Some(f) = &opts.content_filter {
+            if !key.starts_with(f.as_str()) && !entry.name.contains(f.as_str()) {
+                continue;
+            }
+        }
         // 大小/分类筛选（方案第九节：把分母线性砍下来比调间隔管用）
         let gb = entry.total_size as f64 / 1_073_741_824.0;
         if cfg.coverage.min_size_gb > 0.0 && gb < cfg.coverage.min_size_gb {
@@ -291,13 +312,22 @@ pub fn run_round(
             site_queues.entry(site.id.clone()).or_default().push(item);
             uncovered += 1;
         }
-        // 优先级：未覆盖站多优先、新入库优先（方案第九节）
-        priority.insert(key.clone(), (uncovered, entry.first_seen));
+        // 优先级：未覆盖站多优先、新入库优先（方案第九节）。
+        // 新入库用「成员种子里最晚 added_on」：首扫描时 first_seen 全一样，
+        // 拿它当次要键等于按 hash 字典序排——实机上就是随机挑，没有意义。
+        priority.insert(key.clone(), (uncovered, entry.newest_added()));
     }
     // 各站队列按内容优先级排（同一站内先处理未覆盖站多的内容）
     let prio = |key: &str| priority.get(key).cloned().unwrap_or((0, 0));
     for items in site_queues.values_mut() {
         items.sort_by_key(|i| std::cmp::Reverse(prio(&i.key)));
+    }
+    // 一轮的检索预算撑不起无限队列：4 万内容 × 9 站 = 37 万个待办，
+    // 排进来只会白占内存（每格带名字/全文 hash/tracker 表）与排序时间。
+    // 按预算给每站截断——预算 200 时最多也就跑得了百来格，多的下轮再来。
+    let per_site_cap = cfg.coverage.search_budget.max(1) as usize;
+    for items in site_queues.values_mut() {
+        items.truncate(per_site_cap);
     }
     // --limit：从最长的队列尾部开始裁，保证每个站都能分到名额
     if let Some(lim) = opts.limit {
@@ -310,13 +340,23 @@ pub fn run_round(
     }
 
     // ---- 4 站点 worker 池 ----
-    let throttle = Arc::new(SiteThrottle::new(
-        Duration::from_secs_f64(cfg.coverage.per_site_interval_sec.max(0.0)),
-        Duration::from_secs_f64(cfg.coverage.jitter_sec.max(0.0)),
-        cfg.coverage.search_budget,
-        cfg.coverage.source_budget,
-        cfg.coverage.upload_budget,
-    ));
+    let throttle = Arc::new(
+        SiteThrottle::with_rate_limit_floor(
+            Duration::from_secs_f64(cfg.coverage.per_site_interval_sec.max(0.0)),
+            Duration::from_secs_f64(cfg.coverage.jitter_sec.max(0.0)),
+            cfg.coverage.search_budget,
+            cfg.coverage.source_budget,
+            cfg.coverage.upload_budget,
+            Duration::from_secs(cfg.coverage.rate_limit_floor_sec),
+        )
+        .with_site_intervals(
+            cfg.coverage
+                .site_intervals
+                .iter()
+                .map(|(k, v)| (k.clone(), Duration::from_secs_f64(*v)))
+                .collect(),
+        ),
+    );
     let fp_cache: Arc<FingerprintCache> = Arc::new(Mutex::new(HashMap::new()));
     let source_cache: Arc<SourceCache> = Arc::new(Mutex::new(HashMap::new()));
     let pool: SiteQueuePool = Arc::new(Mutex::new(site_queues.into_iter().collect()));
@@ -375,7 +415,7 @@ pub fn run_round(
                 key,
                 reason,
             } => {
-                report.preskipped += 1;
+                report.skipped_no_budget += 1;
                 emit(Event::ItemSkipped {
                     site_id,
                     key,
@@ -547,11 +587,14 @@ fn process_item(
     };
 
     // ---- 检索臂（方案第六节：先检索后转种）----
-    if !throttle.acquire(site_id, BudgetKind::Search) {
-        return skipped("本轮检索预算用完，下次接着跑");
-    }
-    let mut found = match adapter.search(&item.name, "", false, "") {
-        Ok(h) => h,
+    // 一次「检索」在站上可能是 3–6 发请求（查询词阶梯逐级放宽），所以预算与站间隔
+    // 按请求领号（gate），而不是按 search 调用领号——否则 5 个查询会在 1 秒内连发。
+    let gate_site = site_id.to_string();
+    let mut gate = move || throttle.acquire(&gate_site, BudgetKind::Search);
+    let mut found = match adapter.search(&item.name, "", false, "", &mut gate) {
+        Ok(SearchOutcome::Hit(h)) => Some(h),
+        Ok(SearchOutcome::Miss) => None,
+        Ok(SearchOutcome::BudgetExhausted) => return skipped("本轮检索预算用完，下次接着跑"),
         // 「检索报错」与「站内没有」是两回事：cookie 失效、站点 500 不能记成负缓存；
         // 限流（429/503）还要给该站退避，别按原节奏接着敲
         Err(e) => {
@@ -562,18 +605,19 @@ fn process_item(
         }
     };
     if found.is_none() && cov.relaxed_retry_search {
-        if !throttle.acquire(site_id, BudgetKind::Search) {
-            return skipped("本轮检索预算用完（宽松重试没跑），下次接着跑");
-        }
-        found = match adapter.search(&item.name, "", true, "") {
-            Ok(h) => h,
+        match adapter.search(&item.name, "", true, "", &mut gate) {
+            Ok(SearchOutcome::Hit(h)) => found = Some(h),
+            Ok(SearchOutcome::Miss) => {}
+            Ok(SearchOutcome::BudgetExhausted) => {
+                return skipped("本轮检索预算用完（宽松重试没跑），下次接着跑")
+            }
             Err(e) => {
                 if crate::sites::nexusphp::error_is_rate_limited(&e) {
                     throttle.note_rate_limited(site_id);
                 }
                 return done(CoverageStatus::Failed, format!("宽松检索失败：{e:#}"));
             }
-        };
+        }
     }
     let Some(hit) = found else {
         // ---- 转种臂（站内没有）----
@@ -858,18 +902,23 @@ fn reseed_arm(
             }
         }
     }
-    // 走源种定位：源站名单 = 全部参与站点（已在做种的源站优先，resolver 内排序）
+    // 走源种定位：源站名单 = 全部参与站点（已在做种的源站优先，resolver 内排序）。
+    // 刚检索过的目标站要剔掉——同一套查询词再问一遍「源站」纯属白花请求
+    // （站内没有就是没有，换目标站才是新信息）。实机一轮里这一条能省掉一半请求。
     let sites: Vec<SourceSite<'_>> = adapters
         .iter()
+        .filter(|a| a.site_id != *site_id)
         .map(|a| SourceSite {
             client: a.as_ref(),
-            announce_host: a
-                .base
-                .host_str()
-                .map(|h| h.to_lowercase())
-                .unwrap_or_default(),
+            announce_hosts: a.announce_hosts.clone(),
         })
         .collect();
+    if sites.is_empty() {
+        return done(
+            CoverageStatus::WaitSource,
+            "站内没有；本轮没有别的源站可问（参与站只有这一家）".into(),
+        );
+    }
     match resolve_source(
         &item.name,
         &item.tracker_hosts,
@@ -976,6 +1025,44 @@ fn collect_verifying(
         )),
         Err(_) => None,
     }
+}
+
+/// 首扫描（或索引里还没有清单摘要的种子）预取文件清单。
+///
+/// 只有「hash 在索引里查不到」或「所属条目还是 hash-only 占位（没有摘要）」的种子需要抓；
+/// 已有摘要的种子一律跳过——这是二次扫描便宜的关键（4 万条的索引重扫零请求）。
+/// 抓不到的 seed 不进结果，merge_scan 会退回 hash-only 条目，下一轮再补。
+pub fn prefetch_files(
+    qb: &QBittorrent,
+    torrents: &[LocalTorrent],
+    index: &ContentIndex,
+    concurrency: usize,
+    mut on_progress: impl FnMut(usize, usize),
+) -> HashMap<String, Vec<(String, i64)>> {
+    let known: HashSet<String> = index.hash_to_key().into_keys().collect();
+    let mut needs_digest: HashSet<String> = HashSet::new();
+    for e in index.contents.values() {
+        if e.manifest_digest.is_empty() {
+            needs_digest.extend(e.all_hashes());
+        }
+    }
+    let mut need: Vec<String> = Vec::new();
+    for t in torrents {
+        if t.progress < 1.0 {
+            continue;
+        }
+        let hashes = t.all_hashes();
+        let covered = hashes.iter().any(|h| known.contains(h));
+        let pending = hashes.iter().any(|h| needs_digest.contains(h));
+        if !covered || pending {
+            need.push(t.hash.clone());
+        }
+    }
+    need.sort_unstable();
+    need.dedup();
+    qb.torrent_files_many(&need, concurrency, |done, total, _ok| {
+        on_progress(done, total)
+    })
 }
 
 fn fingerprint_of(

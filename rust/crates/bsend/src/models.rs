@@ -22,6 +22,8 @@ pub struct LocalTorrent {
     pub progress: f64,
     /// 该种子现有的 tracker host（小写）：判断「这份文件已经在哪些站做种」
     pub tracker_hosts: Vec<String>,
+    /// 加进下载器的时间（qB 的 added_on）：铺种优先级「新入库优先」看它
+    pub added_on: i64,
 }
 
 impl LocalTorrent {
@@ -36,6 +38,7 @@ impl LocalTorrent {
         total_size: i64,
         progress: f64,
         tracker_hosts: Vec<String>,
+        added_on: i64,
     ) -> Self {
         Self {
             hash: hash.to_lowercase(),
@@ -50,6 +53,7 @@ impl LocalTorrent {
                 .into_iter()
                 .map(|h| h.to_lowercase())
                 .collect(),
+            added_on,
         }
     }
 

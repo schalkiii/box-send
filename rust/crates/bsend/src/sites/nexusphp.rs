@@ -39,6 +39,8 @@ pub struct NexusPhp {
     pub search_url_tmpl: Option<String>,
     /// 手工拼好的 Cookie 头（config 从 cookies.json 按站点 host 组装）
     pub cookie: Option<String>,
+    /// 该站 announce 的 host 列表（判断「已在做种」用；默认就是页面 host）
+    pub announce_hosts: Vec<String>,
     pub user_agent: String,
     client: Client,
 }
@@ -57,6 +59,15 @@ pub struct TorrentPage {
     pub download_url: String,
 }
 
+/// 检索结果。必须区分「站内没有」与「预算不够没查完」——后者绝不能落负缓存。
+#[derive(Debug, Clone)]
+pub enum SearchOutcome {
+    Hit(SearchHit),
+    Miss,
+    /// 领号失败（本轮预算用完）：调用方本轮跳过这一格，下轮从头查
+    BudgetExhausted,
+}
+
 impl NexusPhp {
     pub fn new(
         site_id: &str,
@@ -68,12 +79,21 @@ impl NexusPhp {
         let base = Url::parse(base_url).with_context(|| format!("站点 URL 不合法：{base_url}"))?;
         let client = Client::builder()
             .timeout(Duration::from_secs(30))
+            // PT 站请求一律直连：passkey 与账号 IP 绑定，走代理既可能连不上也都算异常登录；
+            // 另外 Windows 上「系统代理已停用但注册表仍留着 ProxyServer」会让 reqwest
+            // 去连一个不存在的 SOCKS，每次请求卡满超时（实机踩到过）。
+            .no_proxy()
             .build()
             .context("构建 HTTP 客户端失败")?;
+        let announce_hosts = base
+            .host_str()
+            .map(|h| vec![h.to_lowercase()])
+            .unwrap_or_default();
         Ok(Self {
             site_id: site_id.to_string(),
             site_name: site_name.to_string(),
             base,
+            announce_hosts,
             search_url_tmpl: search_url_tmpl
                 .filter(|s| !s.is_empty())
                 .map(|s| s.to_string()),
@@ -81,6 +101,14 @@ impl NexusPhp {
             user_agent: DEFAULT_UA.to_string(),
             client,
         })
+    }
+
+    /// 设置 announce host 列表（页面 host 之外还有别名的站：luckpt / chdbits）
+    pub fn with_announce_hosts(mut self, hosts: Vec<String>) -> Self {
+        if !hosts.is_empty() {
+            self.announce_hosts = hosts;
+        }
+        self
     }
 
     fn get(&self, url: &str, referer: &str) -> Result<reqwest::blocking::Response> {
@@ -100,7 +128,9 @@ impl NexusPhp {
             return Err(anyhow!("站点回 HTTP {status}（多半是 cookie 失效）：{url}"));
         }
         let final_url = resp.url().as_str().to_lowercase();
-        if ["login", "enter.php", "signin", "auth/login"]
+        // `returnto=` 是 NexusPHP 被踹回登录页时的跳转参数（实机 pter：index.php?returnto=torrents.php…），
+        // 只看 login/signin 会漏掉这一种，把「cookie 失效」误当成「站内没有」
+        if ["login", "enter.php", "signin", "auth/login", "returnto="]
             .iter()
             .any(|hint| final_url.contains(hint))
         {
@@ -112,13 +142,18 @@ impl NexusPhp {
     /// 站内检索找回已存在种子。`relaxed = true` 放宽到「按词元包含」判定：结果页常把长标题
     /// 截断（…LPCM 2.0 2Audios..）、或在同名标题里插备注，严格互含判不出来。只在站点已经
     /// 回答「已存在」、只差找回链接时使用；上传前查重仍走严格判定。
+    ///
+    /// 查询词阶梯每级都是一次真实 HTTP 请求，实机一轮里一个「站内没有」要花 3 次（严格）
+    /// 再加上至多 5 次（宽松）。所以每个请求前都过一次 `gate`（预算 + 站间隔）：不接的话
+    /// 几个查询会在 1 秒内连发，PT 站会按爬虫处理。
     pub fn search(
         &self,
         name: &str,
         subtitle: &str,
         relaxed: bool,
         imdb: &str,
-    ) -> Result<Option<SearchHit>> {
+        gate: &mut dyn FnMut() -> bool,
+    ) -> Result<SearchOutcome> {
         // 未配 searchURL 时退回 torrents.php?search=（NexusPHP 家族都有这个通用端点）
         let tmpl = self
             .search_url_tmpl
@@ -129,6 +164,9 @@ impl NexusPhp {
             if !seen.insert(normalize_search_name(&q)) {
                 continue;
             }
+            if !gate() {
+                return Ok(SearchOutcome::BudgetExhausted);
+            }
             let url = self.build_search_url(&tmpl, &q, imdb);
             let resp = self.get(&url, self.base.as_str())?;
             let status = resp.status().as_u16();
@@ -136,6 +174,9 @@ impl NexusPhp {
             if status != 200 {
                 let head: String = html.chars().take(120).collect();
                 return Err(anyhow!("HTTP {status} 检索 {url}：{head}"));
+            }
+            if let Some(notice) = block_notice(&html) {
+                return Err(anyhow!("站点限流（{notice}）：{url}"));
             }
             if NO_RESULT_MARKERS.iter().any(|m| html.contains(m)) {
                 continue;
@@ -145,10 +186,10 @@ impl NexusPhp {
             let names = match_names(&target, name);
             let base = Url::parse(&url).unwrap_or_else(|_| self.base.clone());
             if let Some(hit) = search_name_in_results(&html, &names, &base, relaxed) {
-                return Ok(Some(hit));
+                return Ok(SearchOutcome::Hit(hit));
             }
         }
-        Ok(None)
+        Ok(SearchOutcome::Miss)
     }
 
     fn build_search_url(&self, tmpl: &str, name: &str, imdb: &str) -> String {
@@ -183,6 +224,9 @@ impl NexusPhp {
             let head: String = html.chars().take(120).collect();
             return Err(anyhow!("HTTP {status} 抓详情 {detail_url}：{head}"));
         }
+        if let Some(notice) = block_notice(&html) {
+            return Err(anyhow!("站点限流（{notice}）：{detail_url}"));
+        }
         let base = Url::parse(detail_url).unwrap_or_else(|_| self.base.clone());
         parse_torrent_page(&html, detail_url, &base)
             .ok_or_else(|| anyhow!("详情页解析不出标题/下载链接：{detail_url}"))
@@ -206,6 +250,9 @@ impl NexusPhp {
         // 校验是有效 bencode 且含 info（防止误抓 HTML 提示页，如下载链接过期/失效时）
         if bencode::info_hash_v1(&data).is_none() {
             let text = String::from_utf8_lossy(&data).to_string();
+            if let Some(notice) = block_notice(&text) {
+                return Err(anyhow!("站点限流（{notice}）：{}", page.download_url));
+            }
             let notice = download_notice(&text);
             let head: String = text.chars().take(80).collect();
             let reason = if notice.is_empty() {
@@ -224,7 +271,37 @@ impl NexusPhp {
 /// 同一机制但从未接线，Rust 版这里把它接上。
 pub fn error_is_rate_limited(e: &anyhow::Error) -> bool {
     let msg = format!("{e:#}");
-    msg.contains("HTTP 429") || msg.contains("HTTP 503")
+    msg.contains("HTTP 429")
+        || msg.contains("HTTP 503")
+        // 站点限流页（HTTP 200 + 提示页）在 block_notice 里转成错误，这里一并认
+        || msg.contains("站点限流")
+}
+
+/// NexusPHP 站的「限流 / 拦截」页：IRL 见 hdsky——HTTP 200、正文却是
+/// `<title>403</title>` +「请求过于频繁，限制访问间隔 60 秒/次」。
+/// 这种页绝不能当「站内没有」（会把整站记成 7/30 天负缓存），必须冒成错误并让该站退避。
+pub fn block_notice(html: &str) -> Option<&'static str> {
+    const MARKERS: [&str; 8] = [
+        "请求过于频繁",
+        "限制访问间隔",
+        "访问过于频繁",
+        "请求太频繁",
+        "Too Many Requests",
+        "Access Denied",
+        "你已被禁止",
+        "账号已被禁用",
+    ];
+    for m in MARKERS {
+        if html.contains(m) {
+            return Some(m);
+        }
+    }
+    // 极短的 403 页（标题就写着 403）：别拿它当「没有搜索结果」
+    let head: String = html.chars().take(4096).collect::<String>().to_lowercase();
+    if head.contains("<title>403") {
+        return Some("HTTP 403 页");
+    }
+    None
 }
 
 // ---------- 查询词阶梯 ----------
@@ -1010,6 +1087,20 @@ mod tests {
         let sub = relaxed.last().unwrap();
         assert_eq!(sub.0, "黑礁 第一季");
         assert_eq!(sub.1, "黑礁 第一季");
+    }
+
+    #[test]
+    fn block_pages_are_detected() {
+        // 实机 hdsky：HTTP 200，正文是 403 提示页（限流 60 秒/次）
+        let hdsky = "<html><head><title>403</title></head><body><h3>请求过于频繁，限制访问间隔 60 秒/次</h3></body></html>";
+        assert_eq!(block_notice(hdsky), Some("请求过于频繁"));
+        // 短 403 页（只剩标题）也要认
+        assert!(block_notice("<html><title>403 Forbidden</title></html>").is_some());
+        // 正常的结果页不能被误判成拦截页
+        assert!(block_notice("<html><title>搜索结果</title><p>没有种子</p></html>").is_none());
+        // 限流页转成的错误要让调用方走退避
+        let e = anyhow!("站点限流（请求过于频繁）：https://hdsky.me/torrents.php");
+        assert!(error_is_rate_limited(&e));
     }
 
     #[test]

@@ -84,6 +84,9 @@ pub struct TorrentMeta {
     /// 该种子自己挂的 tracker host（小写；条目的 trackerHosts 是并集）
     pub tracker_hosts: Vec<String>,
     pub hash_v2: Option<String>,
+    /// 进下载器的时间（老索引没有这条，缺省 0）
+    #[serde(default)]
+    pub added_on: i64,
 }
 
 /// 内容 × 站点 的一个格子
@@ -169,6 +172,15 @@ impl ContentEntry {
     pub fn pick_meta(&self) -> Option<(&String, &TorrentMeta)> {
         self.torrents.iter().next()
     }
+
+    /// 成员种子里最晚进下载器的时间：铺种优先级「新入库优先」用
+    pub fn newest_added(&self) -> i64 {
+        self.torrents
+            .values()
+            .map(|m| m.added_on)
+            .max()
+            .unwrap_or(0)
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -199,6 +211,14 @@ pub struct ContentIndex {
 }
 
 impl ContentIndex {
+    /// 纯内存索引（测试/报告计算用，不落盘）
+    pub fn in_memory() -> Self {
+        Self {
+            path: PathBuf::new(),
+            contents: BTreeMap::new(),
+        }
+    }
+
     pub fn load(path: &Path) -> Self {
         let contents = match std::fs::read_to_string(path) {
             // 没有文件 = 初次运行，正常给空索引
@@ -339,6 +359,7 @@ impl ContentIndex {
                         last_seen: now,
                         tracker_hosts: t.tracker_hosts.clone(),
                         hash_v2: t.hash_v2.clone(),
+                        added_on: t.added_on,
                     },
                 );
             }
@@ -428,6 +449,7 @@ mod tests {
             size,
             1.0,
             hosts.iter().map(|h| h.to_string()).collect(),
+            1000,
         )
     }
 

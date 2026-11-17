@@ -6,8 +6,9 @@
 //! - add 回 409 = 种子已在下载器（跨站转种同 hash 太常见），要补挂目标站 tracker 才算落地；
 //! - addTrackers 带 `hash`+`hashes` 两份参数，老版本回退 setTrackers 整表重写。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
@@ -26,6 +27,9 @@ pub struct QBittorrent {
     /// 已登录（SID 在 cookie store 里）。免得每个 API 调用都重打一次 /auth/login，
     /// 把对下载器的请求数翻倍
     logged_in: AtomicBool,
+    /// `/torrents/files` 认哪个参数名（qB 5.3 只认 `hash`，4.x 认 `hashes`）。
+    /// 命中一次就记住，别每次都先撞一发 400——首扫 4 万条种子就是 4 万次白跑。
+    files_param: Mutex<Option<&'static str>>,
 }
 
 /// 推种结果：`id` 是 v1 info hash（.torrent 解不出时为空），`note` 给人看（已存在/补挂/限速未生效…）
@@ -40,6 +44,10 @@ impl QBittorrent {
         let client = Client::builder()
             .cookie_store(true)
             .timeout(Duration::from_secs(60))
+            // 下载器是本机/局域网服务，走代理只会有害：实机上系统注册表残留
+            // `ProxyServer=socks=127.0.0.1:9090`（ProxyEnable=0 但 reqwest 照样读），
+            // 每次请求先去连那个不存在的 SOCKS，单次卡满 30 秒超时。
+            .no_proxy()
             .build()
             .context("构建 HTTP 客户端失败")?;
         Ok(Self {
@@ -48,6 +56,7 @@ impl QBittorrent {
             username: username.to_string(),
             password: password.to_string(),
             logged_in: AtomicBool::new(false),
+            files_param: Mutex::new(None),
         })
     }
 
@@ -89,11 +98,31 @@ impl QBittorrent {
 
     pub fn test_connection(&self) -> Result<String> {
         self.login()?;
-        let resp = self.get_json("/api/v2/app/version")?;
-        let version = resp
-            .get("version")
-            .and_then(|v| v.as_str())
-            .unwrap_or("未知版本");
+        let resp = self
+            .client
+            .get(format!("{}/api/v2/app/version", self.base_url))
+            .headers(self.referer_headers())
+            .send()
+            .context("GET /app/version 没通")?;
+        let status = resp.status().as_u16();
+        let text = resp.text().unwrap_or_default();
+        if status != 200 {
+            self.session_died(status);
+            return Err(anyhow!("HTTP {status} GET /app/version"));
+        }
+        // qB 5.x 起该端点回纯文本（`v5.3.0`），4.x 回 JSON（`{"version":"v4.6.2"}`）——两版都认
+        let trimmed = text.trim();
+        let version = if trimmed.starts_with('{') {
+            serde_json::from_str::<Value>(trimmed)
+                .ok()
+                .and_then(|v| v.get("version").and_then(|x| x.as_str()).map(String::from))
+                .unwrap_or_default()
+        } else {
+            trimmed.to_string()
+        };
+        if version.is_empty() {
+            return Err(anyhow!("GET /app/version 回包是空的"));
+        }
         Ok(format!("qBittorrent {version}，登录成功"))
     }
 
@@ -135,8 +164,7 @@ impl QBittorrent {
 
     // ---- 辅种要读的三样：种子清单、文件清单、暂停/删除 ----
 
-    /// 种子清单。`tracker_hosts`（qB 4.6+）或 `trackers`（老版本，`|` 分隔的 announce 列表）
-    /// 任一能用就用；都拿不到的种子 tracker 列表为空（不阻断，后续按无 tracker 处理）。
+    /// 种子清单。取全量再逐条解析（`parse_torrent`），字段兼容全在解析里。
     pub fn list_torrents(&self) -> Result<Vec<LocalTorrent>> {
         self.login()?;
         let arr = self
@@ -144,93 +172,122 @@ impl QBittorrent {
             .as_array()
             .cloned()
             .ok_or_else(|| anyhow!("torrents/info 回包不是数组"))?;
-        Ok(arr
-            .into_iter()
-            .filter_map(|t| {
-                let hash = t.get("hash")?.as_str()?.to_lowercase();
-                let hosts: Vec<String> =
-                    if let Some(th) = t.get("tracker_hosts").and_then(|v| v.as_array()) {
-                        th.iter()
-                            .filter_map(|h| h.as_str())
-                            .map(|h| h.to_lowercase())
-                            .collect()
-                    } else if let Some(tr) = t.get("trackers").and_then(|v| v.as_str()) {
-                        tr.split('|')
-                            .filter_map(|u| url::Url::parse(u).ok())
-                            .filter_map(|u| u.host_str().map(|h| h.to_lowercase()))
-                            .collect()
-                    } else {
-                        Vec::new()
-                    };
-                Some(LocalTorrent::new(
-                    &hash,
-                    t.get("infohash_v2").and_then(|v| v.as_str()),
-                    t.get("name").and_then(|v| v.as_str()).unwrap_or(""),
-                    t.get("save_path").and_then(|v| v.as_str()).unwrap_or(""),
-                    t.get("category").and_then(|v| v.as_str()),
-                    t.get("tags")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .split(',')
-                        .map(|s| s.trim().to_string())
-                        .filter(|s| !s.is_empty())
-                        .collect(),
-                    t.get("size").and_then(|v| v.as_i64()).unwrap_or(0),
-                    t.get("progress").and_then(|v| v.as_f64()).unwrap_or(0.0),
-                    hosts,
-                ))
-            })
-            .collect())
+        Ok(arr.iter().filter_map(parse_torrent).collect())
     }
 
-    /// 文件清单。参数名两版都试（同 trackers 端点的老坑：qB 5.x 只认 hash）
+    /// 批量读文件清单：`concurrency` 个线程并发取。首扫描 4 万条种子 = 4 万次
+    /// `/torrents/files` 请求，单线程串行要十几分钟；并发后压到分钟级。
+    /// 取失败的 hash 不进结果——调用方按「拿不到清单」处理（不许拿残缺清单算身份）。
+    /// `on_progress(已完成, 总数, 该条是否成功)` 在主线程按完成顺序回调。
+    pub fn torrent_files_many(
+        &self,
+        hashes: &[String],
+        concurrency: usize,
+        mut on_progress: impl FnMut(usize, usize, bool),
+    ) -> HashMap<String, Vec<(String, i64)>> {
+        let total = hashes.len();
+        if total == 0 {
+            return HashMap::new();
+        }
+        // 先登一次：并发线程各自 login 会同时打 /auth/login
+        let _ = self.login();
+        let queue: Mutex<VecDeque<String>> = Mutex::new(hashes.iter().cloned().collect());
+        let (tx, rx) = std::sync::mpsc::channel::<(String, Option<Vec<(String, i64)>>)>();
+        let n = concurrency.clamp(1, 32).min(total);
+        std::thread::scope(|scope| {
+            for _ in 0..n {
+                let tx = tx.clone();
+                let queue = &queue;
+                scope.spawn(move || loop {
+                    let next = { queue.lock().unwrap().pop_front() };
+                    let Some(h) = next else { break };
+                    let files = self.torrent_files(&h).ok();
+                    if tx.send((h, files)).is_err() {
+                        break;
+                    }
+                });
+            }
+            drop(tx);
+            let mut out = HashMap::with_capacity(total);
+            let mut done = 0usize;
+            for (h, files) in rx {
+                done += 1;
+                match files {
+                    Some(f) => {
+                        out.insert(h, f);
+                        on_progress(done, total, true);
+                    }
+                    None => on_progress(done, total, false),
+                }
+            }
+            out
+        })
+    }
+
+    /// 文件清单。参数名两版都试（qB 5.3 实测只认 `hash`；4.x 认 `hashes`），
+    /// 成功的那个参数名会被记住，后续调用不再先撞 400。
+    /// 一过性失败（qB 忙时偶发 400/超时）重试一次——单次抖动不该让一格内容失败 7 天。
     pub fn torrent_files(&self, hash: &str) -> Result<Vec<(String, i64)>> {
         self.login()?;
-        for param in ["hashes", "hash"] {
-            let Ok(resp) = self
-                .client
-                .get(format!(
-                    "{}/api/v2/torrents/files?{}={}",
-                    self.base_url, param, hash
-                ))
-                .headers(self.referer_headers())
-                .send()
-            else {
-                continue;
-            };
-            let st = resp.status().as_u16();
-            if st != 200 {
-                self.session_died(st);
-                continue;
+        let mut last = String::new();
+        for attempt in 0..2 {
+            if attempt > 0 {
+                std::thread::sleep(Duration::from_millis(300));
             }
-            let Ok(text) = resp.text() else { continue };
-            let Ok(obj) = serde_json::from_str::<Value>(&text) else {
-                continue;
+            let preferred = *self.files_param.lock().unwrap();
+            let order: [&'static str; 2] = match preferred {
+                Some("hash") => ["hash", "hashes"],
+                _ => ["hashes", "hash"],
             };
-            // 多 hash 查询时 qB 回 [[file,…],…]；单 hash 直接回 [file,…]
-            let list: Vec<Value> = if let Some(arr) = obj.as_array() {
-                arr.clone()
-            } else if let Some(outer) = obj.as_array().and_then(|a| a.first().cloned()) {
-                match outer.as_array() {
-                    Some(inner) => inner.clone(),
-                    None => continue,
+            for param in order {
+                let Ok(resp) = self
+                    .client
+                    .get(format!(
+                        "{}/api/v2/torrents/files?{}={}",
+                        self.base_url, param, hash
+                    ))
+                    .headers(self.referer_headers())
+                    .send()
+                else {
+                    last = "请求没通".to_string();
+                    continue;
+                };
+                let st = resp.status().as_u16();
+                if st != 200 {
+                    self.session_died(st);
+                    last = format!("HTTP {st}（{param}）");
+                    continue;
                 }
-            } else {
-                continue;
-            };
-            let files: Vec<(String, i64)> = list
-                .into_iter()
-                .filter_map(|f| {
-                    let path = f.get("name")?.as_str()?.to_string();
-                    let size = f.get("size").and_then(|v| v.as_i64()).unwrap_or(0);
-                    Some((path, size))
-                })
-                .collect();
-            if !files.is_empty() {
-                return Ok(files);
+                let Ok(text) = resp.text() else { continue };
+                let Ok(obj) = serde_json::from_str::<Value>(&text) else {
+                    continue;
+                };
+                // 多 hash 查询时 qB 回 [[file,…],…]；单 hash 直接回 [file,…]
+                let list: Vec<Value> = if let Some(arr) = obj.as_array() {
+                    arr.clone()
+                } else if let Some(outer) = obj.as_array().and_then(|a| a.first().cloned()) {
+                    match outer.as_array() {
+                        Some(inner) => inner.clone(),
+                        None => continue,
+                    }
+                } else {
+                    continue;
+                };
+                let files: Vec<(String, i64)> = list
+                    .into_iter()
+                    .filter_map(|f| {
+                        let path = f.get("name")?.as_str()?.to_string();
+                        let size = f.get("size").and_then(|v| v.as_i64()).unwrap_or(0);
+                        Some((path, size))
+                    })
+                    .collect();
+                if !files.is_empty() {
+                    *self.files_param.lock().unwrap() = Some(param);
+                    return Ok(files);
+                }
             }
         }
-        Err(anyhow!("读不到 {hash} 的文件清单"))
+        Err(anyhow!("读不到 {hash} 的文件清单（{last}）"))
     }
 
     /// 单条种子的完整 info 对象（progress/state/up_limit/…）
@@ -553,3 +610,141 @@ impl QBittorrent {
 
 /// 站点 upLimit 的查询表（boxsend.json 的 siteUpLimits；Rust 版 v1 由 coverage 配置直接给每站限速）
 pub type SiteUpLimits = HashMap<String, i64>;
+
+// ---------- /torrents/info 记录解析 ----------
+
+/// announce URL 的 host（小写）。qB 用 `** [DHT] **` / `** [PeX] **` / `** [LSD] **`
+/// 占位符表示非 HTTP tracker，解析不出 host 直接丢。
+fn host_of_announce(url: &str) -> Option<String> {
+    url::Url::parse(url.trim())
+        .ok()?
+        .host_str()
+        .map(|h| h.to_lowercase())
+}
+
+/// 一条记录的 tracker host 列表。字段有三个版本：
+/// - `tracker_hosts`：数组，qB 4.6+（**qB 5.x 已不再返回**）；
+/// - `trackers`：`|` 分隔的 announce URL 串，更老的版本；
+/// - `tracker`：当前那条 announce URL，qB 5.x 实测只剩这个。
+///
+/// 实机（qB 5.3.0，41,885 条种子）里前两者都不存在。只认前两者会让
+/// `tracker_hosts` 全空 →「已在做种」预筛失效 → 全部内容按未覆盖逐站检索。
+/// 取当前 tracker 只是近似：一条种子挂多站时只报一个，但跨站辅种在下载器里
+/// 本来就是多条种子（不同 hash 合并成同一段内容），并集照样能覆盖到各站。
+fn tracker_hosts_of(t: &Value) -> Vec<String> {
+    if let Some(arr) = t.get("tracker_hosts").and_then(|v| v.as_array()) {
+        let hosts: Vec<String> = arr
+            .iter()
+            .filter_map(|h| h.as_str())
+            .map(|h| h.to_lowercase())
+            .collect();
+        if !hosts.is_empty() {
+            return hosts;
+        }
+    }
+    if let Some(list) = t.get("trackers").and_then(|v| v.as_str()) {
+        let hosts: Vec<String> = list.split('|').filter_map(host_of_announce).collect();
+        if !hosts.is_empty() {
+            return hosts;
+        }
+    }
+    t.get("tracker")
+        .and_then(|v| v.as_str())
+        .and_then(host_of_announce)
+        .into_iter()
+        .collect()
+}
+
+/// 一条 `/torrents/info` 记录 → `LocalTorrent`。字段名两版兼容（`infohash_v2` 空串
+/// 表示不是 v2 种子，必须落成 `None`，否则空 hash 会进身份表把所有内容串在一起）。
+pub fn parse_torrent(t: &Value) -> Option<LocalTorrent> {
+    let hash = t.get("hash")?.as_str()?.to_lowercase();
+    if hash.is_empty() {
+        return None;
+    }
+    let hash_v2 = t
+        .get("infohash_v2")
+        .and_then(|v| v.as_str())
+        .filter(|h| !h.is_empty());
+    Some(LocalTorrent::new(
+        &hash,
+        hash_v2,
+        t.get("name").and_then(|v| v.as_str()).unwrap_or(""),
+        t.get("save_path").and_then(|v| v.as_str()).unwrap_or(""),
+        t.get("category").and_then(|v| v.as_str()),
+        t.get("tags")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect(),
+        t.get("size").and_then(|v| v.as_i64()).unwrap_or(0),
+        t.get("progress").and_then(|v| v.as_f64()).unwrap_or(0.0),
+        tracker_hosts_of(t),
+        t.get("added_on").and_then(|v| v.as_i64()).unwrap_or(0),
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn single_tracker_field_is_used_as_host() {
+        // 实机 qB 5.3 形态：只有 tracker（当前那条 announce），没有 tracker_hosts/trackers
+        let t = json!({
+            "hash": "D4502B049F04AFFC70F6D2C76483717F6F709E01",
+            "infohash_v2": "",
+            "name": "Some.Release.1080p-GROUP",
+            "save_path": "I:/Download",
+            "category": "",
+            "tags": "",
+            "size": 105,
+            "progress": 1.0,
+            "tracker": "https://tracker.hdsky.me/announce.php?passkey=abc"
+        });
+        let lt = parse_torrent(&t).expect("能解析");
+        assert_eq!(lt.hash, "d4502b049f04affc70f6d2c76483717f6f709e01");
+        assert_eq!(lt.hash_v2, None, "空串不是 v2 hash");
+        assert_eq!(lt.tracker_hosts, vec!["tracker.hdsky.me"]);
+    }
+
+    #[test]
+    fn richer_fields_win_over_single_tracker() {
+        // 新版若回数组就用数组（多站并集才准）；老版 trackers 串次之
+        let arr = json!({
+            "hash": "aa", "size": 1, "progress": 1.0,
+            "tracker_hosts": ["HDSky.ME", "pterclub.net"],
+            "tracker": "https://unused.example/announce"
+        });
+        assert_eq!(
+            parse_torrent(&arr).unwrap().tracker_hosts,
+            vec!["hdsky.me", "pterclub.net"]
+        );
+        let pipe = json!({
+            "hash": "bb", "size": 1, "progress": 1.0,
+            "trackers": "https://tracker.pterclub.net/announce|udp://x.example:80/announce",
+            "tracker": "https://unused.example/announce"
+        });
+        assert_eq!(
+            parse_torrent(&pipe).unwrap().tracker_hosts,
+            vec!["tracker.pterclub.net", "x.example"]
+        );
+    }
+
+    #[test]
+    fn pseudo_trackers_are_ignored() {
+        // 无 HTTP tracker 的种子：qB 的占位符解析不出 host → 空列表（后续按无 tracker 处理）
+        let t = json!({
+            "hash": "cc", "size": 1, "progress": 1.0, "tracker": "** [DHT] **"
+        });
+        assert!(parse_torrent(&t).unwrap().tracker_hosts.is_empty());
+    }
+
+    #[test]
+    fn record_without_hash_is_skipped() {
+        assert!(parse_torrent(&json!({"name": "x"})).is_none());
+    }
+}

@@ -17,9 +17,10 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
 use bsend::config::Config;
-use bsend::coverage::{run_round, Event, RoundOptions, RoundReport};
+use bsend::coverage::{prefetch_files, run_round, Event, RoundOptions, RoundReport};
 use bsend::index::{ContentIndex, CoverageStatus};
 use bsend::qbittorrent::QBittorrent;
+use bsend::report::CoverageReport;
 use bsend::sites::nexusphp::NexusPhp;
 
 #[derive(Parser)]
@@ -48,6 +49,9 @@ enum Cmd {
         /// 只跑这些站（逗号分隔的站点 id）
         #[arg(long, value_delimiter = ',')]
         sites: Option<Vec<String>>,
+        /// 只处理这段内容（contentKey 前缀或名称包含；调试/单条重试用）
+        #[arg(long)]
+        only: Option<String>,
     },
     /// 跑一整轮铺种：辅种真推下载器，转种出草稿清单
     Run {
@@ -60,9 +64,26 @@ enum Cmd {
         /// 不真加下载器（与 plan 的区别：run --dry-run 会把结论落盘）
         #[arg(long)]
         dry_run: bool,
+        /// 只处理这段内容（contentKey 前缀或名称包含；调试/单条重试用）
+        #[arg(long)]
+        only: Option<String>,
     },
+    /// 只做基线：把「已在做种」的格子标好并落盘，零站点请求（先看清家底）
+    Prime,
     /// 看索引现状：内容数、覆盖分布、转种草稿、待找源
     Status,
+    /// 覆盖报告：逐站覆盖率、未覆盖最多清单、草稿与待找源（可导出 JSON）
+    Report {
+        /// 未覆盖清单显示多少条
+        #[arg(long, default_value_t = 20)]
+        top: usize,
+        /// 导出 JSON（camelCase，原子写；给 GUI / daemon 吃）
+        #[arg(long)]
+        json: Option<PathBuf>,
+        /// 只看这些站（逗号分隔的站点 id）
+        #[arg(long, value_delimiter = ',')]
+        sites: Option<Vec<String>>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -71,13 +92,16 @@ fn main() -> Result<()> {
         .with_context(|| format!("加载配置 {} 失败", cli.config.display()))?;
     match cli.cmd {
         Cmd::Scan => cmd_scan(&cfg),
-        Cmd::Plan { limit, sites } => cmd_round(&cfg, limit, sites, true, false),
+        Cmd::Plan { limit, sites, only } => cmd_round(&cfg, limit, sites, only, true, false),
         Cmd::Run {
             limit,
             sites,
             dry_run,
-        } => cmd_round(&cfg, limit, sites, dry_run, true),
+            only,
+        } => cmd_round(&cfg, limit, sites, only, dry_run, true),
+        Cmd::Prime => cmd_round(&cfg, Some(0), None, None, false, true),
         Cmd::Status => cmd_status(&cfg),
+        Cmd::Report { top, json, sites } => cmd_report(&cfg, top, json, sites),
     }
 }
 
@@ -103,7 +127,7 @@ fn build_adapters(cfg: &Config, filter: &Option<Vec<String>>) -> Result<Vec<Arc<
                 continue;
             }
         }
-        let cookie = cfg.cookie_header_for(&s.announce_host);
+        let cookie = cfg.cookie_header_for(s.primary_host());
         let mut adapter = NexusPhp::new(
             &s.id,
             &s.name,
@@ -113,6 +137,7 @@ fn build_adapters(cfg: &Config, filter: &Option<Vec<String>>) -> Result<Vec<Arc<
         )
         .with_context(|| format!("站点配置不合法：{}", s.id))?;
         adapter.user_agent = cfg.user_agent.clone();
+        adapter = adapter.with_announce_hosts(s.announce_hosts.clone());
         out.push(Arc::new(adapter));
     }
     if out.is_empty() {
@@ -123,24 +148,49 @@ fn build_adapters(cfg: &Config, filter: &Option<Vec<String>>) -> Result<Vec<Arc<
 
 fn cmd_scan(cfg: &Config) -> Result<()> {
     let qb = connect_qb(cfg)?;
+    let started = std::time::Instant::now();
     let torrents = qb.list_torrents()?;
     let mut index = ContentIndex::load(&cfg.coverage_state_path());
-    let files_of = |t: &bsend::models::LocalTorrent| qb.torrent_files(&t.hash).ok();
+    let files = prefetch_files(
+        qb.as_ref(),
+        &torrents,
+        &index,
+        cfg.coverage.scan_concurrency,
+        |done, total| {
+            if total >= 2000 && (done % 2000 == 0 || done == total) {
+                println!(
+                    "  读取文件清单 {done}/{total}（{}s）",
+                    started.elapsed().as_secs()
+                );
+            }
+        },
+    );
+    let files_of = |t: &bsend::models::LocalTorrent| files.get(&t.hash).cloned();
     let now = bsend::coverage::now_unix();
     let delta = index.merge_scan(&torrents, files_of, now, cfg.coverage.archive_days);
     index.save()?;
     println!(
-        "扫描 {} 条种子：新内容 {}、并入 {}、移除 {}、归档 {}、跳过未完成 {}",
+        "扫描 {} 条种子：新内容 {}、并入 {}、移除 {}、归档 {}、跳过未完成 {}（耗时 {}s）",
         torrents.len(),
         delta.new_contents,
         delta.merged,
         delta.removed_torrents,
         delta.purged_contents,
-        delta.skipped_incomplete
+        delta.skipped_incomplete,
+        started.elapsed().as_secs()
     );
+    let size = std::fs::metadata(cfg.coverage_state_path())
+        .map(|m| m.len())
+        .unwrap_or(0);
     println!(
-        "索引：{} 段内容 → {}",
+        "索引：{} 段内容、{} 条成员种子、{} MB → {}",
         index.contents.len(),
+        index
+            .contents
+            .values()
+            .map(|e| e.torrents.len())
+            .sum::<usize>(),
+        size / 1_048_576,
         cfg.coverage_state_path().display()
     );
     Ok(())
@@ -150,6 +200,7 @@ fn cmd_round(
     cfg: &Config,
     limit: Option<usize>,
     sites: Option<Vec<String>>,
+    only: Option<String>,
     dry_run: bool,
     persist: bool,
 ) -> Result<()> {
@@ -170,6 +221,7 @@ fn cmd_round(
         site_filter: sites.map(|v| v.into_iter().collect()),
         dry_run,
         persist,
+        content_filter: only,
     };
     let report = run_round(cfg, qb, &adapters, &mut index, print_event, opts)?;
     print_report(&report);
@@ -229,6 +281,9 @@ fn print_report(r: &RoundReport) {
     }
     if r.preskipped > 0 {
         println!("  预筛跳过 {}", r.preskipped);
+    }
+    if r.skipped_no_budget > 0 {
+        println!("  预算没排上（下轮再来） {}", r.skipped_no_budget);
     }
     for (kind, (used, max)) in &r.budget {
         println!("  预算 {kind}：{used}/{max}");
@@ -318,4 +373,184 @@ fn cmd_status(cfg: &Config) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn cmd_report(
+    cfg: &Config,
+    top: usize,
+    json: Option<PathBuf>,
+    sites: Option<Vec<String>>,
+) -> Result<()> {
+    let index = ContentIndex::load(&cfg.coverage_state_path());
+    let allow: Option<HashSet<String>> = sites.map(|v| v.into_iter().collect());
+    let picked: Vec<bsend::config::SiteConf> = cfg
+        .sites
+        .iter()
+        .filter(|s| allow.as_ref().is_none_or(|a| a.contains(&s.id)))
+        .cloned()
+        .collect();
+    let path_text = cfg.coverage_state_path().display().to_string();
+    let report = CoverageReport::build(
+        &index,
+        &picked,
+        top,
+        bsend::coverage::now_unix(),
+        &path_text,
+    );
+    if report.totals.contents == 0 {
+        println!("索引是空的（{path_text}）：先跑 bsend scan");
+        return Ok(());
+    }
+
+    let when = chrono::DateTime::from_timestamp(report.generated_at, 0)
+        .map(|d| {
+            d.with_timezone(&chrono::Local)
+                .format("%Y-%m-%d %H:%M")
+                .to_string()
+        })
+        .unwrap_or_else(|| report.generated_at.to_string());
+    println!("覆盖报告 {path_text}");
+    println!("生成时间 {when}");
+    println!(
+        "索引：{} 段内容、{} 条成员种子（归档倒计时 {}、源种已定位 {}）",
+        commas(report.totals.contents as i64),
+        commas(report.totals.member_torrents as i64),
+        report.totals.gone_contents,
+        report.totals.resolved_sources
+    );
+    println!();
+    // 表头与数据行都按「终端显示宽度」补齐：中文是 2 列，用 {:<12} 会错位
+    const COLS: [(&str, usize, bool); 12] = [
+        ("站点", 12, false),
+        ("格子", 8, true),
+        ("已覆盖", 8, true),
+        ("做种", 8, true),
+        ("辅种", 6, true),
+        ("转种", 6, true),
+        ("站内没有", 9, true),
+        ("待找源", 7, true),
+        ("待人工", 7, true),
+        ("失败", 6, true),
+        ("未判定", 9, true),
+        ("覆盖率", 8, true),
+    ];
+    let header: Vec<String> = COLS
+        .iter()
+        .map(|(t, w, right)| {
+            if *right {
+                pad_left(t, *w)
+            } else {
+                pad_right(t, *w)
+            }
+        })
+        .collect();
+    println!("{}", header.join(" "));
+    for s in &report.sites {
+        let n = |st: CoverageStatus| s.by_status.get(&st).copied().unwrap_or(0) as i64;
+        let cells = [
+            pad_right(&s.site_id, 12),
+            pad_left(&commas(s.cells as i64), 8),
+            pad_left(&commas(s.covered as i64), 8),
+            pad_left(&commas(n(CoverageStatus::Seeding)), 8),
+            pad_left(&commas(n(CoverageStatus::Assisted)), 6),
+            pad_left(&commas(n(CoverageStatus::Reseeded)), 6),
+            pad_left(&commas(n(CoverageStatus::Miss)), 9),
+            pad_left(&commas(n(CoverageStatus::WaitSource)), 7),
+            pad_left(&commas(n(CoverageStatus::ReviewPending)), 7),
+            pad_left(&commas(n(CoverageStatus::Failed)), 6),
+            pad_left(&commas(s.pending as i64), 9),
+            pad_left(&format!("{:.1}%", s.covered_ratio * 100.0), 8),
+        ];
+        println!("{}", cells.join(" "));
+    }
+
+    if !report.uncovered.is_empty() {
+        println!(
+            "\n未覆盖最多（前 {} 条，按缺站数→体积）：",
+            report.uncovered.len()
+        );
+        for it in &report.uncovered {
+            println!(
+                "  缺 {:>2} 站  {:>8}  {}",
+                it.missing_sites.len(),
+                size_text(it.total_size),
+                it.name
+            );
+        }
+    }
+    if !report.drafts.is_empty() || !report.wait_source.is_empty() {
+        println!(
+            "\n转种草稿 {} 条、待找源 {} 条（详见 bsend status / --json）",
+            report.drafts.len(),
+            report.wait_source.len()
+        );
+    }
+    if let Some(p) = &json {
+        report.write_json(p)?;
+        println!("\nJSON 已写入 {}", p.display());
+    }
+    Ok(())
+}
+
+/// 终端显示宽度：CJK 全角字符占 2 列（表格对齐不能按 char 数算）
+fn disp_width(s: &str) -> usize {
+    s.chars()
+        .map(|c| {
+            let cp = c as u32;
+            let wide = matches!(cp,
+                0x1100..=0x115F
+                | 0x2E80..=0xA4CF
+                | 0xAC00..=0xD7A3
+                | 0xF900..=0xFAFF
+                | 0xFE30..=0xFE6F
+                | 0xFF00..=0xFF60
+                | 0xFFE0..=0xFFE6
+                | 0x1F300..=0x1F64F
+                | 0x20000..=0x3FFFD
+            );
+            if wide {
+                2
+            } else {
+                1
+            }
+        })
+        .sum()
+}
+
+fn pad_left(s: &str, width: usize) -> String {
+    let d = disp_width(s);
+    format!("{}{}", " ".repeat(width.saturating_sub(d)), s)
+}
+
+fn pad_right(s: &str, width: usize) -> String {
+    let d = disp_width(s);
+    format!("{}{}", s, " ".repeat(width.saturating_sub(d)))
+}
+
+/// 千分位（表格里 4 万和 4 千一眼要能分清）
+fn commas(n: i64) -> String {
+    let neg = n < 0;
+    let digits = n.abs().to_string();
+    let mut out = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    if neg {
+        format!("-{out}")
+    } else {
+        out
+    }
+}
+
+/// 字节数 → 人看的大小（GB 起算，铺种看的都是大文件）
+fn size_text(bytes: i64) -> String {
+    let gb = bytes as f64 / 1_073_741_824.0;
+    if gb >= 1.0 {
+        format!("{gb:.1} GB")
+    } else {
+        format!("{:.0} MB", bytes as f64 / 1_048_576.0)
+    }
 }

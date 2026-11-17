@@ -60,6 +60,22 @@ pub struct SiteDef {
     pub default_enabled: bool,
 }
 
+/// 站点 announce 用的额外域名（页面主域之外）。
+///
+/// 实机 41,882 条种子的 tracker host 统计出来的两处真实差异：
+/// - luckpt：页面在 `pt.luckpt.de`，announce 在 `tracker.luckpt.de`（557 条种子）；
+/// - chdbits：页面在 `ptchdbits.co`，announce 在 `chdbits.xyz`（136 条种子）。
+///
+/// 不补这两条，「已在做种」预筛会把它们当成未覆盖去逐站检索（hdsky 那种 60 秒/次的站，
+/// 代价极高）。配置里 `overrides.announceHosts` 可以再追加（GUI 写的配置没有这一项也能跑）。
+pub fn extra_announce_hosts(site_id: &str) -> &'static [&'static str] {
+    match site_id {
+        "luckpt" => &["tracker.luckpt.de"],
+        "chdbits" => &["chdbits.xyz", "chdbits.co"],
+        _ => &[],
+    }
+}
+
 /// tracker host 是否属于这个站点：相等，或 tracker 在站点域名的子域上。
 /// NexusPHP 站的 announce 常在 `tracker.xxx.com` 而页面在 `xxx.com`——
 /// 精确相等会把这类站全部漏判（已在做种预筛、源站优先排序都靠它）。
@@ -1166,6 +1182,14 @@ mod tests {
         assert!(Framework::NexusPHP.search_capable());
         assert!(!Framework::Unit3D.search_capable());
         assert!(!Framework::Blu.search_capable());
+    }
+
+    #[test]
+    fn extra_announce_hosts_cover_real_aliases() {
+        // 实机 41,882 条种子统计出的两处差异，别删（删了预筛会漏 693 条种子）
+        assert!(extra_announce_hosts("luckpt").contains(&"tracker.luckpt.de"));
+        assert!(extra_announce_hosts("chdbits").contains(&"chdbits.xyz"));
+        assert!(extra_announce_hosts("hdsky").is_empty());
     }
 
     #[test]

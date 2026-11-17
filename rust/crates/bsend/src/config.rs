@@ -9,7 +9,7 @@ use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::sites::{nexusphp::DEFAULT_UA, url_host, Framework};
+use crate::sites::{extra_announce_hosts, nexusphp::DEFAULT_UA, url_host, Framework};
 
 /// 转种臂模式：v1 只出草稿报告（列「这段内容可以在哪些站发、预计参数」），不真上传。
 /// 上传涉及目标站表单适配（148 站每家一套），是 Rust 版 R4 阶段的事。
@@ -30,8 +30,25 @@ pub struct SiteConf {
     /// overrides.searchURL（带 {name}/{imdb} 占位）
     pub search_url: Option<String>,
     pub api_key: Option<String>,
-    /// 站点 announce 的 host（小写）＝判断「这份文件已经在哪个站做种」的依据
-    pub announce_host: String,
+    /// 站点 announce 的 host 列表（小写，首个是页面 host）＝判断「这份文件已经在哪个站做种」
+    pub announce_hosts: Vec<String>,
+}
+
+impl SiteConf {
+    /// tracker host 是否属于这个站（任一别名命中即可；子域算命中）
+    pub fn matches_tracker(&self, tracker_host: &str) -> bool {
+        self.announce_hosts
+            .iter()
+            .any(|h| crate::sites::host_matches(tracker_host, h))
+    }
+
+    /// 主 host（没配别名时就是它）
+    pub fn primary_host(&self) -> &str {
+        self.announce_hosts
+            .first()
+            .map(|s| s.as_str())
+            .unwrap_or("")
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -78,6 +95,14 @@ pub struct CoverageSettings {
     pub archive_days: i64,
     /// 并行站 worker 数（Swift 版全局串行；Rust 版按站并行，默认 4）
     pub max_concurrent_sites: usize,
+    /// 站点报限流后的最低请求间隔（秒，默认 60：hdsky 明说「限制访问间隔 60 秒/次」）
+    pub rate_limit_floor_sec: u64,
+    /// 逐站间隔覆盖（秒）：有些站要求 60 秒/次（hdsky），全局 8 秒会一开始就撞墙。
+    /// 配置写法：`assist.siteIntervals: {"hdsky": 65}`
+    pub site_intervals: HashMap<String, f64>,
+    /// 首扫描读文件清单的并发数（qB 一次一条请求，4 万条串行太慢）。
+    /// Rust 侧扩展：config 里可选 `assist.scanConcurrency`。
+    pub scan_concurrency: usize,
     pub reseed_mode: ReseedMode,
 }
 
@@ -103,6 +128,9 @@ impl Default for CoverageSettings {
             paused_sites: Vec::new(),
             archive_days: 30,
             max_concurrent_sites: 4,
+            rate_limit_floor_sec: 60,
+            site_intervals: HashMap::new(),
+            scan_concurrency: 6,
             reseed_mode: ReseedMode::Draft,
         }
     }
@@ -241,7 +269,30 @@ impl Config {
             relaxed_retry_search: v_bool(&assist, "relaxedRetrySearch", d.relaxed_retry_search),
             paused_sites: v_str_list(&assist, "pausedSites"),
             archive_days: d.archive_days,
-            max_concurrent_sites: d.max_concurrent_sites,
+            max_concurrent_sites: (v_i64(
+                &assist,
+                "maxConcurrentSites",
+                d.max_concurrent_sites as i64,
+            ) as usize)
+                .clamp(1, 32),
+            scan_concurrency: (v_i64(&assist, "scanConcurrency", d.scan_concurrency as i64)
+                as usize)
+                .clamp(1, 32),
+            rate_limit_floor_sec: (v_i64(
+                &assist,
+                "rateLimitFloorSec",
+                d.rate_limit_floor_sec as i64,
+            )
+            .max(0) as u64),
+            site_intervals: assist
+                .get("siteIntervals")
+                .and_then(|v| v.as_object())
+                .map(|m| {
+                    m.iter()
+                        .filter_map(|(k, v)| v.as_f64().map(|sec| (k.clone(), sec.max(0.0))))
+                        .collect()
+                })
+                .unwrap_or_default(),
             reseed_mode: d.reseed_mode,
         };
 
@@ -279,8 +330,24 @@ impl Config {
                 .get("overrides")
                 .and_then(|o| v_str(o, "searchURL"))
                 .filter(|u| !u.is_empty());
+            // 页面 host + 内置别名 + 配置里追加的 overrides.announceHosts
+            let mut announce_hosts: Vec<String> = vec![url_host(&url).unwrap_or_default()];
+            announce_hosts.extend(extra_announce_hosts(&id).iter().map(|h| h.to_string()));
+            if let Some(list) = s
+                .get("overrides")
+                .and_then(|o| o.get("announceHosts"))
+                .and_then(|v| v.as_array())
+            {
+                announce_hosts.extend(
+                    list.iter()
+                        .filter_map(|x| x.as_str())
+                        .map(|x| x.to_lowercase()),
+                );
+            }
+            announce_hosts.retain(|h| !h.is_empty());
+            announce_hosts.dedup();
             sites.push(SiteConf {
-                announce_host: url_host(&url).unwrap_or_default(),
+                announce_hosts,
                 id,
                 name: v_str(s, "name").unwrap_or_default(),
                 url,
@@ -413,7 +480,7 @@ mod tests {
         // （pter 在 pausedSites 里，这轮不参与）
         assert_eq!(cfg.sites.len(), 1);
         assert_eq!(cfg.sites[0].id, "hdsky");
-        assert_eq!(cfg.sites[0].announce_host, "hdsky.me");
+        assert_eq!(cfg.sites[0].primary_host(), "hdsky.me");
         assert_eq!(
             cfg.sites[0].search_url.as_deref(),
             Some("torrents.php?search={name}&search_area=0")
@@ -512,6 +579,38 @@ mod tests {
         let cfg = Config::load(&p).unwrap();
         let ids: Vec<&str> = cfg.sites.iter().map(|s| s.id.as_str()).collect();
         assert_eq!(ids, vec!["nx"]);
+    }
+
+    #[test]
+    fn announce_aliases_are_loaded() {
+        // 页面域名 ≠ announce 域名（实机 luckpt / chdbits），别名要进 announce_hosts；
+        // 配置里 overrides.announceHosts 还能追加
+        let p = write_temp_isolated(
+            "alias",
+            "boxsend.json",
+            r#"{
+          "sourceSites": [
+            {"id": "luckpt", "name": "幸运", "url": "https://pt.luckpt.de/", "framework": "NexusPHP", "enabled": true},
+            {"id": "chdbits", "name": "彩虹岛", "url": "https://ptchdbits.co/", "framework": "NexusPHP", "enabled": true,
+             "overrides": {"announceHosts": ["ChdBits.ORG"]}},
+            {"id": "hdsky", "name": "天空", "url": "https://hdsky.me/", "framework": "NexusPHP", "enabled": true}
+          ],
+          "downloader": {"url": "http://x"}
+        }"#,
+        );
+        let cfg = Config::load(&p).unwrap();
+        let by_id = |id: &str| cfg.sites.iter().find(|s| s.id == id).unwrap();
+        let luck = by_id("luckpt");
+        assert!(luck.matches_tracker("tracker.luckpt.de"), "别名要能命中");
+        assert!(luck.matches_tracker("pt.luckpt.de"));
+        assert!(!luck.matches_tracker("luckpt.de.evil.example"));
+        let cd = by_id("chdbits");
+        assert!(cd.matches_tracker("chdbits.xyz"));
+        assert!(cd.matches_tracker("chdbits.org"), "配置追加的别名也要生效");
+        // 没有别名的站：仍然只认页面 host 与子域
+        let sky = by_id("hdsky");
+        assert!(sky.matches_tracker("tracker.hdsky.me"));
+        assert!(!sky.matches_tracker("chdbits.xyz"));
     }
 
     #[test]

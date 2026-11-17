@@ -10,14 +10,21 @@ use anyhow::Result;
 
 use crate::matcher;
 use crate::models::{JudgeLevel, TorrentFingerprint};
-use crate::sites::nexusphp::{NexusPhp, SearchHit, TorrentPage};
+use crate::sites::nexusphp::{NexusPhp, SearchOutcome, TorrentPage};
 use crate::throttle::{BudgetKind, SiteThrottle};
 
-/// 站点客户端的最小面（NexusPHP 适配器实现；测试挂 mock）
+/// 站点客户端的最小面（NexusPHP 适配器实现；测试挂 mock）。
+/// `search` 的 `gate` 是「每次真实 HTTP 请求前领一次号」：查询词阶梯每级都是一发请求，
+/// 预算与站间隔必须按请求记，不能按 `search` 调用记。
 pub trait SiteClient {
     fn site_id(&self) -> &str;
     /// 站内检索；`relaxed` = 宽松查询词兜底
-    fn search(&self, name: &str, relaxed: bool) -> Result<Option<SearchHit>>;
+    fn search(
+        &self,
+        name: &str,
+        relaxed: bool,
+        gate: &mut dyn FnMut() -> bool,
+    ) -> Result<SearchOutcome>;
     fn fetch_torrent_page(&self, detail_url: &str) -> Result<TorrentPage>;
     fn download_torrent(&self, page: &TorrentPage, referer: &str) -> Result<Vec<u8>>;
 }
@@ -27,9 +34,14 @@ impl SiteClient for NexusPhp {
         &self.site_id
     }
 
-    fn search(&self, name: &str, relaxed: bool) -> Result<Option<SearchHit>> {
+    fn search(
+        &self,
+        name: &str,
+        relaxed: bool,
+        gate: &mut dyn FnMut() -> bool,
+    ) -> Result<SearchOutcome> {
         // 源种定位没有副标题/IMDb（那俩来自源站详情页，这里正是在找它）
-        NexusPhp::search(self, name, "", relaxed, "")
+        NexusPhp::search(self, name, "", relaxed, "", gate)
     }
 
     fn fetch_torrent_page(&self, detail_url: &str) -> Result<TorrentPage> {
@@ -41,10 +53,11 @@ impl SiteClient for NexusPhp {
     }
 }
 
-/// 一个源站候选：客户端 + 它的 announce host（判断「本地已在那个站做种」）
+/// 一个源站候选：客户端 + 它的 announce host 列表（判断「本地已在那个站做种」）。
+/// 用列表而不是单个 host：站点页面域名与 announce 域名未必一致（实机 luckpt/chdbits）。
 pub struct SourceSite<'a> {
     pub client: &'a dyn SiteClient,
-    pub announce_host: String,
+    pub announce_hosts: Vec<String>,
 }
 
 /// 单站尝试的记录（报告用）
@@ -91,23 +104,29 @@ pub fn resolve_source(
     // 优先级：已在做种的源站排前面（其余保持给定顺序）
     let mut ordered: Vec<&SourceSite<'_>> = sites.iter().collect();
     ordered.sort_by_key(|s| {
-        !tracker_hosts
-            .iter()
-            .any(|h| crate::sites::host_matches(h, &s.announce_host))
+        !tracker_hosts.iter().any(|h| {
+            s.announce_hosts
+                .iter()
+                .any(|site_host| crate::sites::host_matches(h, site_host))
+        })
     });
 
     for site in ordered {
         let site_id = site.client.site_id().to_string();
-        if !throttle.acquire(&site_id, BudgetKind::Source) {
-            attempts.push(SiteAttempt {
-                site_id,
-                note: "源站预算用完".to_string(),
-            });
-            return ResolveOutcome::BudgetExhausted { attempts };
-        }
-        // 严格查询词先行
-        let mut found = match site.client.search(name, false) {
-            Ok(h) => h,
+        // gate 自己持有站 id（move），调用点上就不用为了它挡住 site_id 的所有权
+        let gate_site = site_id.clone();
+        let mut gate = move || throttle.acquire(&gate_site, BudgetKind::Source);
+        // 严格查询词先行（阶梯每级一发请求，gate 逐发领号）
+        let mut found = match site.client.search(name, false, &mut gate) {
+            Ok(SearchOutcome::Hit(h)) => Some(h),
+            Ok(SearchOutcome::Miss) => None,
+            Ok(SearchOutcome::BudgetExhausted) => {
+                attempts.push(SiteAttempt {
+                    site_id,
+                    note: "源站预算用完".to_string(),
+                });
+                return ResolveOutcome::BudgetExhausted { attempts };
+            }
             Err(e) => {
                 clean = false;
                 if crate::sites::nexusphp::error_is_rate_limited(&e) {
@@ -120,17 +139,18 @@ pub fn resolve_source(
                 continue;
             }
         };
-        // 严格没命中且允许宽松兜底 → 再花一次请求（只发生在没命中时）
+        // 严格没命中且允许宽松兜底 → 再走一轮（同样逐发领号）
         if found.is_none() && relaxed_retry {
-            if !throttle.acquire(&site_id, BudgetKind::Source) {
-                attempts.push(SiteAttempt {
-                    site_id,
-                    note: "源站预算用完".to_string(),
-                });
-                return ResolveOutcome::BudgetExhausted { attempts };
-            }
-            found = match site.client.search(name, true) {
-                Ok(h) => h,
+            match site.client.search(name, true, &mut gate) {
+                Ok(SearchOutcome::Hit(h)) => found = Some(h),
+                Ok(SearchOutcome::Miss) => {}
+                Ok(SearchOutcome::BudgetExhausted) => {
+                    attempts.push(SiteAttempt {
+                        site_id,
+                        note: "源站预算用完".to_string(),
+                    });
+                    return ResolveOutcome::BudgetExhausted { attempts };
+                }
                 Err(e) => {
                     clean = false;
                     if crate::sites::nexusphp::error_is_rate_limited(&e) {
@@ -142,7 +162,7 @@ pub fn resolve_source(
                     });
                     continue;
                 }
-            };
+            }
         }
         let Some(hit) = found else {
             attempts.push(SiteAttempt {
@@ -215,6 +235,7 @@ mod tests {
     use super::*;
     use crate::bencode;
     use crate::bencode::tests::{enc, BVal};
+    use crate::sites::nexusphp::SearchHit;
     use std::cell::RefCell;
     use std::time::Duration;
 
@@ -244,11 +265,20 @@ mod tests {
             self.id
         }
 
-        fn search(&self, _name: &str, _relaxed: bool) -> Result<Option<SearchHit>> {
+        fn search(
+            &self,
+            _name: &str,
+            _relaxed: bool,
+            gate: &mut dyn FnMut() -> bool,
+        ) -> Result<SearchOutcome> {
+            // 一个 mock 站一次检索 = 一发请求（真实站会按查询词阶梯发多发，由 gate 计数）
+            if !gate() {
+                return Ok(SearchOutcome::BudgetExhausted);
+            }
             let r = self.search_result.borrow();
             match &*r {
-                Ok(None) => Ok(None),
-                Ok(Some(h)) => Ok(Some(h.clone())),
+                Ok(None) => Ok(SearchOutcome::Miss),
+                Ok(Some(h)) => Ok(SearchOutcome::Hit(h.clone())),
                 Err(e) => Err(anyhow::anyhow!("{e}")),
             }
         }
@@ -313,11 +343,11 @@ mod tests {
         let sites = [
             SourceSite {
                 client: &a,
-                announce_host: "a.example".into(),
+                announce_hosts: vec!["a.example".into()],
             },
             SourceSite {
                 client: &b,
-                announce_host: "b.example".into(),
+                announce_hosts: vec!["b.example".into()],
             },
         ];
         match resolve_source("Show", &[], &[hash], &local, &sites, true, &throttle()) {
@@ -355,11 +385,11 @@ mod tests {
         let sites = [
             SourceSite {
                 client: &a,
-                announce_host: "a.example".into(),
+                announce_hosts: vec!["a.example".into()],
             },
             SourceSite {
                 client: &b,
-                announce_host: "b.example".into(),
+                announce_hosts: vec!["b.example".into()],
             },
         ];
         match resolve_source(
@@ -390,7 +420,7 @@ mod tests {
         };
         let sites = [SourceSite {
             client: &a,
-            announce_host: "a.example".into(),
+            announce_hosts: vec!["a.example".into()],
         }];
         match resolve_source(
             "Show",
@@ -424,7 +454,7 @@ mod tests {
         };
         let sites = [SourceSite {
             client: &a,
-            announce_host: "a.example".into(),
+            announce_hosts: vec!["a.example".into()],
         }];
         match resolve_source(
             "Show",
@@ -460,17 +490,18 @@ mod tests {
         };
         let sites = [SourceSite {
             client: &a,
-            announce_host: "a.example".into(),
+            announce_hosts: vec!["a.example".into()],
         }];
         let t = SiteThrottle::new(Duration::from_secs(8), Duration::ZERO, 100, 10, 10);
         match resolve_source("Show", &[], &["h".to_string()], &local, &sites, true, &t) {
             ResolveOutcome::Miss { clean, .. } => assert!(!clean),
             other => panic!("expected Miss, got {other:?}"),
         }
-        // 退避已生效：拨钟到 1s 前，下次领号要等 8s×2 − 1s ≈ 15s（没接线的话只有 7s）
+        // 退避已生效：拨钟到 1s 前，下次领号至少等 60s − 1s（限流后的最低间隔），
+        // 没接线的话只有 7s
         t.force_last("a.example", Duration::from_secs(1));
         let wait = t.acquire_dur("a.example", BudgetKind::Source).unwrap();
-        let expect = Duration::from_secs(15);
+        let expect = Duration::from_secs(59);
         let tol = Duration::from_millis(200);
         assert!(
             wait >= expect.saturating_sub(tol) && wait <= expect + tol,
@@ -486,11 +517,11 @@ mod tests {
         let sites = [
             SourceSite {
                 client: &a,
-                announce_host: "a.example".into(),
+                announce_hosts: vec!["a.example".into()],
             },
             SourceSite {
                 client: &b,
-                announce_host: "b.example".into(),
+                announce_hosts: vec!["b.example".into()],
             },
         ];
         // 源站预算 2：a 严格+宽松两发用完（记「站内没有」），b 一进门就收工
