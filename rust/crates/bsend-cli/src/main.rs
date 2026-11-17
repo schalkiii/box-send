@@ -17,6 +17,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
 use bsend::config::Config;
+use bsend::cookiecloud::CookieCloud;
 use bsend::coverage::{prefetch_files, run_round, Event, RoundOptions, RoundReport};
 use bsend::index::{ContentIndex, CoverageStatus};
 use bsend::qbittorrent::QBittorrent;
@@ -33,6 +34,9 @@ struct Cli {
     /// boxsend.json 路径（与 GUI 版共用同一份配置）
     #[arg(long, default_value = "boxsend.json")]
     config: PathBuf,
+    /// 本轮从 CookieCloud 拉取 cookie（覆盖 cookies.json 里同 host 的条目，不写盘）
+    #[arg(long, global = true)]
+    cookiecloud: bool,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -70,6 +74,18 @@ enum Cmd {
     },
     /// 只做基线：把「已在做种」的格子标好并落盘，零站点请求（先看清家底）
     Prime,
+    /// 看 cookie 现状：逐站条目数、最早过期、有没有鉴权字段（不打印 cookie 值）
+    Cookies {
+        /// 数据来源：json（读 cookies.json）或 cookiecloud（现场拉取解密）
+        #[arg(long, default_value = "json")]
+        from: String,
+        /// 把结果写回 cookies.json（GUI 读同一份；先备份成 cookies.json.bak）
+        #[arg(long)]
+        write: bool,
+        /// 列出全部域名（默认只看参与辅种的站点）
+        #[arg(long)]
+        all: bool,
+    },
     /// 看索引现状：内容数、覆盖分布、转种草稿、待找源
     Status,
     /// 覆盖报告：逐站覆盖率、未覆盖最多清单、草稿与待找源（可导出 JSON）
@@ -88,8 +104,11 @@ enum Cmd {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let cfg = Config::load(&cli.config)
+    let mut cfg = Config::load(&cli.config)
         .with_context(|| format!("加载配置 {} 失败", cli.config.display()))?;
+    if cli.cookiecloud {
+        apply_cookiecloud(&mut cfg)?;
+    }
     match cli.cmd {
         Cmd::Scan => cmd_scan(&cfg),
         Cmd::Plan { limit, sites, only } => cmd_round(&cfg, limit, sites, only, true, false),
@@ -100,6 +119,7 @@ fn main() -> Result<()> {
             only,
         } => cmd_round(&cfg, limit, sites, only, dry_run, true),
         Cmd::Prime => cmd_round(&cfg, Some(0), None, None, false, true),
+        Cmd::Cookies { from, write, all } => cmd_cookies(&mut cfg, &from, write, all),
         Cmd::Status => cmd_status(&cfg),
         Cmd::Report { top, json, sites } => cmd_report(&cfg, top, json, sites),
     }
@@ -121,6 +141,7 @@ fn connect_qb(cfg: &Config) -> Result<Arc<QBittorrent>> {
 fn build_adapters(cfg: &Config, filter: &Option<Vec<String>>) -> Result<Vec<Arc<NexusPhp>>> {
     let allow: Option<HashSet<String>> = filter.as_ref().map(|v| v.iter().cloned().collect());
     let mut out = Vec::new();
+    let mut missing_cookie: Vec<String> = Vec::new();
     for s in &cfg.sites {
         if let Some(a) = &allow {
             if !a.contains(&s.id) {
@@ -128,6 +149,9 @@ fn build_adapters(cfg: &Config, filter: &Option<Vec<String>>) -> Result<Vec<Arc<
             }
         }
         let cookie = cfg.cookie_header_for(s.primary_host());
+        if cookie.is_none() {
+            missing_cookie.push(s.id.clone());
+        }
         let mut adapter = NexusPhp::new(
             &s.id,
             &s.name,
@@ -142,6 +166,12 @@ fn build_adapters(cfg: &Config, filter: &Option<Vec<String>>) -> Result<Vec<Arc<
     }
     if out.is_empty() {
         anyhow::bail!("没有可参与的站点（检查 boxsend.json sourceSites 的 enabled/assist.siteIDs/pausedSites）");
+    }
+    if !missing_cookie.is_empty() {
+        eprintln!(
+            "注意：这些站没有 cookie，本轮到它们只会得到 failed：{}（可用 --cookiecloud 或 bsend cookies --from cookiecloud --write 补）",
+            missing_cookie.join("、")
+        );
     }
     Ok(out)
 }
@@ -553,4 +583,134 @@ fn size_text(bytes: i64) -> String {
     } else {
         format!("{:.0} MB", bytes as f64 / 1_048_576.0)
     }
+}
+
+/// 从 CookieCloud 拉取并合入本进程的 cookie（不写盘）
+fn apply_cookiecloud(cfg: &mut Config) -> Result<()> {
+    let Some(settings) = cfg.cookie_cloud.clone() else {
+        anyhow::bail!(
+            "boxsend.json 里没有配 cookieCloud（host/key/password），先在 GUI 设置里填好再试"
+        );
+    };
+    let cc = CookieCloud::new(settings)?;
+    let pulled = cc.pull()?;
+    let n = cfg.merge_cookies(pulled);
+    println!("CookieCloud：拉取并解密 {n} 个域名的 cookie");
+    Ok(())
+}
+
+/// `bsend cookies`：逐站看 cookie 现状（绝不打印 cookie 值）
+fn cmd_cookies(cfg: &mut Config, from: &str, write: bool, all: bool) -> Result<()> {
+    match from {
+        "json" => {}
+        "cookiecloud" | "cc" => apply_cookiecloud(cfg)?,
+        other => anyhow::bail!("--from 只支持 json / cookiecloud，收到 {other}"),
+    }
+    if write {
+        let path = cfg.save_cookies()?;
+        println!("已写入 {}（旧文件备份为 cookies.json.bak）", path.display());
+    }
+    if cfg.cookies.is_empty() {
+        println!("没有任何 cookie（cookies.json 为空，且没有从 CookieCloud 拉到）");
+        return Ok(());
+    }
+
+    // host 匹配：相等或子域（.pterclub.net 覆盖 tracker.pterclub.net）
+    let matched = |host: &str| -> Vec<&bsend::config::CookieEntry> {
+        let host = host.to_lowercase();
+        let mut out = Vec::new();
+        for (key, list) in &cfg.cookies {
+            let key = key.to_lowercase();
+            if host == key || host.ends_with(&format!(".{key}")) {
+                out.extend(list.iter());
+            }
+        }
+        out
+    };
+    // 鉴权字段：NexusPHP 系 c_secure_uid / c_secure_pass，Unit3D 系 token，Discuz 系 auth
+    let looks_authed = |list: &[&bsend::config::CookieEntry]| {
+        list.iter().any(|c| {
+            let n = c.name.to_lowercase();
+            n.contains("uid")
+                || n.contains("pass")
+                || n.contains("token")
+                || n.contains("auth")
+                || n == "session"
+        })
+    };
+    let fmt_expiry = |list: &[&bsend::config::CookieEntry]| -> String {
+        let earliest = list
+            .iter()
+            .filter_map(|c| c.expiration_date)
+            .filter(|d| *d > 0.0)
+            .fold(f64::INFINITY, f64::min);
+        if !earliest.is_finite() {
+            return "会话级".to_string();
+        }
+        let expired = earliest <= chrono::Local::now().timestamp() as f64;
+        let text = chrono::DateTime::from_timestamp(earliest as i64, 0)
+            .map(|d| {
+                d.with_timezone(&chrono::Local)
+                    .format("%Y-%m-%d")
+                    .to_string()
+            })
+            .unwrap_or_else(|| "-".to_string());
+        if expired {
+            format!("{text}（已过期）")
+        } else {
+            text
+        }
+    };
+
+    if all {
+        let mut keys: Vec<&String> = cfg.cookies.keys().collect();
+        keys.sort();
+        println!("\n{:<28} {:>4}  {:>16}  鉴权", "域名", "条目", "最早过期");
+        for host in keys {
+            let list: Vec<&bsend::config::CookieEntry> = cfg.cookies[host].iter().collect();
+            println!(
+                "{:<28} {:>4}  {:>16}  {}",
+                host,
+                list.len(),
+                fmt_expiry(&list),
+                if looks_authed(&list) { "有" } else { "无" }
+            );
+        }
+        println!("\n（--all：共 {} 个域名）", cfg.cookies.len());
+        return Ok(());
+    }
+
+    // 默认只看参与辅种的站点
+    println!(
+        "\n{:<12} {:<22} {:>4}  {:>16}  鉴权",
+        "站点", "域名", "条目", "最早过期"
+    );
+    let mut missing: Vec<&str> = Vec::new();
+    for site in &cfg.sites {
+        let host = site.primary_host();
+        let list = matched(host);
+        if list.is_empty() {
+            missing.push(site.id.as_str());
+            println!("{:<12} {:<22} {:>4}  {:>16}  -", site.id, host, 0, "缺");
+        } else {
+            println!(
+                "{:<12} {:<22} {:>4}  {:>16}  {}",
+                site.id,
+                host,
+                list.len(),
+                fmt_expiry(&list),
+                if looks_authed(&list) { "有" } else { "无" }
+            );
+        }
+    }
+    println!(
+        "\n参与站点 {} 个，有 cookie 的 {} 个；cookies 库共 {} 个域名（--all 看全部）",
+        cfg.sites.len(),
+        cfg.sites.len() - missing.len(),
+        cfg.cookies.len()
+    );
+    if !missing.is_empty() {
+        println!("这些站没有 cookie，跑到会 failed：{}", missing.join("、"));
+    }
+    Ok(())
 }

@@ -7,6 +7,7 @@
 
 pub mod bencode;
 pub mod config;
+pub mod cookiecloud;
 pub mod coverage;
 pub mod index;
 pub mod manifest;
@@ -18,7 +19,8 @@ pub mod resolver;
 pub mod sites;
 pub mod throttle;
 
-pub use config::{Config, CoverageSettings, DownloaderSettings, ReseedMode, SiteConf};
+pub use config::{Config, CookieEntry, CoverageSettings, DownloaderSettings, ReseedMode, SiteConf};
+pub use cookiecloud::{CookieCloud, CookieCloudSettings};
 pub use coverage::{run_round, DraftItem, Event, RoundOptions, RoundReport};
 pub use index::{
     ContentEntry, ContentIndex, CoverageStatus, ScanDelta, SiteCoverage, SourceRecord, TorrentMeta,

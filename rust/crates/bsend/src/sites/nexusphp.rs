@@ -134,7 +134,12 @@ impl NexusPhp {
             .iter()
             .any(|hint| final_url.contains(hint))
         {
-            return Err(anyhow!("被跳到登录页（cookie 可能已失效）：{url}"));
+            // 实机 pter：登录态正常（首页显示用户名）但 torrents.php 仍 302 回
+            // index.php?returnto=… —— 那是站内公告没点「我已知悉」，或有新手考核。
+            // 所以这句不能一口咬定 cookie 失效，两种可能都要摆出来
+            return Err(anyhow!(
+                "被跳到登录页/首页（cookie 可能已失效，或站内有待确认的公告/考核）：{url}"
+            ));
         }
         Ok(resp)
     }

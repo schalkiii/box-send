@@ -34,6 +34,13 @@ bsend run --only "The.Thirteen"  # 只处理这一段内容（名称包含 / con
 # 看索引现状：内容数、各站覆盖分布、待发草稿、待找源清单
 bsend status
 
+# Cookie：逐站看条目数/过期（不打印值）；从 CookieCloud 现拉，或写回 cookies.json
+bsend cookies                                # 只看参与站点
+bsend cookies --from cookiecloud             # 从 CookieCloud 拉取并解密（不写盘）
+bsend cookies --from cookiecloud --write     # 写回 cookies.json（旧的备份为 cookies.json.bak）
+bsend cookies --all                          # 列出全部域名
+bsend --cookiecloud run                      # 本轮现拉 cookie，任何子命令都可带
+
 # 覆盖报告：逐站覆盖率、未覆盖最多清单、草稿与待找源；--json 导出给 GUI/daemon
 bsend report --top 20
 bsend report --json coverage-report.json
@@ -62,6 +69,17 @@ bsend report --json coverage-report.json
 | `siteIntervals` | `{}` | 逐站请求间隔（秒）：`{"hdsky": 65}` —— hdsky 实测要求 60 秒/次 |
 | `rateLimitFloorSec` | 60 | 站点报限流后该站本轮的最低间隔 |
 | `roundBudget` | 200 | 目标站检索预算，**按真实 HTTP 请求计**（一次站内检索要发 3–7 条查询词） |
+
+### Cookie 来源
+
+- 默认读同目录 `cookies.json`（PT-depiler 备份格式，支持 `{"cookies":{...}}` 外层包裹）。
+- **CookieCloud**（easychen/CookieCloud，PT 站 cookie 端对端加密云备份）：读 GUI 设置的
+  `cookieCloud` 段（`host` / `key` / `password`），两种用法：
+  - `bsend --cookiecloud <命令>`：本轮现拉现用，不写盘；
+  - `bsend cookies --from cookiecloud --write`：拉取后写回 `cookies.json`，之后普通命令直接用。
+  解密在本地（`aes-128-cbc-fixed` 与 legacy CryptoJS 两种格式都支持），服务器只存密文；
+  与 Swift 版 `Sync/CookieCloudSync.swift` 的派生规则逐字节一致。
+- 站点没有 cookie 时会点名提示（跑到会 failed），不会静默吞掉。
 
 站点级别名也可以在 `sourceSites[].overrides.announceHosts` 里追加（数组）：
 判断「这份文件已经在该站做种」时，页面域名与 announce 域名不一致的站（实机 luckpt / chdbits）
@@ -133,7 +151,8 @@ NexusPHP 的 `index.php?returnto=…` 跳转）、站点限流页（HTTP 200 但
 
 ## 与 Swift 版的关系
 
-- 移植：NexusPHP 检索启发式（查询词阶梯 / 归一化互含 / 词元宽容判定）、A/B/C 判定、
+- 移植：NexusPHP 检索启发式（查询词阶梯 / 归一化互含 / 词元宽容判定）、CookieCloud
+  （两种加密格式 + host 归一化 + 合并）、A/B/C 判定、
   布局门、推送尾巴（暂停添加 → 校验 → 启动/回滚）、qB WebAPI 兼容补丁（参数名两版并记住
   可用的那个、回包两种包装、409 已存在补挂 tracker、登录一次复用）、登录墙检测
   （401/403、登录页跳转、`returnto=`）、站点限流页检测、148 站识别表。
@@ -143,8 +162,8 @@ NexusPHP 的 `index.php?returnto=…` 跳转）、站点限流页（HTTP 200 但
 ## 测试
 
 ```bash
-cargo test          # 63 个单测（判定/分词/节流/索引/配置与 cookie 兼容/限流与拦截页/
-                    # 报告/站点别名）+ 14 个端到端
+cargo test          # 70 个单测（判定/分词/节流/索引/配置与 cookie 兼容/限流与拦截页/
+                    # CookieCloud 解密/报告/站点别名）+ 14 个端到端
                     #（mock qBittorrent + mock NexusPHP 走真实 TCP HTTP 跑完整一轮：
                     #  辅种全流程、已做种预筛（含 qB 5.x 单 tracker 字段）、源站优先、
                     #  负缓存、dry-run、C 级人工确认、409 已存在补挂 tracker、

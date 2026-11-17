@@ -6,9 +6,10 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::cookiecloud::CookieCloudSettings;
 use crate::sites::{extra_announce_hosts, nexusphp::DEFAULT_UA, url_host, Framework};
 
 /// 转种臂模式：v1 只出草稿报告（列「这段内容可以在哪些站发、预计参数」），不真上传。
@@ -136,7 +137,7 @@ impl Default for CoverageSettings {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CookieEntry {
     pub name: String,
@@ -144,7 +145,7 @@ pub struct CookieEntry {
     pub value: String,
     #[serde(default)]
     pub domain: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expiration_date: Option<f64>,
 }
 
@@ -159,6 +160,8 @@ pub struct Config {
     pub user_agent: String,
     /// cookies.json：host → cookie 列表（pub 供测试与工具直接组装）
     pub cookies: HashMap<String, Vec<CookieEntry>>,
+    /// boxsend.json 的 cookieCloud 段（没配就是 None）
+    pub cookie_cloud: Option<CookieCloudSettings>,
 }
 
 // boxsend.json 的键是驼峰（GUI 版 Swift Codable 默认）。这里用 serde_json::Value 动态取：
@@ -360,6 +363,17 @@ impl Config {
         // ---- cookies.json：配置同目录优先，其次 dataDir ----
         let cookies = Self::load_cookies(path, data_dir.as_deref());
 
+        // ---- CookieCloud 段（GUI 的「CookieCloud」设置；没填就是 None）----
+        let cc = root.get("cookieCloud").cloned().unwrap_or(Value::Null);
+        let cookie_cloud = {
+            let settings = CookieCloudSettings {
+                host: v_str(&cc, "host").unwrap_or_default(),
+                key: v_str(&cc, "key").unwrap_or_default(),
+                password: v_str(&cc, "password").unwrap_or_default(),
+            };
+            settings.is_configured().then_some(settings)
+        };
+
         Ok(Self {
             config_path: path.to_path_buf(),
             data_dir,
@@ -368,6 +382,7 @@ impl Config {
             coverage,
             user_agent,
             cookies,
+            cookie_cloud,
         })
     }
 
@@ -427,6 +442,48 @@ impl Config {
         } else {
             Some(pairs.join("; "))
         }
+    }
+
+    /// 合并一批 cookie（CookieCloud 拉下来的）：按 host 覆盖，未涉及的 host 保留
+    pub fn merge_cookies(&mut self, incoming: HashMap<String, Vec<CookieEntry>>) -> usize {
+        let n = incoming.len();
+        for (host, list) in incoming {
+            self.cookies.insert(host, list);
+        }
+        n
+    }
+
+    /// cookies.json 的路径（与 GUI 共用同一份：配置同目录优先，其次 dataDir）
+    pub fn cookies_path(&self) -> PathBuf {
+        let by_config = self
+            .config_path
+            .parent()
+            .unwrap_or(Path::new("."))
+            .join("cookies.json");
+        if by_config.exists() || self.data_dir.is_none() {
+            return by_config;
+        }
+        self.data_dir
+            .as_deref()
+            .unwrap_or(Path::new("."))
+            .join("cookies.json")
+    }
+
+    /// 原子写 cookies.json（GUI 读这份；先备份旧的成 cookies.json.bak）
+    pub fn save_cookies(&self) -> Result<PathBuf> {
+        let path = self.cookies_path();
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).ok();
+        }
+        if path.exists() {
+            let _ = std::fs::copy(&path, path.with_extension("json.bak"));
+        }
+        let tmp = path.with_extension("json.tmp");
+        let body = serde_json::to_string_pretty(&self.cookies).context("cookie 序列化失败")?;
+        std::fs::write(&tmp, body.as_bytes())
+            .with_context(|| format!("写不进 {}", tmp.display()))?;
+        std::fs::rename(&tmp, &path).with_context(|| format!("落盘 {} 失败", path.display()))?;
+        Ok(path)
     }
 
     /// 铺种索引的持久化路径（dataDir/coverage.json；没有 dataDir 就放配置旁边）
@@ -611,6 +668,40 @@ mod tests {
         let sky = by_id("hdsky");
         assert!(sky.matches_tracker("tracker.hdsky.me"));
         assert!(!sky.matches_tracker("chdbits.xyz"));
+    }
+
+    #[test]
+    fn cookie_cloud_settings_are_parsed() {
+        // GUI 的「CookieCloud」设置：host / key / password 齐了才算配好
+        let p = write_temp_isolated(
+            "cc",
+            "boxsend.json",
+            r#"{
+          "sourceSites": [
+            {"id": "nx", "name": "站", "url": "https://nx.example/", "framework": "NexusPHP", "enabled": true}
+          ],
+          "downloader": {"url": "http://x"},
+          "cookieCloud": {"host": "http://127.0.0.1:8082/cookie", "key": "k1", "password": "p1", "pollMinutes": 30}
+        }"#,
+        );
+        let cfg = Config::load(&p).unwrap();
+        let cc = cfg.cookie_cloud.as_ref().expect("cookieCloud 段要读进来");
+        assert_eq!(cc.host, "http://127.0.0.1:8082/cookie");
+        assert_eq!(cc.key, "k1");
+        assert!(cc.is_configured());
+        // 缺 key/host 的不算配好（别拿空配置去发请求）
+        let p2 = write_temp_isolated(
+            "cc2",
+            "boxsend.json",
+            r#"{
+          "sourceSites": [
+            {"id": "nx", "name": "站", "url": "https://nx.example/", "framework": "NexusPHP", "enabled": true}
+          ],
+          "downloader": {"url": "http://x"},
+          "cookieCloud": {"host": "", "key": "", "password": "p1"}
+        }"#,
+        );
+        assert!(Config::load(&p2).unwrap().cookie_cloud.is_none());
     }
 
     #[test]

@@ -32,3 +32,4 @@ windows/installer/version.inc
 
 # Rust 构建产物
 rust/target/
+.workbuddy/

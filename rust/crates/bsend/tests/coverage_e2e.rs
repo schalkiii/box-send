@@ -402,6 +402,7 @@ fn test_config(qb_port: u16, pter_port: u16, hdsky_port: u16, dir: &std::path::P
         },
         user_agent: "bsend-e2e-test".into(),
         cookies: HashMap::new(),
+        cookie_cloud: None,
     }
 }
 
@@ -1252,5 +1253,8 @@ fn e2e_returnto_redirect_is_login_wall() {
     let entry = index.contents.values().next().unwrap();
     assert_eq!(entry.coverage["pter"].status, CoverageStatus::Failed);
     let note = entry.coverage["pter"].note.as_deref().unwrap();
-    assert!(note.contains("登录"), "note = {note}");
+    assert!(
+        note.contains("跳") && note.contains("cookie"),
+        "note 要说清是跳转（并且两种成因都提）：{note}"
+    );
 }
