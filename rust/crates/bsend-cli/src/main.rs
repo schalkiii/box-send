@@ -117,6 +117,16 @@ enum Cmd {
         #[arg(long, value_delimiter = ',')]
         sites: Option<Vec<String>>,
     },
+    /// 站点档案汇总：配置开关 + 最近一次实测结论 + pieces 支持 + cookie 概况
+    Sites {
+        /// 输出 JSON（给脚本/GUI 吃）
+        #[arg(long)]
+        json: bool,
+        /// 输出 Markdown 表格（写文档用）
+        #[arg(long)]
+        md: bool,
+    },
+
     /// 落盘核对（只读）：抽若干内容，用下载器实时数据核对「推种时会用哪个 savepath」
     Layoutcheck {
         /// 最多看多少段内容
@@ -151,6 +161,7 @@ fn main() -> Result<()> {
         Cmd::Report { top, json, sites } => cmd_report(&cfg, top, json, sites),
         Cmd::Formcheck { sites } => cmd_formcheck(&cfg, sites),
         Cmd::Layoutcheck { limit, only } => cmd_layoutcheck(&cfg, limit, only),
+        Cmd::Sites { json, md } => cmd_sites(&cfg, json, md),
     }
 }
 
@@ -508,6 +519,7 @@ fn cmd_formcheck(cfg: &Config, sites: Option<Vec<String>>) -> Result<()> {
     let mut ok_n = 0usize;
     let mut gap_n = 0usize;
     let mut fail_n = 0usize;
+    let mut facts: Vec<serde_json::Value> = Vec::new();
     for a in &adapters {
         let d = bsend::reseed::drill_upload_form(a);
         let core = d.core_gaps();
@@ -558,6 +570,16 @@ fn cmd_formcheck(cfg: &Config, sites: Option<Vec<String>>) -> Result<()> {
         for g in core.iter().chain(soft.iter()) {
             println!("     · {g}");
         }
+        facts.push(serde_json::json!({
+            "site": d.site_id,
+            "verdict": if d.error.is_some() { "fail" } else if core.is_empty() { "ok" } else { "gap" },
+            "fields": d.field_count,
+            "selects": d.select_count,
+            "core": &core,
+            "soft": &soft,
+            "error": d.error,
+            "at": bsend::coverage::now_unix(),
+        }));
     }
     println!(
         "\n汇总：{} 站｜表单齐 {}｜有缺口 {}｜不可发种/失败 {}（权限/登录/限流）",
@@ -566,6 +588,21 @@ fn cmd_formcheck(cfg: &Config, sites: Option<Vec<String>>) -> Result<()> {
         gap_n,
         fail_n
     );
+    let path = cfg
+        .coverage_state_path()
+        .parent()
+        .map(|p| p.join("formcheck.json"))
+        .unwrap_or_else(|| PathBuf::from("formcheck.json"));
+    let payload = serde_json::json!({
+        "at": bsend::coverage::now_unix(),
+        "sample": info.name,
+        "results": facts,
+    });
+    match std::fs::write(&path, serde_json::to_string_pretty(&payload)?) {
+        Ok(_) => println!("实测结论已落盘：{}", path.display()),
+        Err(e) => println!("实测结论落盘失败（不影响演练）：{e}"),
+    }
+
     Ok(())
 }
 
@@ -967,4 +1004,232 @@ fn cmd_cookies(cfg: &mut Config, from: &str, write: bool, all: bool) -> Result<(
         println!("这些站没有 cookie，跑到会 failed：{}", missing.join("、"));
     }
     Ok(())
+}
+
+/// 站点档案汇总：把「配置开关 + 最近一次实测 + pieces 支持 + cookie」并到一处。
+/// `--json` 给脚本；`--md` 生成文档表格；默认人读对齐表。
+fn cmd_sites(cfg: &Config, as_json: bool, as_md: bool) -> Result<()> {
+    use serde_json::Value;
+    let raw = std::fs::read_to_string(&cfg.config_path)
+        .with_context(|| format!("读配置 {} 失败", cfg.config_path.display()))?;
+    let root: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
+    let entries = root
+        .get("sourceSites")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let data_dir = cfg
+        .coverage_state_path()
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_default();
+
+    // 最近一次 formcheck 结论（dataDir/formcheck.json）
+    let mut drill: BTreeMap<String, Value> = BTreeMap::new();
+    if let Ok(text) = std::fs::read_to_string(data_dir.join("formcheck.json")) {
+        if let Ok(v) = serde_json::from_str::<Value>(&text) {
+            if let Some(arr) = v.get("results").and_then(|r| r.as_array()) {
+                for r in arr {
+                    if let Some(id) = r.get("site").and_then(|s| s.as_str()) {
+                        drill.insert(id.to_string(), r.clone());
+                    }
+                }
+            }
+        }
+    }
+    // pieces-hash 能力表（dataDir/pieces-cache.json）
+    let mut pieces: BTreeMap<String, String> = BTreeMap::new();
+    if let Ok(text) = std::fs::read_to_string(data_dir.join("pieces-cache.json")) {
+        if let Ok(v) = serde_json::from_str::<Value>(&text) {
+            if let Some(m) = v.get("capabilities").and_then(|c| c.as_object()) {
+                for (k, val) in m {
+                    if let Some(s) = val.as_str() {
+                        pieces.insert(k.clone(), s.to_string());
+                    }
+                }
+            }
+        }
+    }
+    // cookie 条目数（按 host；cookies.json 与 boxsend.json 同目录）
+    let mut cookies: BTreeMap<String, usize> = BTreeMap::new();
+    let ck_path = cfg
+        .config_path
+        .parent()
+        .map(|p| p.join("cookies.json"))
+        .unwrap_or_else(|| PathBuf::from("cookies.json"));
+    if let Ok(text) = std::fs::read_to_string(&ck_path) {
+        if let Ok(v) = serde_json::from_str::<Value>(&text) {
+            let obj = v
+                .get("cookies")
+                .and_then(|c| c.as_object())
+                .or_else(|| v.as_object());
+            if let Some(obj) = obj {
+                for (k, val) in obj {
+                    cookies.insert(
+                        k.to_lowercase().trim_start_matches("www.").to_string(),
+                        val.as_array().map(|a| a.len()).unwrap_or(0),
+                    );
+                }
+            }
+        }
+    }
+    let paused: HashSet<String> = cfg.coverage.paused_sites.iter().cloned().collect();
+    let rpaused: HashSet<String> = cfg.coverage.reseed_paused_sites.iter().cloned().collect();
+
+    let mut rows: Vec<Value> = Vec::new();
+    for e in entries {
+        let id = e
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let name = e
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let url = e
+            .get("url")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let host = url
+            .split("://")
+            .nth(1)
+            .and_then(|s| s.split('/').next())
+            .unwrap_or("")
+            .to_lowercase()
+            .trim_start_matches("www.")
+            .to_string();
+        let fw = e
+            .get("framework")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let enabled = e.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false);
+        let note = e
+            .get("statusNote")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let d = drill.get(&id);
+        let verdict = d
+            .and_then(|x| x.get("verdict"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("未测")
+            .to_string();
+        let reason = d
+            .and_then(|x| {
+                x.get("error")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .or_else(|| {
+                        x.get("core")
+                            .and_then(|c| c.as_array())
+                            .and_then(|a| a.first())
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string())
+                    })
+                    .or_else(|| {
+                        x.get("soft")
+                            .and_then(|c| c.as_array())
+                            .and_then(|a| a.first())
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string())
+                    })
+            })
+            .unwrap_or_default();
+        rows.push(serde_json::json!({
+            "site": id,
+            "name": name,
+            "host": host,
+            "framework": fw,
+            "enabled": enabled,
+            "paused": paused.contains(&id),
+            "reseedPaused": rpaused.contains(&id),
+            "drill": verdict,
+            "drillReason": reason,
+            "pieces": pieces.get(&id).cloned().unwrap_or_else(|| "未测".into()),
+            "cookies": cookies.get(&host).copied().unwrap_or(0),
+            "note": note,
+        }));
+    }
+    // 排序：失败 → 缺口 → 齐 → 未测，同档按站点 id
+    rows.sort_by_key(|r| {
+        let d = r.get("drill").and_then(|v| v.as_str()).unwrap_or("");
+        let pr = match d {
+            "fail" => 0,
+            "gap" => 1,
+            "ok" => 2,
+            _ => 3,
+        };
+        (
+            pr,
+            r.get("site")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+        )
+    });
+
+    if as_json {
+        println!("{}", serde_json::to_string_pretty(&rows)?);
+        return Ok(());
+    }
+    if as_md {
+        println!("| 站点 | 名称 | 域名 | 框架 | 启用 | 全停 | 停转种 | 实测 | 实测原因 | pieces | cookie | 备注 |");
+        println!("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |");
+        for r in &rows {
+            let g = |k: &str| r.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+            println!(
+                "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
+                g("site"),
+                g("name"),
+                g("host"),
+                g("framework"),
+                yn(r, "enabled"),
+                yn(r, "paused"),
+                yn(r, "reseedPaused"),
+                g("drill"),
+                g("drillReason").replace('|', "/"),
+                g("pieces"),
+                r.get("cookies").and_then(|v| v.as_u64()).unwrap_or(0),
+                g("note").replace('|', "/"),
+            );
+        }
+        return Ok(());
+    }
+    println!(
+        "站点档案（{} 个）｜启用=参与辅种/转种；全停=pausedSites；停转种=reseedPausedSites；实测=最近一次 formcheck\n",
+        rows.len()
+    );
+    println!(
+        "{:<14}{:<10}{:<30}{:<10}{:<5}{:<5}{:<7}{:<6}{:<10}{:<7}",
+        "站点", "名称", "域名", "框架", "启用", "全停", "停转种", "实测", "pieces", "cookie"
+    );
+    for r in &rows {
+        let g = |k: &str| r.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+        println!(
+            "{:<14}{:<10}{:<30}{:<10}{:<5}{:<5}{:<7}{:<6}{:<10}{:<7}",
+            g("site"),
+            g("name"),
+            g("host"),
+            g("framework"),
+            yn(r, "enabled"),
+            yn(r, "paused"),
+            yn(r, "reseedPaused"),
+            g("drill"),
+            g("pieces"),
+            r.get("cookies").and_then(|v| v.as_u64()).unwrap_or(0),
+        );
+    }
+    Ok(())
+}
+
+fn yn(v: &serde_json::Value, k: &str) -> &'static str {
+    if v.get(k).and_then(|x| x.as_bool()).unwrap_or(false) {
+        "是"
+    } else {
+        "—"
+    }
 }

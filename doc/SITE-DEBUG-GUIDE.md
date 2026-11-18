@@ -88,65 +88,19 @@
 - **停用要分层**：`pausedSites`（整站停）vs `reseedPausedSites`（只停发种，辅种照常）；
   关站站点另加 `sourceSites[].statusNote` 标注原因与日期。
 
-## 5. 站点档案（2026-11-18 全量演练结论）
+## 5. 站点档案（统一总账）
 
-> 原始输出：`.workbuddy/formcheck-all.txt`（104 站逐站字段/缺口）；关站名单：savept.icu；
-> 处置记录：`doc/REAL-RUN-2026-11-17.md` 第十五~十七节。**表单齐 54 站未在下列表中重复列出。**
+逐站状态不再散落在本文各节——**唯一权威表**是 [`doc/SITE-REGISTER.md`](SITE-REGISTER.md)：
+147 站的「域名 / 框架 / 启用 / 全停 / 停转种 / 最近实测结论与原因 / pieces-hash 支持 /
+cookie 条目数 / 关站备注」，由命令生成、随时可刷新：
 
-| 站点 | 结论 | 关键证据/缺口 |
-| --- | --- | --- |
-| muxuege | 表单缺口 | audiocodec_sel 未选；team_sel[4] 未选 |
-| ptfans | 表单缺口 | medium_sel 未选；team_sel[4] 未选 |
-| musopia | 表单缺口 | medium_sel 未选；language_id 未选 |
-| hdcity | 表单缺口 | 简介为空；MediaInfo 无处可落 |
-| hdsky | 无发布权限 | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://hdsky.me/upload.php |
-| chdbits | 无发布权限 | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://ptchdbits.co/upload.php |
-| hdhome | 无发布权限 | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://hdhome.org/upload.php |
-| cmct | 无发布权限 | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://springsunday.net/upload.php |
-| pter | 无发布权限 | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://pterclub.net/upload.php |
-| hhanclub | 无发布权限 | 该账号无发布权限（页面提示含「没有发布」）：https://hhanclub.net/upload.php |
-| pt52 | 无发布权限 | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://52pt.site/upload.php |
-| carpt | 无发布权限 | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://carpt.net/upload.php |
-| discfan | 无发布权限 | 该账号无发布权限（页面提示含「沒有發布種子的許可權」）：https://discfan.net/upload.php |
-| march | 无发布权限 | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://duckboobee.org/upload.php |
-| tccf | 无发布权限 | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://et8.org/upload.php |
-| ggpt | 无发布权限 | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://www.gamegamept.com/upload.php |
-| hdarea | 无发布权限 | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://hdarea.club/upload.php |
-| hitpt | 无发布权限 | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://www.hitpt.com/upload.php |
-| njtupt | 无发布权限 | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://njtupt.top/upload.php |
-| okpt | 无发布权限 | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://www.okpt.net/upload.php |
-| btschool | 无发布权限 | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://pt.btschool.club/upload.php |
-| ptskit | 无发布权限 | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://www.ptskit.org/upload.php |
-| ultrahd | 无发布权限 | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://ultrahd.net/upload.php |
-| wtsakura | 无发布权限 | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://wintersakura.net/upload.php |
-| zmpt | 无发布权限 | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://zmpt.cc/upload.php |
-| dstudio | 无发布权限 | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://dstudio.me/upload.php |
-| kamept | 无发布权限 | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://kamept.com/upload.php |
-| playlet | 无发布权限 | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://playlet.cc/upload.php |
-| daxiangjiao | 无发布权限 | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://pt.daxiangjiao.org/upload.php |
-| keepfrds | 无发布权限 | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://pt.keepfrds.com/upload.php |
-| siqi | 无发布权限 | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://si-qi.xyz/upload.php |
-| tokyo | 无发布权限 | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://www.tokyo-manga.top/upload.php |
-| xingwan | 无发布权限 | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://xingwan.cc/upload.php |
-| ttg | JS/自定义上传界面 | 目标站没有可解析的静态上传表单（JS/自定义上传界面，或 cookie 失效），v1 暂不支持：https://totheglory.im/upload.php |
-| movie52 | JS/自定义上传界面 | 目标站没有可解析的静态上传表单（JS/自定义上传界面，或 cookie 失效），v1 暂不支持：https://www.52movie.top/upload.php |
-| hddolby | JS/自定义上传界面 | 目标站没有可解析的静态上传表单（JS/自定义上传界面，或 cookie 失效），v1 暂不支持：https://www.uhddolby.com/upload.php |
-| ptt | JS/自定义上传界面 | 目标站没有可解析的静态上传表单（JS/自定义上传界面，或 cookie 失效），v1 暂不支持：https://www.pttime.org/upload.php |
-| mypt | JS/自定义上传界面 | 目标站没有可解析的静态上传表单（JS/自定义上传界面，或 cookie 失效），v1 暂不支持：https://pt.mypt.cc/upload.php |
-| rousi | JS/自定义上传界面 | 目标站没有可解析的静态上传表单（JS/自定义上传界面，或 cookie 失效），v1 暂不支持：https://rousi.pro/upload.php |
-| momentpt | JS/自定义上传界面 | 目标站没有可解析的静态上传表单（JS/自定义上传界面，或 cookie 失效），v1 暂不支持：https://www.momentpt.top/upload.php |
-| shadow | HTTP 404 | 抓目标站上传表单失败: HTTP 404 抓页面 https://star-space.net/upload.php：File not found. |
-| sunny | HTTP 404 | 抓目标站上传表单失败: HTTP 404 抓页面 https://sunnypt.top/upload.php：<!DOCTYPE html><html class="scrollbar-none" lang="zh-CN"><head>< |
-| hudbt | 连不通/超时 | 抓目标站上传表单失败: 请求没通：https://hudbt.hust.edu.cn/upload.php: error sending request for url (https://hudbt.hust.edu.cn/upload.p |
-| freefarm | 连不通/超时 | 抓目标站上传表单失败: 请求没通：https://pt.0ff.cc/upload.php: error sending request for url (https://pt.0ff.cc/upload.php): operation t |
-| gtk | 连不通/超时 | 抓目标站上传表单失败: 请求没通：https://pt.gtkpw.xyz/upload.php: error sending request for url (https://pt.gtkpw.xyz/upload.php): opera |
-| hdclone | 连不通/超时 | 抓目标站上传表单失败: 请求没通：https://pt.hdclone.top/upload.php: error sending request for url (https://pt.hdclone.top/upload.php): o |
-| u2 | 连不通/超时 | 抓目标站上传表单失败: 请求没通：http://u2.dmhy.org/upload.php: error sending request for url (http://u2.dmhy.org/upload.php): client er |
-| ptlao | 连不通/超时 | 抓目标站上传表单失败: 请求没通：https://ptlao.top/upload.php: error sending request for url (https://ptlao.top/upload.php): operation t |
-| piggo | cookie 失效 | 抓目标站上传表单失败: 站点回 HTTP 403（多半是 cookie 失效）：https://piggo.me/upload.php |
-| tu88 | cookie 失效 | 抓目标站上传表单失败: 被跳到登录页/首页（cookie 可能已失效，或站内有待确认的公告/考核）：https://pt.tu88.men/upload.php |
+```bash
+bsend formcheck             # 刷新实测（结果落 dataDir/formcheck.json）
+bsend sites --md > doc/SITE-REGISTER.md   # 重新生成总账表格
+```
 
-（表单齐 54 站未列出，见 `.workbuddy/formcheck-all.txt`）
+本文只保留**方法学**与**根因分类**；具体站点的结论请看总账与
+`doc/REAL-RUN-2026-11-17.md`（第十五~十七节）、`.workbuddy/formcheck-all.txt`（原始输出）。
 
 ### 关站（savept.icu 对照，已暂停）
 

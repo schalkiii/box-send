@@ -84,6 +84,7 @@ bsend reseed --draft 1 --yes # 确认提交：预检 → 上传 → 发后自检
 bsend formcheck              # 全部启用站发种表格演练（只审不发，绝不 POST）
 bsend formcheck --sites luckpt,hdsky   # 只演练指定站
 bsend layoutcheck --limit 20           # 落盘核对：抽 20 段内容看推种会用哪个 savepath（只读）
+bsend sites [--md|--json]              # 站点总账：启用/暂停/实测/pieces/cookie 一处看全
 ```
 
 GUI「转种草稿」页的「审阅」按钮与之等价（字段清单打进任务日志），「确认转种」= 人工
