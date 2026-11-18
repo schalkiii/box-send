@@ -139,3 +139,10 @@ qB /torrents/export?hash=…（或 BT_backup 目录）
   从本地内容目录取最大视频生成 4198 字节报告；完结剧集自动勾「完结」标签（完结/全集/
   全N集/Complete）。官方预审从 86/100（❌2）→ 95（❌1）→ **100/100 通过**。
   配置项：`assist.mediaInfoDll`（缺省自动发现 `C:\Program Files\MediaInfo\MediaInfo.dll`）。
+- **2026-11-18 · P1 第 2–3 步**：`qbittorrent::export_torrent`（qB 导出 .torrent）+
+  `all_tracker_urls`（passkey 采集）；新增 `piecesapi` 模块：passkey/能力表/pieces_hash
+  三份缓存（`dataDir/pieces-cache.json`）、批量查询（≤100/批）、回包解析（Hit/Miss/
+  Unsupported/Auth/Error）、下载直链（`download.php?id=…&passkey=…`）。单测 5 项。
+  待接入：`coverage::process_item` 走「先 pieces-hash 探针、未命中再名字检索」+ e2e 三路径。
+- **2026-11-18 · 方法学归档**：`doc/SITE-DEBUG-GUIDE.md` 统一收纳七步调试流程、
+  16 类根因、可复用经验、54 站问题档案与复现模板。

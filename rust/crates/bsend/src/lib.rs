@@ -15,6 +15,7 @@ pub mod manifest;
 pub mod matcher;
 pub mod mediainfo;
 pub mod models;
+pub mod piecesapi;
 pub mod qbittorrent;
 pub mod report;
 pub mod reseed;

@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use reqwest::blocking::Client;
 use reqwest::header::{HeaderMap, HeaderValue, REFERER};
 use serde_json::Value;
@@ -318,6 +318,63 @@ impl QBittorrent {
     pub fn torrent_meta(&self, hash: &str) -> Result<Option<LocalTorrent>> {
         self.login()?;
         Ok(self.torrent_info(hash).and_then(|v| parse_torrent(&v)))
+    }
+
+    /// 导出种子原始 .torrent（/api/v2/torrents/export；qB 4.6+）。
+    /// 用途：算 pieces_hash（`sha1(info.pieces)`）供站内 pieces-hash 批量查询。
+    pub fn export_torrent(&self, hash: &str) -> Result<Vec<u8>> {
+        self.login()?;
+        let resp = self
+            .client
+            .get(format!(
+                "{}/api/v2/torrents/export?hash={hash}",
+                self.base_url
+            ))
+            .headers(self.referer_headers())
+            .send()
+            .context("GET torrents/export 没通")?;
+        let status = resp.status().as_u16();
+        if status != 200 {
+            self.session_died(status);
+            bail!("HTTP {status} 导出种子 {hash}");
+        }
+        let data = resp.bytes().context("读导出种子字节失败")?.to_vec();
+        if bencode::info_hash_v1(&data).is_none() {
+            bail!("导出内容不是有效 .torrent（{hash}）");
+        }
+        Ok(data)
+    }
+
+    /// 全部种子当前 tracker 的原始 URL（采集站点 passkey 用；只读一次，逐轮可缓存）
+    pub fn all_tracker_urls(&self) -> Result<Vec<String>> {
+        self.login()?;
+        let resp = self
+            .client
+            .get(format!(
+                "{}/api/v2/torrents/info?limit=50000",
+                self.base_url
+            ))
+            .headers(self.referer_headers())
+            .send()
+            .context("GET torrents/info 没通")?;
+        let status = resp.status().as_u16();
+        if status != 200 {
+            self.session_died(status);
+            bail!("HTTP {status} 拉种子清单");
+        }
+        let text = resp.text().context("读种子清单失败")?;
+        let list: Value = serde_json::from_str(&text).context("种子清单不是 JSON")?;
+        let mut out = Vec::new();
+        if let Some(arr) = list.as_array() {
+            for t in arr {
+                if let Some(u) = t.get("tracker").and_then(|v| v.as_str()) {
+                    if !u.is_empty() {
+                        out.push(u.to_string());
+                    }
+                }
+            }
+        }
+        Ok(out)
     }
 
     /// 单条种子的落地路径（qB 的 content_path：多文件=内容根目录，单文件=文件全路径）
