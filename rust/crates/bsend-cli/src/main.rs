@@ -11,7 +11,7 @@
 //! bsend status                   # 看索引现状
 //! ```
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -117,6 +117,16 @@ enum Cmd {
         #[arg(long, value_delimiter = ',')]
         sites: Option<Vec<String>>,
     },
+    /// 自动发种：草稿 → 审阅 → 门禁 → 发布（白名单 + 日限额 + 审计）；--dry-run 只跑门禁
+    Autopost {
+        /// 只跑门禁与审阅，不发布
+        #[arg(long)]
+        dry_run: bool,
+        /// 本次最多发布多少条
+        #[arg(long)]
+        limit: Option<usize>,
+    },
+
     /// 站点档案汇总：配置开关 + 最近一次实测结论 + pieces 支持 + cookie 概况
     Sites {
         /// 输出 JSON（给脚本/GUI 吃）
@@ -162,6 +172,7 @@ fn main() -> Result<()> {
         Cmd::Formcheck { sites } => cmd_formcheck(&cfg, sites),
         Cmd::Layoutcheck { limit, only } => cmd_layoutcheck(&cfg, limit, only),
         Cmd::Sites { json, md } => cmd_sites(&cfg, json, md),
+        Cmd::Autopost { dry_run, limit } => cmd_autopost(&cfg, dry_run, limit),
     }
 }
 
@@ -1231,5 +1242,206 @@ fn yn(v: &serde_json::Value, k: &str) -> &'static str {
         "是"
     } else {
         "—"
+    }
+}
+
+/// 自动发种：按草稿逐条走「审阅 → 门禁 → 发布」，白名单 + 日限额 + 审计留痕。
+/// `--dry-run` 只打印门禁矩阵（等价 gatecheck），不碰站点写接口。
+fn cmd_autopost(cfg: &Config, dry_run: bool, limit: Option<usize>) -> Result<()> {
+    let mut index = ContentIndex::load(&cfg.coverage_state_path());
+    let qb = connect_qb(cfg)?;
+    let report = CoverageReport::build(&index, &cfg.sites, 20, bsend::coverage::now_unix(), "");
+    if report.drafts.is_empty() {
+        println!("没有转种草稿。先 `bsend run` 跑一轮，站里没有的段落定位到源种后会出草稿。");
+        return Ok(());
+    }
+    let allow: HashSet<String> = cfg.coverage.auto_reseed_sites.iter().cloned().collect();
+    if allow.is_empty() {
+        println!(
+            "未配置 assist.autoReseedSites（自动发种白名单）——本次只做门禁演练，不会发布任何东西。"
+        );
+    }
+    let audit_path = cfg
+        .coverage_state_path()
+        .parent()
+        .map(|p| p.join("auto-audit.jsonl"))
+        .unwrap_or_else(|| PathBuf::from("auto-audit.jsonl"));
+    let now = bsend::coverage::now_unix();
+    let today_start = now - now % 86400;
+    let mut posted_today: HashMap<String, u32> = HashMap::new();
+    if let Ok(text) = std::fs::read_to_string(&audit_path) {
+        for line in text.lines() {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
+                if v.get("result").and_then(|r| r.as_str()) == Some("posted")
+                    && v.get("at").and_then(|a| a.as_i64()).unwrap_or(0) >= today_start
+                {
+                    if let Some(s) = v.get("site").and_then(|s| s.as_str()) {
+                        *posted_today.entry(s.to_string()).or_insert(0) += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    println!(
+        "自动发种（{}）｜草稿 {} 条｜白名单 {} 站｜审计 {}\n",
+        if dry_run {
+            "演练，不发布"
+        } else {
+            "真实发布"
+        },
+        report.drafts.len(),
+        allow.len(),
+        audit_path.display()
+    );
+    let mut done = 0usize;
+    for d in &report.drafts {
+        if let Some(l) = limit {
+            if done >= l {
+                break;
+            }
+        }
+        let site = &d.target_site;
+        if !allow.contains(site) {
+            println!("跳过 {}：不在自动发种白名单", site);
+            continue;
+        }
+        let rules = cfg
+            .coverage
+            .reseed_rules
+            .get(site)
+            .cloned()
+            .unwrap_or_default();
+        let used = posted_today.get(site).copied().unwrap_or(0);
+        if used >= rules.daily_limit() {
+            println!(
+                "跳过 {}：「{}」今日已自动发 {used}/{}",
+                site,
+                d.name,
+                rules.daily_limit()
+            );
+            continue;
+        }
+        let site_name = cfg
+            .sites
+            .iter()
+            .find(|s| &s.id == site)
+            .map(|s| s.name.clone())
+            .unwrap_or_else(|| site.clone());
+        let req = bsend::reseed::request_from_draft(
+            &d.content_key,
+            &d.name,
+            &d.source_site,
+            &d.source_url,
+            site,
+        );
+        println!("== 「{}」{} → {}", d.name, d.source_site, site);
+        let mut log = |line: &str| {
+            if dry_run {
+                println!("   {line}");
+            }
+        };
+        let rep = match bsend::reseed::review_reseed(cfg, &req, &mut log) {
+            Ok(r) => r,
+            Err(e) => {
+                println!("   审阅失败：{e:#}");
+                append_audit(
+                    &audit_path,
+                    serde_json::json!({"at": now, "site": site, "key": d.content_key,
+                        "result": "review_failed", "error": format!("{e:#}")}),
+                );
+                continue;
+            }
+        };
+        let drill = bsend::reseed::analyze_prepared(site, &site_name, &rep.prepared, &rep.info);
+        let core = drill.core_gaps();
+        let type_label = drill
+            .select_picks
+            .iter()
+            .find(|(n, _)| n == "type")
+            .map(|(_, l)| l.clone());
+        let input = bsend::gates::GateInput {
+            rules: &rules,
+            name: &rep.info.name,
+            subtitle: &rep.info.subtitle,
+            descr: &rep.info.descr,
+            mediainfo: &rep.info.mediainfo,
+            has_links: rep.info.has_media_links(),
+            type_label: type_label.as_deref(),
+            core_gaps: &core,
+            audit_passed: rep.audit.as_ref().map(|a| a.passed),
+        };
+        let results = bsend::gates::evaluate(&input);
+        for r in &results {
+            println!("   [{:5}] {}：{}", r.verdict.as_str(), r.gate, r.message);
+        }
+        let pass = bsend::gates::all_passed(&results);
+        let gate_json: Vec<serde_json::Value> = results
+            .iter()
+            .map(|r| {
+                serde_json::json!({"gate": r.gate, "verdict": r.verdict.as_str(), "message": r.message})
+            })
+            .collect();
+        if dry_run {
+            println!(
+                "   → {}（演练，未发布）\n",
+                if pass { "门禁通过" } else { "门禁拦截" }
+            );
+            continue;
+        }
+        if !pass {
+            append_audit(
+                &audit_path,
+                serde_json::json!({"at": now, "site": site, "key": d.content_key,
+                    "result": "blocked", "gates": gate_json}),
+            );
+            println!("   → 门禁拦截，转人工\n");
+            continue;
+        }
+        done += 1;
+        match bsend::reseed::run_reseed(cfg, &qb, &req, &mut index, &mut |l| println!("   {l}")) {
+            Ok(url) => {
+                index.save()?;
+                *posted_today.entry(site.clone()).or_insert(0) += 1;
+                append_audit(
+                    &audit_path,
+                    serde_json::json!({"at": now, "site": site, "key": d.content_key,
+                        "result": "posted", "url": url, "gates": gate_json}),
+                );
+                println!("   → 已发布：{url}\n");
+            }
+            Err(e) => {
+                append_audit(
+                    &audit_path,
+                    serde_json::json!({"at": now, "site": site, "key": d.content_key,
+                        "result": "failed", "error": format!("{e:#}"), "gates": gate_json}),
+                );
+                println!("   → 发布失败：{e:#}\n");
+            }
+        }
+    }
+    println!(
+        "结束：{}",
+        if dry_run {
+            "演练模式，未发布任何内容"
+        } else {
+            "已按门禁执行（明细见 auto-audit.jsonl）"
+        }
+    );
+    Ok(())
+}
+
+/// 审计追加（JSONL；失败不致命）
+fn append_audit(path: &PathBuf, entry: serde_json::Value) {
+    use std::io::Write as _;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).ok();
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let _ = writeln!(f, "{entry}");
     }
 }

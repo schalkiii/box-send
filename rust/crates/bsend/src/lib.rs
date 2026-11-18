@@ -9,6 +9,7 @@ pub mod bencode;
 pub mod config;
 pub mod cookiecloud;
 pub mod coverage;
+pub mod gates;
 pub mod index;
 pub mod layout;
 pub mod manifest;
@@ -26,6 +27,7 @@ pub mod throttle;
 pub use config::{Config, CookieEntry, CoverageSettings, DownloaderSettings, ReseedMode, SiteConf};
 pub use cookiecloud::{CookieCloud, CookieCloudSettings};
 pub use coverage::{run_round, DraftItem, Event, RoundOptions, RoundReport};
+pub use gates::{GateInput, GateResult, SiteRules, Verdict};
 pub use index::{
     ContentEntry, ContentIndex, CoverageStatus, ScanDelta, SiteCoverage, SourceRecord, TorrentMeta,
 };

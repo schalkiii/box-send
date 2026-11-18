@@ -83,6 +83,9 @@
 - **MediaInfo 生成**：MediaInfo GUI 版 `MediaInfo.exe` 无法无头运行（带参数会挂起），必须走
   `MediaInfo.dll` 的 C 接口（`MediaInfo_New/Open/Option/Inform`）；`Language=en` 输出标准
   英文标签文本；内容目录取最大视频作代表（剧集包取单集）。
+- **WAF 与内联事件属性**：站点 Cloudflare 对表单体里的 `on*=` 属性按出现次数计分
+  （预审载荷实测 2 处放行、4 处 403）；**真实上传同理**（luckpt 403 实测）——简介提交前
+  统一 `strip_event_handlers`，正文不动。
 - **落盘复用**：推种前按下载器实时 savePath/根名/文件清单判定；仅根名不同 →
   `savepath=既有内容目录 + contentLayout=NoSubfolder`；内层不同 → 待人工（不动下载器）。
 - **停用要分层**：`pausedSites`（整站停）vs `reseedPausedSites`（只停发种，辅种照常）；

@@ -14,7 +14,6 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::bencode;
-use crate::config::SiteConf;
 use crate::qbittorrent::QBittorrent;
 
 /// 站点对 pieces-hash 接口的支持状态（学习得到，落盘缓存）
@@ -155,7 +154,7 @@ impl PiecesApi {
     }
 
     /// 批量查询（≤100 个/批由调用方控制）。`base` 是站点根 URL。
-    pub fn query(&mut self, site: &SiteConf, base: &str, hashes: &[String]) -> QueryOutcome {
+    pub fn query(&mut self, site_id: &str, base: &str, hashes: &[String]) -> QueryOutcome {
         if hashes.is_empty() {
             return QueryOutcome::Miss;
         }
@@ -193,8 +192,8 @@ impl PiecesApi {
         let text = resp.text().unwrap_or_default();
         let outcome = parse_query_response(status, &text);
         match &outcome {
-            QueryOutcome::Unsupported => self.mark(&site.id, Capability::Unsupported),
-            QueryOutcome::Hit(_) | QueryOutcome::Miss => self.mark(&site.id, Capability::Supported),
+            QueryOutcome::Unsupported => self.mark(site_id, Capability::Unsupported),
+            QueryOutcome::Hit(_) | QueryOutcome::Miss => self.mark(site_id, Capability::Supported),
             _ => {}
         }
         outcome
@@ -304,18 +303,6 @@ fn head(s: &str, n: usize) -> String {
 mod tests {
     use super::*;
 
-    fn site(id: &str) -> SiteConf {
-        SiteConf {
-            id: id.into(),
-            name: id.into(),
-            url: "https://example.test/".into(),
-            framework: crate::sites::Framework::NexusPHP,
-            search_url: None,
-            api_key: None,
-            announce_hosts: vec![],
-        }
-    }
-
     #[test]
     fn response_parsing_covers_all_shapes() {
         let ok = r#"{"ret":0,"msg":"torrent.querybypieceshash","data":{"AA1":15627}}"#;
@@ -382,7 +369,7 @@ mod tests {
     #[test]
     fn query_without_passkey_reports_auth() {
         let mut api = PiecesApi::load(&std::env::temp_dir());
-        let out = api.query(&site("x"), "https://pt.example.test/", &["a".repeat(40)]);
+        let out = api.query("x", "https://pt.example.test/", &["a".repeat(40)]);
         assert_eq!(out, QueryOutcome::Auth);
     }
 }

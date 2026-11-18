@@ -667,7 +667,9 @@ pub fn build_upload_fields(
         .find(|f| form_has(page, f))
         .copied()
     {
-        set_field(&mut fields, f, descr);
+        // WAF 实测：简介里的内联事件属性（onload/onclick 等）按出现次数计分，
+        // 真实上传同样会被拦（luckpt 实测 HTTP 403）——提交前统一剥掉，正文不动。
+        set_field(&mut fields, f, strip_event_handlers(&descr));
     }
 
     // 条目链接字段
@@ -2020,6 +2022,16 @@ fn upload_denied_reason(html: &str) -> Option<String> {
         return Some("登录态失效（上传页是登录表单）".into());
     }
     None
+}
+
+/// 供门禁/自动发种复用：按演练同一套逻辑分析「已构造好的上传字段」
+pub fn analyze_prepared(
+    site_id: &str,
+    site_name: &str,
+    prep: &PreparedUpload,
+    info: &ReleaseInfo,
+) -> FormDrill {
+    analyze_form(site_id, site_name, prep, info)
 }
 
 /// 演练分析（纯函数，单测友好）
@@ -3519,6 +3531,22 @@ Height : 1080</pre></div>"#;
             &[],
         );
         assert!(notes2.is_empty(), "{notes2:?}");
+    }
+
+    #[test]
+    fn upload_descr_strips_inline_event_handlers() {
+        // WAF 实测：真实上传也会被 on* 属性拦（luckpt 403）；提交前统一剥掉
+        let form = r#"<form action="takeupload.php"><input type="file" name="file"><textarea name="descr"></textarea></form>"#;
+        let info = ReleaseInfo {
+            name: "T".into(),
+            descr: r#"<img src="http://x/y.jpg" onload="Scale(this)" onclick="Preview(this)">正文"#
+                .into(),
+            ..Default::default()
+        };
+        let (fs, _p, _n) = build_upload_fields(&info, form, &[]);
+        let d = field_lookup(&fs, "descr").unwrap_or("");
+        assert!(!d.contains("onload") && !d.contains("onclick"), "{d}");
+        assert!(d.contains("正文") && d.contains("y.jpg"), "{d}");
     }
 
     #[test]

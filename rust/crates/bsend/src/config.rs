@@ -97,6 +97,12 @@ pub struct CoverageSettings {
     pub reseed_paused_sites: Vec<String>,
     /// MediaInfo.dll 路径（源站没 MediaInfo 时从本地文件生成用）；空 = 自动发现
     pub media_info_dll: Option<String>,
+    /// pieces-hash 批量通道（auto 默认；off 关闭，回退名字检索）
+    pub pieces_hash: PiecesHashMode,
+    /// 站点发种规范（`assist.reseedRules.<siteId>`）；缺省全保守
+    pub reseed_rules: std::collections::BTreeMap<String, crate::gates::SiteRules>,
+    /// 自动发种白名单（空 = 不自动发，仅演练）
+    pub auto_reseed_sites: Vec<String>,
     /// 索引归档：下载器里消失超过这么多天的内容从索引里清掉
     pub archive_days: i64,
     /// 并行站 worker 数（Swift 版全局串行；Rust 版按站并行，默认 4）
@@ -134,12 +140,33 @@ impl Default for CoverageSettings {
             paused_sites: Vec::new(),
             reseed_paused_sites: Vec::new(),
             media_info_dll: None,
+            pieces_hash: PiecesHashMode::Auto,
+            reseed_rules: std::collections::BTreeMap::new(),
+            auto_reseed_sites: Vec::new(),
             archive_days: 30,
             max_concurrent_sites: 4,
             rate_limit_floor_sec: 60,
             site_intervals: HashMap::new(),
             scan_concurrency: 6,
             reseed_mode: ReseedMode::Draft,
+        }
+    }
+}
+
+/// pieces-hash 批量通道开关（`assist.piecesHash`：auto/off）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PiecesHashMode {
+    /// 站点支持就走（能力表学习，失败自动回退名字检索）
+    Auto,
+    /// 关闭（只用名字检索）
+    Off,
+}
+
+impl PiecesHashMode {
+    pub fn parse(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "off" | "false" | "0" | "no" => PiecesHashMode::Off,
+            _ => PiecesHashMode::Auto,
         }
     }
 }
@@ -284,6 +311,25 @@ impl Config {
                 .and_then(|v| v.as_str())
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty()),
+            pieces_hash: assist
+                .get("piecesHash")
+                .and_then(|v| v.as_str())
+                .map(PiecesHashMode::parse)
+                .unwrap_or(PiecesHashMode::Auto),
+            reseed_rules: assist
+                .get("reseedRules")
+                .and_then(|v| v.as_object())
+                .map(|m| {
+                    m.iter()
+                        .filter_map(|(k, v)| {
+                            serde_json::from_value(v.clone())
+                                .ok()
+                                .map(|r| (k.clone(), r))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            auto_reseed_sites: v_str_list(&assist, "autoReseedSites"),
             archive_days: d.archive_days,
             max_concurrent_sites: (v_i64(
                 &assist,

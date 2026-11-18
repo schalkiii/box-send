@@ -20,6 +20,7 @@ use crate::config::{Config, DownloaderSettings, ReseedMode};
 use crate::index::{ContentIndex, CoverageStatus, ScanDelta, SiteCoverage, SourceRecord};
 use crate::matcher;
 use crate::models::{JudgeLevel, Layout, LocalTorrent, TorrentFingerprint};
+use crate::piecesapi::{Capability, PiecesApi, QueryOutcome};
 use crate::qbittorrent::QBittorrent;
 use crate::resolver::{resolve_source, ResolveOutcome, SourceSite};
 use crate::sites::nexusphp::{NexusPhp, SearchOutcome};
@@ -387,6 +388,12 @@ pub fn run_round(
             .sum::<usize>(),
         n_workers
     )));
+    let pieces_dir = cfg
+        .coverage_state_path()
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_default();
+    let pieces = Arc::new(Mutex::new(PiecesApi::load(&pieces_dir)));
     let mut handles = Vec::new();
     for _ in 0..n_workers {
         let (pool, throttle, fp_cache, source_cache, qb) = (
@@ -396,6 +403,7 @@ pub fn run_round(
             source_cache.clone(),
             qb.clone(),
         );
+        let pieces = pieces.clone();
         let (adapters, tx, cov, dl) = (adapters.clone(), tx.clone(), cov.clone(), dl.clone());
         let dry_run = opts.dry_run;
         handles.push(thread::spawn(move || {
@@ -410,6 +418,7 @@ pub fn run_round(
                 cov,
                 dl,
                 dry_run,
+                pieces,
             )
         }));
     }
@@ -490,6 +499,7 @@ pub fn run_round(
             emit(Event::Log("一个站 worker 异常退出（本轮继续）".to_string()));
         }
     }
+    pieces.lock().unwrap().save().ok();
     for kind in [BudgetKind::Search, BudgetKind::Source, BudgetKind::Upload] {
         report.budget.insert(
             kind.label(),
@@ -516,6 +526,7 @@ fn worker_loop(
     cov: Arc<crate::config::CoverageSettings>,
     dl: Arc<DownloaderSettings>,
     dry_run: bool,
+    pieces: Arc<Mutex<PiecesApi>>,
 ) {
     loop {
         // 认领一个站的队列（整站串行，保持本站节奏）
@@ -528,6 +539,7 @@ fn worker_loop(
             )));
             continue;
         };
+        let hits = prefetch_pieces(&site_id, adapter, &qb, &pieces, &items, &throttle);
         for item in items {
             let ev = process_item(
                 &item,
@@ -541,10 +553,70 @@ fn worker_loop(
                 &cov,
                 &dl,
                 dry_run,
+                &hits,
             );
             let _ = tx.send(ev);
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+/// 整站 pieces-hash 预扫：≤100 个内容一次请求换精确 torrent id 表。
+/// 返回 key → (下载直链, 详情页 URL)；站点不支持/未授权/失败都返回空表（回退名字检索）。
+fn prefetch_pieces(
+    site_id: &str,
+    adapter: &NexusPhp,
+    qb: &QBittorrent,
+    pieces: &Mutex<PiecesApi>,
+    items: &[WorkItem],
+    throttle: &SiteThrottle,
+) -> HashMap<String, (String, String)> {
+    let mut out = HashMap::new();
+    let mut api = pieces.lock().unwrap();
+    if api.capability(site_id) == Capability::Unsupported {
+        return out;
+    }
+    let mut keyed: Vec<(String, String)> = Vec::new();
+    for it in items.iter().take(100) {
+        if let Some(ph) = api.pieces_hash_for(qb, &it.rep_hash) {
+            keyed.push((it.key.clone(), ph));
+        }
+    }
+    if keyed.is_empty() {
+        return out;
+    }
+    let hashes: Vec<String> = keyed.iter().map(|(_, p)| p.clone()).collect();
+    if !throttle.acquire(site_id, BudgetKind::Search) {
+        return out;
+    }
+    let mut outcome = api.query(site_id, adapter.base.as_str(), &hashes);
+    if outcome == QueryOutcome::Auth {
+        // 首次没有 passkey：从下载器 tracker 现采一次再试
+        if api.harvest_passkeys(qb) > 0 {
+            outcome = api.query(site_id, adapter.base.as_str(), &hashes);
+        }
+    }
+    if let QueryOutcome::Hit(list) = outcome {
+        let base = adapter.base.as_str().trim_end_matches('/').to_string();
+        let host = adapter
+            .base
+            .host_str()
+            .unwrap_or("")
+            .trim_start_matches("www.");
+        let pk = api.passkey(host).unwrap_or_default().to_string();
+        for (ph, id) in list {
+            if let Some((key, _)) = keyed.iter().find(|(_, p)| p == &ph) {
+                out.insert(
+                    key.clone(),
+                    (
+                        crate::piecesapi::download_url(&base, id, &pk),
+                        format!("{base}/details.php?id={id}"),
+                    ),
+                );
+            }
+        }
+    }
+    out
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -560,6 +632,7 @@ fn process_item(
     cov: &crate::config::CoverageSettings,
     dl: &DownloaderSettings,
     dry_run: bool,
+    pieces_hits: &std::collections::HashMap<String, (String, String)>,
 ) -> Event {
     let done = |status: CoverageStatus, note: String| Event::ItemDone {
         site_id: site_id.to_string(),
@@ -595,6 +668,20 @@ fn process_item(
             "读不到本地种子的文件清单，没法逐文件比对".into(),
         );
     };
+
+    // ---- pieces-hash 快速通道：预扫已给出精确 torrent id，跳过名字检索 ----
+    if let Some((dl_url, detail_url)) = pieces_hits.get(&item.key) {
+        if throttle.acquire(site_id, BudgetKind::Search) {
+            if let Ok(data) = adapter.download_bytes(dl_url, adapter.base.as_str()) {
+                throttle.note_ok(site_id);
+                let (level, why) = matcher::judge(&item.hashes, &fp, &data, &item.name);
+                return finish_judged(
+                    item, site_id, qb, cov, dl, &data, detail_url, &fp, level, why, dry_run, done,
+                    done_url,
+                );
+            }
+        }
+    }
 
     // ---- 检索臂（方案第六节：先检索后转种）----
     // 一次「检索」在站上可能是 3–6 发请求（查询词阶梯逐级放宽），所以预算与站间隔
@@ -671,21 +758,55 @@ fn process_item(
     throttle.note_ok(site_id);
 
     let (level, why) = matcher::judge(&item.hashes, &fp, &data, &page.name);
+    finish_judged(
+        item,
+        site_id,
+        qb,
+        cov,
+        dl,
+        &data,
+        &hit.detail_url,
+        &fp,
+        level,
+        why,
+        dry_run,
+        done,
+        done_url,
+    )
+}
+
+/// 判定 → 布局 → 推种（快速通道与名字检索共用同一条尾巴）
+#[allow(clippy::too_many_arguments)]
+fn finish_judged(
+    item: &WorkItem,
+    site_id: &str,
+    qb: &QBittorrent,
+    cov: &crate::config::CoverageSettings,
+    dl: &DownloaderSettings,
+    data: &[u8],
+    detail_url: &str,
+    fp: &TorrentFingerprint,
+    level: JudgeLevel,
+    why: String,
+    dry_run: bool,
+    done: impl Fn(CoverageStatus, String) -> Event,
+    done_url: impl Fn(CoverageStatus, String, String) -> Event,
+) -> Event {
     match level {
         JudgeLevel::NameOnly { .. } => done_url(
             CoverageStatus::ReviewPending,
             format!("名字对得上但文件清单对不上：{why}"),
-            hit.detail_url,
+            detail_url.to_string(),
         ),
         JudgeLevel::Skip { why } => done(CoverageStatus::Rejected, why),
         JudgeLevel::SameFiles if !cov.auto_accept_same_files => done_url(
             CoverageStatus::ReviewPending,
             "站点重新打包过（hash 不同），按设置不自动采纳".into(),
-            hit.detail_url,
+            detail_url.to_string(),
         ),
         JudgeLevel::SameHash { .. } | JudgeLevel::SameFiles => {
             // 目录布局：直接加会重下一整份的先拦下（方案第七节；Swift 同款默认拦截）
-            let site_paths: HashSet<String> = bencode::file_list(&data)
+            let site_paths: HashSet<String> = bencode::file_list(data)
                 .map(|fl| fl.iter().map(|(p, _)| p.clone()).collect())
                 .unwrap_or_default();
             let local_paths: HashSet<String> = fp.files.iter().map(|(p, _)| p.clone()).collect();
@@ -693,21 +814,12 @@ fn process_item(
                 Layout::Differs => done_url(
                     CoverageStatus::ReviewPending,
                     "文件一致，但目录结构与本地不同，直接加会重下一整份，先不动下载器".into(),
-                    hit.detail_url,
+                    detail_url.to_string(),
                 ),
                 // 内层一致、只有根目录名不同：推种时按 contentLayout=NoSubfolder
                 // 复用既有内容目录（layout 模块按实时 savePath/文件清单决定）
                 Layout::Same | Layout::RootDiffers => push_tail(
-                    item,
-                    site_id,
-                    qb,
-                    cov,
-                    dl,
-                    &data,
-                    &hit.detail_url,
-                    &why,
-                    dry_run,
-                    done_url,
+                    item, site_id, qb, cov, dl, data, detail_url, &why, dry_run, done_url,
                 ),
             }
         }

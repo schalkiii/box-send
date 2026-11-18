@@ -365,6 +365,16 @@ impl NexusPhp {
     }
 
     /// 下载 .torrent（referer 用详情页，站点的防盗链检查需要）
+    /// 直接按 URL 下载 .torrent（pieces-hash 通道用：已知 torrent id 与直链，
+    /// 不需要先读详情页；校验与 `download_torrent` 同一条路径）。
+    pub fn download_bytes(&self, url: &str, referer: &str) -> Result<Vec<u8>> {
+        let page = TorrentPage {
+            name: String::new(),
+            download_url: url.to_string(),
+        };
+        self.download_torrent(&page, referer)
+    }
+
     pub fn download_torrent(&self, page: &TorrentPage, referer: &str) -> Result<Vec<u8>> {
         let resp = self.get(&page.download_url, referer)?;
         let status = resp.status().as_u16();
