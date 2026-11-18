@@ -132,6 +132,8 @@ GUI「转种草稿」页的「审阅」按钮与之等价（字段清单打进�
   沿用它的 savePath / 分类 / 限速（含 `siteUpLimits` 逐站表）。推送固定「先暂停等校验」，
   不读 skipChecking（方案 §七）。
 - Cookie 读同目录 `cookies.json`（PT-depiler 备份格式，支持 `{"cookies":{...}}` 外层包裹）。
+- `sourceSites[].statusNote`：站况标注（如「已关站（savept.icu 2026-10-29）：站点已放告别页」），
+  配置加载会忽略该字段，仅作记录用；恢复某站时把它删掉、`enabled` 改回 true 即可。
 
 `assist` 段里有几项是 Rust 侧扩展（GUI 不写也能跑，全有缺省）：
 
