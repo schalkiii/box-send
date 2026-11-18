@@ -95,11 +95,20 @@ impl PiecesApi {
         std::fs::write(&self.path, text).with_context(|| format!("写 {} 失败", self.path.display()))
     }
 
+    /// 取站点 passkey：精确 host → 去掉 www./pt. 前缀 → 同根域（tracker 常是
+    /// `pt.example.com` 而页面是 `example.com`，两边必须能对上）
     pub fn passkey(&self, host: &str) -> Option<&str> {
-        self.cache
-            .passkeys
-            .get(&normalize_host(host))
-            .map(|s| s.as_str())
+        let h = normalize_host(host);
+        if let Some(v) = self.cache.passkeys.get(&h) {
+            return Some(v.as_str());
+        }
+        let hs = strip_prefixes(&h);
+        for (k, v) in &self.cache.passkeys {
+            if strip_prefixes(k) == hs || base_domain(k) == base_domain(&h) {
+                return Some(v.as_str());
+            }
+        }
+        None
     }
 
     pub fn set_passkey(&mut self, host: &str, passkey: &str) {
@@ -231,6 +240,23 @@ pub fn parse_passkey(tracker_url: &str) -> Option<(String, String)> {
     Some((normalize_host(host), pk))
 }
 
+/// 去掉 www./pt. 前缀（大小写不敏感）
+fn strip_prefixes(h: &str) -> String {
+    h.trim_start_matches("www.")
+        .trim_start_matches("pt.")
+        .to_string()
+}
+
+/// 根域（最后两段）
+fn base_domain(h: &str) -> String {
+    let p: Vec<&str> = h.split('.').collect();
+    if p.len() >= 2 {
+        p[p.len() - 2..].join(".")
+    } else {
+        h.to_string()
+    }
+}
+
 fn normalize_host(h: &str) -> String {
     h.trim()
         .to_lowercase()
@@ -355,6 +381,23 @@ mod tests {
         assert_eq!(api.capability("nope"), Capability::Unknown);
         // 未支持的站点不该被当成支持
         assert_eq!(api.capability("hdsky"), Capability::Unknown);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn passkey_falls_back_to_same_base_domain() {
+        let dir = std::env::temp_dir().join(format!("bsend-pk-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        {
+            let mut api = PiecesApi::load(&dir);
+            api.set_passkey("pt.luckpt.de", "k1");
+            api.save().unwrap();
+        }
+        let api = PiecesApi::load(&dir);
+        assert_eq!(api.passkey("luckpt.de"), Some("k1"));
+        assert_eq!(api.passkey("www.luckpt.de"), Some("k1"));
+        assert_eq!(api.passkey("other.test"), None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -1404,3 +1404,68 @@ fn e2e_root_differs_remaps_with_no_subfolder() {
     assert!(body.contains("contentLayout"), "{body}");
     assert!(body.contains("NoSubfolder"), "{body}");
 }
+
+/// 场景：站点支持 /api/pieces-hash —— 预扫一次命中后按 id 直下种子推种，
+/// 不再走名字检索（/torrents.php 应为零请求）。
+#[test]
+fn e2e_pieces_hash_fast_path_skips_search() {
+    let dir = temp_dir("pieces");
+    let local = torrent_bytes("Pack", FILES);
+    let hash = bencode::info_hash_v1(&local).unwrap();
+    let ph = bencode::pieces_hash(&local).unwrap();
+    let t_site = Arc::new(local.clone());
+    let ph_c = ph.clone();
+    let site = MockServer::start(Arc::new(move |_m, path, _b| {
+        if path.starts_with("/api/pieces-hash") {
+            let json = format!(r#"{{"ret":0,"data":{{"{ph_c}":1002}}}}"#);
+            return (200, "application/json", json.into_bytes());
+        }
+        if path.starts_with("/download.php") {
+            return (200, "application/x-bittorrent", t_site.as_ref().clone());
+        }
+        if path.starts_with("/torrents.php") {
+            return (200, "text/html", b"<p>no</p>".to_vec());
+        }
+        (404, "text/plain", Vec::new())
+    }));
+    let qb = qb_server(hash.clone(), Vec::new());
+    let cfg = test_config(qb.port, site.port, site.port, &dir);
+    // 预置 pieces 缓存与 passkey（免走 qB 导出 / tracker 采集）
+    let cache = format!(
+        r#"{{"passkeys":{{"127.0.0.1":"pk","localhost":"pk"}},"pieces":{{"{hash}":"{ph}"}}}}"#
+    );
+    std::fs::write(dir.join("pieces-cache.json"), cache).unwrap();
+
+    let qb_client = Arc::new(QBittorrent::new(&cfg.downloader.url, "admin", "pass").unwrap());
+    let ads = adapters(&cfg);
+    let mut index = ContentIndex::load(&cfg.coverage_state_path());
+    let _ = run_round(
+        &cfg,
+        qb_client,
+        &ads,
+        &mut index,
+        |_| {},
+        RoundOptions {
+            persist: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    let entry = index.contents.values().next().unwrap();
+    assert_eq!(
+        entry.coverage["pter"].status,
+        CoverageStatus::Assisted,
+        "{:?}",
+        entry.coverage["pter"]
+    );
+    assert_eq!(
+        site.requests("GET /torrents.php").len(),
+        0,
+        "快速通道命中后不应再走名字检索"
+    );
+    assert!(
+        !site.requests("POST /api/pieces-hash").is_empty(),
+        "应走 pieces-hash 预扫"
+    );
+}
