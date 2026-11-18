@@ -92,6 +92,9 @@ impl NexusPhp {
             // 另外 Windows 上「系统代理已停用但注册表仍留着 ProxyServer」会让 reqwest
             // 去连一个不存在的 SOCKS，每次请求卡满超时（实机踩到过）。
             .no_proxy()
+            // 只走 HTTP/1.1：非浏览器客户端的 HTTP/2 指纹易被 WAF 误伤，
+            // 这里是防御性收窄（API POST 曾被「网站防火墙」拦过，见 reseed 官方预审注释）
+            .http1_only()
             .build()
             .context("构建 HTTP 客户端失败")?;
         let announce_hosts = base
@@ -206,6 +209,66 @@ impl NexusPhp {
             body,
             final_url,
         })
+    }
+
+    /// 表单 POST（x-www-form-urlencoded）给站点 API 用（LuckAudit 预审核
+    /// `/api/auto-audit/pre-audit`）。返回状态码与响应体原文；登录态失效按 GET 同款报错。
+    ///
+    /// 为什么不用 `application/json`：站点 Cloudflare WAF 把 JSON POST 拦成 502
+    /// （rustls/openssl/schannel 全中招；`text/json` 等变体还会把源站打炸），
+    /// 而普通表单 POST 畅通，应用侧 `$request->input()` 同样能读到嵌套字段
+    /// （`type[id]=404` 一类 PHP 数组语法），实测拿到完整预审评分。
+    pub fn post_form(
+        &self,
+        url: &str,
+        fields: &[(String, String)],
+        referer: &str,
+    ) -> Result<(u16, String)> {
+        let enc =
+            |s: &str| -> String { url::form_urlencoded::byte_serialize(s.as_bytes()).collect() };
+        let body = fields
+            .iter()
+            .map(|(k, v)| format!("{}={}", enc(k), enc(v)))
+            .collect::<Vec<_>>()
+            .join("&");
+        let mut req = self
+            .client
+            .post(url)
+            .header(REFERER, referer)
+            .header("User-Agent", &self.user_agent)
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .header("Accept", "application/json")
+            .header("X-Requested-With", "XMLHttpRequest")
+            // 浏览器同款 Origin（fetch POST 会带；WAF 参与打分）
+            .header("Origin", origin_of(url))
+            .body(body);
+        if let Some(c) = &self.cookie {
+            req = req.header("Cookie", c);
+        }
+        let resp = req.send().with_context(|| format!("API 请求没通：{url}"))?;
+        let status = resp.status().as_u16();
+        // WAF 拦截与登录态失效长得不一样：把响应体与关键头带进报错，方便一眼归因
+        if status == 401 || status == 403 {
+            let sniff = resp
+                .headers()
+                .get("cf-ray")
+                .or_else(|| resp.headers().get("server"))
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("")
+                .to_string();
+            let body_head: String = resp.text().unwrap_or_default().chars().take(200).collect();
+            return Err(anyhow!(
+                "站点回 HTTP {status}（cf/server 头：{sniff}；多半是 cookie 失效或 WAF 拦截）：{url}\n响应体：{body_head}"
+            ));
+        }
+        let final_url = resp.url().as_str().to_lowercase();
+        if ["login", "enter.php", "signin", "returnto="]
+            .iter()
+            .any(|hint| final_url.contains(hint))
+        {
+            return Err(anyhow!("被跳到登录页（cookie 可能已失效）：{url}"));
+        }
+        Ok((status, resp.text().unwrap_or_default()))
     }
 
     /// 站内检索找回已存在种子。`relaxed = true` 放宽到「按词元包含」判定：结果页常把长标题
@@ -1053,6 +1116,21 @@ fn url_encode(s: &str) -> String {
         }
     }
     out
+}
+
+/// 从完整 URL 取 `scheme://host[:port]` 作为 Origin 头（fetch POST 同款；WAF 参与打分）。
+/// 解析失败退化为空串（宁可缺头也不错头）。
+fn origin_of(url: &str) -> String {
+    Url::parse(url)
+        .ok()
+        .map(|u| {
+            let host = u.host_str().unwrap_or_default();
+            match u.port() {
+                Some(port) => format!("{}://{}:{}", u.scheme(), host, port),
+                None => format!("{}://{}", u.scheme(), host),
+            }
+        })
+        .unwrap_or_default()
 }
 
 #[cfg(test)]

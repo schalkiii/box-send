@@ -645,7 +645,7 @@ impl BsendGui {
                 div()
                     .text_xs()
                     .text_color(dim)
-                    .child("「审阅」= 只审不发：跑源页解析、预检、字段构造，把将提交的字段清单打进日志。核对没问题再点「确认转种」= 人工确认：预检 → 上传 → 发后自检 → 推种 → 校验。预检拦三类问题（MediaInfo 空 / 简介缺 IMDb·豆瓣·TMDB / 中字标签），不通过不会上传。"),
+                    .child("「审阅」= 只审不发：跑源页解析、预检、字段构造，把将提交的字段清单打进日志。核对没问题再点「确认转种」= 人工确认：预检 → 上传 → 发后自检 → 推种 → 校验。预检拦三类问题（MediaInfo 空 / 简介缺 IMDb·豆瓣·TMDB / 中字标签），上传页带 LuckAudit 的站另跑站点官方预审，不通过不会上传。"),
             );
         for (i, draft) in self.drafts.iter().enumerate() {
             let id = format!("draft-{i}");
@@ -763,7 +763,7 @@ fn render_help() -> gpui::AnyElement {
         .child(div().text_base().font_weight(FontWeight(600.0)).child("转种全流程（Rust 原生）"))
         .child(div().child("1. 「转种草稿」页先点「审阅」——只审不发：把将提交的字段清单打进日志，核对标题/副标题/简介/MediaInfo/链接/标签。"))
         .child(div().child("2. 核对没问题再点「确认转种」——这一次点击就是人工确认，随后全自动："))
-        .child(div().child("   ① 预检：MediaInfo 非空 / 简介带 IMDb·豆瓣·TMDB 链接 / 中字标签（检测到中文字幕时）——任何一条阻断都不会上传。"))
+        .child(div().child("   ① 预检：MediaInfo 非空 / 简介带 IMDb·豆瓣·TMDB 链接 / 中字标签（检测到中文字幕时）——任何一条阻断都不会上传；上传页带 LuckAudit 的站还会把字段送站点官方预审，官方判未通过同样不上传。"))
         .child(div().child("   ② 上传：拉目标站 upload.php 表单，透传 hidden 字段、填标题/副标题/简介/MediaInfo/条目链接/标签，multipart 提交。"))
         .child(div().child("   ③ 发后自检：回读新种详情页，核对标题/MediaInfo/条目链接真的落上了（漏了会在日志里点名）。"))
         .child(div().child("   ④ 推种：下载目标站的新种子，暂停加入下载器（dlLimit=1 兜底），启动校验。"))
