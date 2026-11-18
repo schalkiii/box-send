@@ -73,6 +73,36 @@ impl ReleaseInfo {
         MARKERS.iter().any(|m| hay.contains(m))
     }
 
+    /// 完结剧集特征：完结 / 全集 / Complete（拉丁词边界）
+    pub fn is_completed_series(&self) -> bool {
+        let hay = format!("{} {}", self.name, self.subtitle).to_ascii_lowercase();
+        if hay.contains("完结") || hay.contains("全集") || hay.contains("全剧终") {
+            return true;
+        }
+        // 全41集 这类「全N集」也算完结
+        for (i, c) in hay.char_indices() {
+            if c == '全' {
+                let rest = &hay[i + c.len_utf8()..];
+                let digits: String = rest.chars().take_while(|x| x.is_ascii_digit()).collect();
+                if !digits.is_empty() && rest[digits.len()..].starts_with('集') {
+                    return true;
+                }
+            }
+        }
+        let mut from = 0;
+        while let Some(p) = hay[from..].find("complete") {
+            let at = from + p;
+            let end = at + "complete".len();
+            let pre_ok = at == 0 || !hay.as_bytes()[at - 1].is_ascii_alphanumeric();
+            let post_ok = end >= hay.len() || !hay.as_bytes()[end].is_ascii_alphanumeric();
+            if pre_ok && post_ok {
+                return true;
+            }
+            from = at + 1;
+        }
+        false
+    }
+
     /// 简介里是否已带 IMDb/豆瓣/TMDB 任一链接
     pub fn has_media_links(&self) -> bool {
         let d = self.descr.to_lowercase();
@@ -144,6 +174,18 @@ impl Preflight {
 }
 
 /// LuckAudit 三查：① 中文字幕要选中字标签 ② 简介要带 IMDb/豆瓣/TMDB ③ MediaInfo 不能为空
+/// 想勾的标签：中字 + 完结（站点没有对应复选框时匹配不到，不报错）
+fn wanted_tags(info: &ReleaseInfo) -> Vec<&'static str> {
+    let mut out = Vec::new();
+    if info.has_chinese_subs() {
+        out.push("中字");
+    }
+    if info.is_completed_series() {
+        out.push("完结");
+    }
+    out
+}
+
 pub fn preflight(info: &mut ReleaseInfo, tags: &[String]) -> Preflight {
     let mut pf = Preflight::default();
 
@@ -1464,18 +1506,15 @@ pub fn prepare_upload(target: &NexusPhp, info: &ReleaseInfo) -> Result<PreparedU
         bail!("目标站限流（{notice}）：{form_url}");
     }
 
-    let tags_wanted = if info.has_chinese_subs() {
-        vec!["中字"]
-    } else {
-        vec![]
-    };
+    let tags_wanted = wanted_tags(info);
     let (fields, picked_tags, select_notes) = build_upload_fields(info, &form_html, &tags_wanted);
     // 想勾的标签一个都没匹配上才警告（复选框 value 多是数字编码，
     // 拿 value 里含不含关键词来判会把勾上了的误报成漏勾）
     let tag_warn = if !tags_wanted.is_empty() && picked_tags.is_empty() {
         Some(format!(
-            "[{}] 表单里没找到「中字」类标签复选框，请发布后手动补",
-            target.site_id
+            "[{}] 表单里没找到「{}」类标签复选框，请发布后手动补",
+            target.site_id,
+            tags_wanted.join("/")
         ))
     } else {
         None
@@ -2620,6 +2659,56 @@ struct Released {
     preflight: Preflight,
 }
 
+/// 源站详情页没有 MediaInfo 块时，从本地文件生成：内容 → 成员种子 → 落地路径 → 代表视频。
+/// 失败只记提示（预检会如实报「MediaInfo 为空」），不阻断审阅。
+fn disk_mediainfo(
+    cfg: &Config,
+    req: &ReseedRequest,
+    log: &mut dyn FnMut(&str),
+) -> Result<Option<String>> {
+    let index = ContentIndex::load(&cfg.coverage_state_path());
+    let Some(entry) = index.contents.get(&req.content_key) else {
+        log("本地 MediaInfo：索引里找不到这段内容，跳过");
+        return Ok(None);
+    };
+    let Some((hash, _)) = entry.pick_meta() else {
+        log("本地 MediaInfo：内容没有成员种子，跳过");
+        return Ok(None);
+    };
+    let qb = QBittorrent::new(
+        &cfg.downloader.url,
+        &cfg.downloader.username,
+        &cfg.downloader.password,
+    )?;
+    let path = qb.torrent_content_path(hash).or_else(|| {
+        qb.torrent_meta(hash)
+            .ok()
+            .flatten()
+            .map(|m| join_path(&m.save_path, &m.name))
+    });
+    let Some(path) = path else {
+        log("本地 MediaInfo：拿不到内容落地路径，跳过");
+        return Ok(None);
+    };
+    let Some(media) = crate::mediainfo::pick_media_file(std::path::Path::new(&path)) else {
+        log(&format!("本地 MediaInfo：目录里没找到视频文件（{path}）"));
+        return Ok(None);
+    };
+    log(&format!("本地 MediaInfo：代表文件 {}", media.display()));
+    match crate::mediainfo::generate(&media, cfg.coverage.media_info_dll.as_deref()) {
+        Ok(text) => Ok(Some(text)),
+        Err(e) => {
+            log(&format!("本地 MediaInfo 生成失败：{e:#}"));
+            Ok(None)
+        }
+    }
+}
+
+/// 目录拼接（qB 的 save_path 可能以 `/` 或 `\` 结尾）
+fn join_path(dir: &str, name: &str) -> String {
+    format!("{}/{}", dir.trim_end_matches(['/', '\\']), name)
+}
+
 fn prepare_released(
     cfg: &Config,
     req: &ReseedRequest,
@@ -2645,12 +2734,22 @@ fn prepare_released(
         info.douban
     ));
 
+    // ---- 1.5 源站没有 MediaInfo 时，从本地文件生成（luckpt 等站发种硬性要求）----
+    if info.mediainfo.trim().is_empty() {
+        if let Ok(Some(mi)) = disk_mediainfo(cfg, req, log) {
+            info.mediainfo = mi;
+            log(&format!(
+                "MediaInfo 已由本地文件生成（{} 字节）",
+                info.mediainfo.len()
+            ));
+        }
+    }
+
     // ---- 2 LuckAudit 预检（三查）----
-    let tags: Vec<String> = if info.has_chinese_subs() {
-        vec!["中字".into()]
-    } else {
-        vec![]
-    };
+    let tags: Vec<String> = wanted_tags(&info)
+        .into_iter()
+        .map(|s| s.to_string())
+        .collect();
     let pf = preflight(&mut info, &tags);
     for f in &pf.fixes {
         log(&format!("预检·已自动补：{f}"));
@@ -3420,6 +3519,22 @@ Height : 1080</pre></div>"#;
             &[],
         );
         assert!(notes2.is_empty(), "{notes2:?}");
+    }
+
+    #[test]
+    fn completed_series_detection() {
+        let mk = |n: &str, s: &str| ReleaseInfo {
+            name: n.into(),
+            subtitle: s.into(),
+            ..Default::default()
+        };
+        assert!(mk("The.Disguiser.Complete.HDTV.1080p", "").is_completed_series());
+        assert!(mk("Show.S01.1080p", "全41集").is_completed_series());
+        assert!(mk("Show.S01.1080p", "已完结").is_completed_series());
+        assert!(!mk("Show.S01.1080p", "更新至第10集").is_completed_series());
+        // wanted_tags：中字 + 完结都要在
+        let t = wanted_tags(&mk("Show.Complete", "中字"));
+        assert!(t.contains(&"中字") && t.contains(&"完结"), "{t:?}");
     }
 
     #[test]

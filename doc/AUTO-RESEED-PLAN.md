@@ -129,3 +129,13 @@ qB /torrents/export?hash=…（或 BT_backup 目录）
 - **发种违规成本高**：门禁默认保守、canary 分批、每站限额、失败熔断；任何门禁异常 → 停自动、回人工。
 - **passkey 泄露面**：passkey 只在本地（从 qB tracker 读、缓存于 dataDir，不进日志）。
 - **账号风险**：单站频率与日限额硬约束；cookie 失效立即停该站。
+
+## 8. 进展记录
+
+- **2026-11-18 · P1 第 1 步**：`bencode::pieces()/pieces_hash()` 落地（sha1(info.pieces)，
+  golden 单测对齐 hashlib），v2-only 种子返回 None（回退名字检索）。
+- **2026-11-18 · luckpt 门禁实证 100/100**：源站（hdsky）详情页无 MediaInfo → 新增
+  `mediainfo` 模块走 MediaInfo.dll C 接口（GUI exe 无法无头运行；`Language=en` 标准文本），
+  从本地内容目录取最大视频生成 4198 字节报告；完结剧集自动勾「完结」标签（完结/全集/
+  全N集/Complete）。官方预审从 86/100（❌2）→ 95（❌1）→ **100/100 通过**。
+  配置项：`assist.mediaInfoDll`（缺省自动发现 `C:\Program Files\MediaInfo\MediaInfo.dll`）。

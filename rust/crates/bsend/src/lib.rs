@@ -13,6 +13,7 @@ pub mod index;
 pub mod layout;
 pub mod manifest;
 pub mod matcher;
+pub mod mediainfo;
 pub mod models;
 pub mod qbittorrent;
 pub mod report;

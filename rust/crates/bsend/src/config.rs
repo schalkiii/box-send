@@ -95,6 +95,8 @@ pub struct CoverageSettings {
     /// 暂不参与**转种/发种**的站点（仍参与辅种）：账号无发布权限、上传界面 v1 不支持的站。
     /// 配置写法：`assist.reseedPausedSites: ["hdsky", …]`
     pub reseed_paused_sites: Vec<String>,
+    /// MediaInfo.dll 路径（源站没 MediaInfo 时从本地文件生成用）；空 = 自动发现
+    pub media_info_dll: Option<String>,
     /// 索引归档：下载器里消失超过这么多天的内容从索引里清掉
     pub archive_days: i64,
     /// 并行站 worker 数（Swift 版全局串行；Rust 版按站并行，默认 4）
@@ -131,6 +133,7 @@ impl Default for CoverageSettings {
             relaxed_retry_search: true,
             paused_sites: Vec::new(),
             reseed_paused_sites: Vec::new(),
+            media_info_dll: None,
             archive_days: 30,
             max_concurrent_sites: 4,
             rate_limit_floor_sec: 60,
@@ -276,6 +279,11 @@ impl Config {
             relaxed_retry_search: v_bool(&assist, "relaxedRetrySearch", d.relaxed_retry_search),
             paused_sites: v_str_list(&assist, "pausedSites"),
             reseed_paused_sites: v_str_list(&assist, "reseedPausedSites"),
+            media_info_dll: assist
+                .get("mediaInfoDll")
+                .and_then(|v| v.as_str())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
             archive_days: d.archive_days,
             max_concurrent_sites: (v_i64(
                 &assist,

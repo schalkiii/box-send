@@ -98,6 +98,53 @@ pub fn info_range(data: &[u8]) -> Option<(usize, usize)> {
     None
 }
 
+/// `<len>:<bytes>` 的原始字节（不做 UTF-8 解码；pieces 是二进制，lossy 会破坏内容）。
+pub fn read_bytes(data: &[u8], mut i: usize) -> Option<(&[u8], usize)> {
+    let start = i;
+    while i < data.len() && data[i].is_ascii_digit() {
+        i += 1;
+    }
+    if i >= data.len() || i == start || data[i] != b':' {
+        return None;
+    }
+    let n: usize = std::str::from_utf8(&data[start..i]).ok()?.parse().ok()?;
+    let s = i + 1;
+    if s.checked_add(n)? > data.len() {
+        return None;
+    }
+    Some((&data[s..s + n], s + n))
+}
+
+/// info 里的 `pieces`（拼接的 20 字节 piece SHA-1）。v2-only 种子没有这个键 → None。
+pub fn pieces(data: &[u8]) -> Option<&[u8]> {
+    let (s, e) = info_range(data)?;
+    let mut i = s + 1; // 跳过 'd'
+    while i < e && i < data.len() {
+        if data[i] == b'e' {
+            break;
+        }
+        let (k, ni) = read_string(data, i)?;
+        i = ni;
+        if k == "pieces" {
+            return read_bytes(data, i).map(|(v, _)| v);
+        }
+        i = skip_value(data, i)?;
+    }
+    None
+}
+
+/// `pieces` 的 SHA-1（40 位小写 hex）——PT 站 `/api/pieces-hash` 的查询键
+/// （与 SeedHound 的 `compute_pieces_hash` 一致：sha1(info["pieces"] 原始字节)）。
+pub fn pieces_hash(data: &[u8]) -> Option<String> {
+    let p = pieces(data)?;
+    if p.is_empty() {
+        return None;
+    }
+    let mut h = Sha1::new();
+    h.update(p);
+    Some(format!("{:x}", h.finalize()))
+}
+
 /// v1 info hash：info 区间原始字节的 SHA-1（40 位小写 hex）。
 /// 对区间直接散列而不是重编码——重排键序会改变 hash，必须用原始字节。
 pub fn info_hash_v1(data: &[u8]) -> Option<String> {
@@ -619,5 +666,35 @@ pub(crate) mod tests {
         let h2 = info_hash_v2(&d).unwrap();
         assert_eq!(h2.len(), 64);
         assert!(info_hash_v1(&d).is_some()); // hybrid 仍有 v1 结构可算
+    }
+
+    #[test]
+    fn pieces_hash_matches_golden() {
+        // pieces = 拼接的 20 字节 SHA-1；夹具用 ASCII 字节，golden 由独立实现（hashlib）给出
+        let t = enc(&BVal::d(vec![
+            ("announce", BVal::s("http://tracker.example/announce")),
+            (
+                "info",
+                BVal::d(vec![
+                    ("name", BVal::s("Pack")),
+                    ("piece length", BVal::I(262144)),
+                    ("pieces", BVal::s("0123456789abcdefghij")),
+                ]),
+            ),
+        ]));
+        assert_eq!(pieces(&t).map(|p| p.len()), Some(20));
+        assert_eq!(
+            pieces_hash(&t).as_deref(),
+            Some("7c8e1dc5a4fd22f1311a7a1f3e3401215c0ccab3")
+        );
+        // v2-only 形态没有 pieces → None（调用方回退名字检索）
+        let v2 = enc(&BVal::d(vec![(
+            "info",
+            BVal::d(vec![
+                ("file tree", BVal::d(vec![])),
+                ("name", BVal::s("Pack")),
+            ]),
+        )]));
+        assert!(pieces_hash(&v2).is_none());
     }
 }

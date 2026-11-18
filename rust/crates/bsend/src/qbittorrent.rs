@@ -320,6 +320,16 @@ impl QBittorrent {
         Ok(self.torrent_info(hash).and_then(|v| parse_torrent(&v)))
     }
 
+    /// 单条种子的落地路径（qB 的 content_path：多文件=内容根目录，单文件=文件全路径）
+    pub fn torrent_content_path(&self, hash: &str) -> Option<String> {
+        self.torrent_info(hash).and_then(|v| {
+            v.get("content_path")
+                .and_then(|c| c.as_str())
+                .map(|s| s.to_string())
+                .filter(|s| !s.is_empty())
+        })
+    }
+
     /// 单条种子的完成度与状态（辅种等校验用；比整表拉一遍省）
     pub fn torrent_progress(&self, hash: &str) -> Result<Option<(f64, String)>> {
         self.login()?;
