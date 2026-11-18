@@ -172,7 +172,8 @@ GUI「转种草稿」页的「审阅」按钮与之等价（字段清单打进�
    解析层对 `tracker_hosts` / `trackers` / `tracker` 三种形态都认。
 3. **辅种臂**（站内检索）：严格查询 → 未命中且开了宽松重试再来一轮 → 命中后下
    .torrent 逐文件判定（A=hash 一致 / B=重新打包清单全等 / C=只有名字像）。
-   A、B 且目录布局一致 → 停止态添加（`dlLimit=1` 下载兜底）→ `start` 触发校验 →
+   A、B 且布局可复用（同根名，或仅根名不同 → NoSubfolder）→ 停止态添加
+   （`dlLimit=1` 下载兜底）→ `start` 触发校验 →
    满 100% 解除限速、已在做种（`assisted`）；不满则停住，按 `assist.removeOnVerifyFail`
    删种保文件（`failed`）或保持停止。qB 5.x 起停止态的种子不会自校验，必须 start 一次；
    校验期间的 1 B/s 兜底保证「分片结构不同」时不会开始狂下。

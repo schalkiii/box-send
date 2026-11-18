@@ -695,13 +695,9 @@ fn process_item(
                     "文件一致，但目录结构与本地不同，直接加会重下一整份，先不动下载器".into(),
                     hit.detail_url,
                 ),
-                Layout::RootDiffers => done_url(
-                    CoverageStatus::ReviewPending,
-                    "文件一致，但站点种子的内层目录名与本地不同，直接加会重下一整份，先不动下载器"
-                        .into(),
-                    hit.detail_url,
-                ),
-                Layout::Same => push_tail(
+                // 内层一致、只有根目录名不同：推种时按 contentLayout=NoSubfolder
+                // 复用既有内容目录（layout 模块按实时 savePath/文件清单决定）
+                Layout::Same | Layout::RootDiffers => push_tail(
                     item,
                     site_id,
                     qb,

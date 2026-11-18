@@ -173,14 +173,16 @@ const NAME: &str = "Black.Lagoon.S01.1080p.Blu-ray.x264-GROUP";
 const FILES: &[(&str, i64)] = &[("a.mkv", 100), ("s/ch.srt", 5)];
 
 fn qb_server(torrent_hash: String, tracker_hosts: Vec<String>) -> MockServer {
-    qb_server_ex(torrent_hash, tracker_hosts, None)
+    qb_server_ex(torrent_hash, tracker_hosts, None, None)
 }
 
-/// 同 qb_server，但单查（hashes=）的进度/状态可编程——收尾场景要在两轮之间翻 mock 状态。
+/// 同 qb_server，但单查（hashes=）的进度/状态可编程——收尾场景要在两轮之间翻 mock 状态；
+/// `add_capture` 给出时把 `torrents/add` 的请求体记下来（核对 savepath/contentLayout）。
 fn qb_server_ex(
     torrent_hash: String,
     tracker_hosts: Vec<String>,
     progress: Option<Arc<Mutex<(f64, String)>>>,
+    add_capture: Option<CapturedRequests>,
 ) -> MockServer {
     let torrent_hash = Arc::new(torrent_hash);
     let tracker_hosts = Arc::new(tracker_hosts);
@@ -203,8 +205,9 @@ fn qb_server_ex(
                     .as_ref()
                     .map(|m| m.lock().unwrap().clone())
                     .unwrap_or((1.0, "pausedUP".to_string()));
-                let json =
-                    format!(r#"[{{"hash":"{h}","progress":{p},"state":"{st}","up_limit":-1}}]"#);
+                let json = format!(
+                    r#"[{{"hash":"{h}","progress":{p},"state":"{st}","up_limit":-1,"name":"Pack","save_path":"/data/"}}]"#
+                );
                 return (200, "application/json", json.into_bytes());
             }
             let hosts = tracker_hosts
@@ -237,6 +240,9 @@ fn qb_server_ex(
                 text.contains("name=\"torrents\""),
                 "add 的文件字段名是 torrents"
             );
+            if let Some(cap) = &add_capture {
+                cap.lock().unwrap().push((path.to_string(), body.to_vec()));
+            }
             return (200, "text/plain", b"Ok.".to_vec());
         }
         if path.starts_with("/api/v2/torrents/trackers") {
@@ -802,7 +808,7 @@ fn e2e_verifying_collect_assisted() {
     let hash = bencode::info_hash_v1(&t).unwrap();
 
     let progress = Arc::new(Mutex::new((0.0f64, "checkingFiles".to_string())));
-    let qb = qb_server_ex(hash, Vec::new(), Some(progress.clone()));
+    let qb = qb_server_ex(hash, Vec::new(), Some(progress.clone()), None);
     let pter = nexus_site_server("hit", t.clone());
     let hdsky = nexus_site_server("miss", t.clone());
     let mut cfg = test_config(qb.port, pter.port, hdsky.port, &dir);
@@ -888,7 +894,7 @@ fn e2e_verifying_collect_rollback() {
     let hash = bencode::info_hash_v1(&t).unwrap();
 
     let progress = Arc::new(Mutex::new((0.0f64, "checkingFiles".to_string())));
-    let qb = qb_server_ex(hash, Vec::new(), Some(progress.clone()));
+    let qb = qb_server_ex(hash, Vec::new(), Some(progress.clone()), None);
     let pter = nexus_site_server("hit", t.clone());
     let hdsky = nexus_site_server("miss", t.clone());
     let mut cfg = test_config(qb.port, pter.port, hdsky.port, &dir);
@@ -1345,4 +1351,56 @@ fn e2e_qb5_start_stop_endpoints() {
         0,
         "start 成功就不再试旧名"
     );
+}
+
+/// 场景：站点种子与本地文件一致、只有根目录名不同（matcher::layout = RootDiffers）——
+/// 推种应按 contentLayout=NoSubfolder 复用既有内容目录，而不是拦成「待人工」。
+#[test]
+fn e2e_root_differs_remaps_with_no_subfolder() {
+    let dir = temp_dir("rootdiff");
+    // 站点种子根名 Other，本地（qB）是 Pack，内层文件一致
+    let t_site = Arc::new(torrent_bytes("Other", FILES));
+    let hash = bencode::info_hash_v1(&torrent_bytes("Pack", FILES)).unwrap();
+    let captured: CapturedRequests = Arc::new(Mutex::new(Vec::new()));
+    let qb = qb_server_ex(hash, Vec::new(), None, Some(captured.clone()));
+    let pter = nexus_site_server("hit", t_site.clone());
+    let hdsky = nexus_site_server("miss", t_site.clone());
+    let cfg = test_config(qb.port, pter.port, hdsky.port, &dir);
+
+    let qb_client = Arc::new(QBittorrent::new(&cfg.downloader.url, "admin", "pass").unwrap());
+    let ads = adapters(&cfg);
+    let mut index = ContentIndex::load(&cfg.coverage_state_path());
+    let _ = run_round(
+        &cfg,
+        qb_client,
+        &ads,
+        &mut index,
+        |_| {},
+        RoundOptions {
+            persist: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    let entry = index.contents.values().next().unwrap();
+    assert_eq!(
+        entry.coverage["pter"].status,
+        CoverageStatus::Assisted,
+        "根名不同但内层一致：应复用目录推种（note: {:?}）",
+        entry.coverage["pter"].note
+    );
+    let reqs = captured.lock().unwrap();
+    let body = reqs
+        .iter()
+        .map(|(_, b)| String::from_utf8_lossy(b).to_string())
+        .collect::<Vec<_>>()
+        .join("\n---\n");
+    assert!(body.contains("name=\"savepath\""), "{body}");
+    assert!(
+        body.contains("/data/Pack"),
+        "savepath 应指到既有内容目录：{body}"
+    );
+    assert!(body.contains("contentLayout"), "{body}");
+    assert!(body.contains("NoSubfolder"), "{body}");
 }
