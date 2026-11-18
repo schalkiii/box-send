@@ -313,6 +313,13 @@ impl QBittorrent {
         arr.into_iter().next()
     }
 
+    /// 单条种子的记账（save_path/name/category…）：推种前按 hash 现场取，
+    /// 保证「沿用已有种子的保存路径」用的是下载器当前值而不是索引里的旧值
+    pub fn torrent_meta(&self, hash: &str) -> Result<Option<LocalTorrent>> {
+        self.login()?;
+        Ok(self.torrent_info(hash).and_then(|v| parse_torrent(&v)))
+    }
+
     /// 单条种子的完成度与状态（辅种等校验用；比整表拉一遍省）
     pub fn torrent_progress(&self, hash: &str) -> Result<Option<(f64, String)>> {
         self.login()?;
@@ -397,6 +404,7 @@ impl QBittorrent {
         skip_checking: bool,
         up_limit: i64,
         paused: bool,
+        content_layout: Option<&str>,
     ) -> Result<AddTorrentResult> {
         self.login()?;
 
@@ -413,6 +421,10 @@ impl QBittorrent {
             // 启停三套参数名都发：5.x 认 stopped，4.3+/4.4+ 认 started / paused
             .text("started", if paused { "false" } else { "true" }.to_string())
             .text("stopped", if paused { "true" } else { "false" }.to_string());
+        // 根目录名不同的跨站种子：NoSubfolder 让文件直接映射进既有内容目录（qB 4.4+）
+        if let Some(layout) = content_layout {
+            form = form.text("contentLayout", layout.to_string());
+        }
         if paused {
             form = form.text("paused", "true".to_string());
         }

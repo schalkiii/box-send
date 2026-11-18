@@ -2761,21 +2761,29 @@ pub fn run_reseed(
     // ---- 4 回推下载器并校验 ----
     let tpage = tgt.fetch_torrent_page(&detail_url)?;
     let tdata = tgt.download_torrent(&tpage, &detail_url)?;
-    let entry = index
-        .contents
-        .get(&req.content_key)
-        .ok_or_else(|| anyhow!("索引里找不到内容 {}", req.content_key))?;
-    let save_path = entry
-        .pick_meta()
-        .map(|(_, m)| m.save_path.clone())
-        .ok_or_else(|| anyhow!("内容 {} 没有成员种子，不知道保存路径", req.content_key))?;
-    let category = entry.pick_meta().and_then(|(_, m)| m.category.clone());
+    let (rep_hash, meta_save_path, category) = {
+        let entry = index
+            .contents
+            .get(&req.content_key)
+            .ok_or_else(|| anyhow!("索引里找不到内容 {}", req.content_key))?;
+        let (h, m) = entry
+            .pick_meta()
+            .ok_or_else(|| anyhow!("内容 {} 没有成员种子，不知道保存路径", req.content_key))?;
+        (h.clone(), m.save_path.clone(), m.category.clone())
+    };
     let limit = cfg
         .downloader
         .site_up_limits
         .get(&req.target_site)
         .copied()
         .unwrap_or(cfg.downloader.default_up_limit);
+    // 落盘布局：按成员种子实时 savepath；根名不同的同内容新种用 NoSubfolder 复用既有目录
+    let layout =
+        crate::layout::resolve_for_torrent(qb, &rep_hash, &tdata, &info.name, &meta_save_path);
+    if let crate::layout::AddLayout::Mismatch(why) = &layout {
+        bail!("新种布局对不上，不推下载器：{why}");
+    }
+    let save_path = layout.save_path().unwrap_or(&meta_save_path).to_string();
     let fname = format!("{}.torrent", info.name);
     let add = qb.add_torrent(
         &tdata,
@@ -2785,6 +2793,7 @@ pub fn run_reseed(
         false,
         limit,
         true,
+        layout.content_layout(),
     )?;
     if !add.note.is_empty() {
         log(&format!("下载器回执：{}", add.note));

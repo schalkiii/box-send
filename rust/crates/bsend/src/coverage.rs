@@ -733,13 +733,6 @@ fn push_tail(
     dry_run: bool,
     done_url: impl Fn(CoverageStatus, String, String) -> Event,
 ) -> Event {
-    if dry_run {
-        return done_url(
-            CoverageStatus::ReviewPending,
-            format!("可辅（dry-run 未推送）：{why}"),
-            detail_url.to_string(),
-        );
-    }
     // 限速按辅种这台自己那份逐站表算
     let limit = dl
         .site_up_limits
@@ -751,14 +744,33 @@ fn push_tail(
         bencode::info_name(data).unwrap_or_else(|| item.name.clone())
     );
     let category = item.category.as_deref().or(dl.category.as_deref());
+    // 落盘布局：沿用既有种子的实时 savepath；根名不同的同内容种按 NoSubfolder 复用
+    let layout =
+        crate::layout::resolve_for_torrent(qb, &item.rep_hash, data, &item.name, &item.save_path);
+    if dry_run {
+        return done_url(
+            CoverageStatus::ReviewPending,
+            format!("可辅（dry-run 未推送）：{why}｜{}", layout.describe()),
+            detail_url.to_string(),
+        );
+    }
+    if let crate::layout::AddLayout::Mismatch(why) = &layout {
+        return done_url(
+            CoverageStatus::ReviewPending,
+            format!("布局对不上，不推（待人工）：{why}"),
+            detail_url.to_string(),
+        );
+    }
+    let save_path = layout.save_path().unwrap_or(&item.save_path).to_string();
     let add = match qb.add_torrent(
         data,
         &filename,
-        &item.save_path,
+        &save_path,
         category,
         false,
         limit,
         true,
+        layout.content_layout(),
     ) {
         Ok(a) => a,
         Err(e) => {
@@ -857,6 +869,13 @@ fn reseed_arm(
 ) -> Event {
     if cov.reseed_mode == ReseedMode::Off {
         return done(CoverageStatus::Miss, "站内没有（转种臂关闭）".into());
+    }
+    if cov.reseed_paused_sites.iter().any(|s| s == site_id) {
+        return done(
+            CoverageStatus::Miss,
+            "站内没有（该站暂不参与转种：无发布权限/上传界面 v1 不支持，见 assist.reseedPausedSites）"
+                .into(),
+        );
     }
     if item.forbid_reseed {
         return done(

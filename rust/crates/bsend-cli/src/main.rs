@@ -117,6 +117,15 @@ enum Cmd {
         #[arg(long, value_delimiter = ',')]
         sites: Option<Vec<String>>,
     },
+    /// 落盘核对（只读）：抽若干内容，用下载器实时数据核对「推种时会用哪个 savepath」
+    Layoutcheck {
+        /// 最多看多少段内容
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+        /// 只看这段内容（contentKey 前缀或名称包含）
+        #[arg(long)]
+        only: Option<String>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -141,6 +150,7 @@ fn main() -> Result<()> {
         Cmd::Reseed { draft, yes } => cmd_reseed(&cfg, draft, yes),
         Cmd::Report { top, json, sites } => cmd_report(&cfg, top, json, sites),
         Cmd::Formcheck { sites } => cmd_formcheck(&cfg, sites),
+        Cmd::Layoutcheck { limit, only } => cmd_layoutcheck(&cfg, limit, only),
     }
 }
 
@@ -556,6 +566,96 @@ fn cmd_formcheck(cfg: &Config, sites: Option<Vec<String>>) -> Result<()> {
         gap_n,
         fail_n
     );
+    Ok(())
+}
+
+/// 落盘核对用的一条成员种子（hash + 下载器实时记账 + 文件清单）
+struct LayoutMember {
+    hash: String,
+    meta: bsend::models::LocalTorrent,
+    files: Vec<(String, i64)>,
+}
+
+/// 落盘核对（只读）：抽若干内容，用下载器实时 name/save_path/文件清单，
+/// 模拟「把这一段内容的种子推到另一个站时」会用哪个 savepath（与真实推种同一套判定）。
+fn cmd_layoutcheck(cfg: &Config, limit: usize, only: Option<String>) -> Result<()> {
+    let index = ContentIndex::load(&cfg.coverage_state_path());
+    let qb = connect_qb(cfg)?;
+    let only_lc = only.as_ref().map(|s| s.to_lowercase());
+    let (mut shown, mut same_n, mut remap_n, mut bad_n) = (0usize, 0usize, 0usize, 0usize);
+    println!("落盘核对（只读，不推种）｜按下载器实时 name/savePath/文件清单判定\n");
+    for (key, entry) in index.contents.iter() {
+        if shown >= limit {
+            break;
+        }
+        if let Some(sub) = &only_lc {
+            if !key.to_lowercase().contains(sub) && !entry.name.to_lowercase().contains(sub) {
+                continue;
+            }
+        }
+        // 实时记账（最多 4 条成员；拿不到的文件清单留空，判定会退回沿用）
+        let mut members: Vec<LayoutMember> = Vec::new();
+        for h in entry.torrents.keys().take(4) {
+            let Some(meta) = qb.torrent_meta(h).ok().flatten() else {
+                continue;
+            };
+            let files = qb.torrent_files(h).unwrap_or_default();
+            members.push(LayoutMember {
+                hash: h.to_string(),
+                meta,
+                files,
+            });
+        }
+        if members.is_empty() {
+            continue;
+        }
+        shown += 1;
+        println!(
+            "== 「{}」（{} 个成员在下载器里）",
+            entry.name,
+            members.len()
+        );
+        let base = &members[0];
+        println!(
+            "   基准 {:<10} {:<44} save={}  {} 个文件",
+            &base.hash[..base.hash.len().min(10)],
+            base.meta.name,
+            base.meta.save_path,
+            base.files.len()
+        );
+        for m in members.iter().skip(1) {
+            let l = bsend::layout::plan_add_layout(
+                &m.meta.name,
+                &m.files,
+                &base.meta.name,
+                &base.meta.save_path,
+                &base.files,
+            );
+            let tag = match &l {
+                bsend::layout::AddLayout::Same { .. } => {
+                    same_n += 1;
+                    "同盘沿用"
+                }
+                bsend::layout::AddLayout::Remap { .. } => {
+                    remap_n += 1;
+                    "复用既有目录"
+                }
+                bsend::layout::AddLayout::Mismatch(_) => {
+                    bad_n += 1;
+                    "不能推"
+                }
+            };
+            println!(
+                "   {:<10} {:<44} save={}  → {}：{}",
+                &m.hash[..m.hash.len().min(10)],
+                m.meta.name,
+                m.meta.save_path,
+                tag,
+                l.describe()
+            );
+        }
+    }
+    println!("\n汇总：{shown} 段内容｜同盘沿用 {same_n}｜复用既有目录 {remap_n}｜不能推 {bad_n}");
     Ok(())
 }
 

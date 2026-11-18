@@ -82,6 +82,7 @@ bsend reseed --draft 1       # 审阅第 1 条（只审不发）：预检结论 
 bsend reseed --draft 1 --yes # 确认提交：预检 → 上传 → 发后自检 → 推种 → 校验
 bsend formcheck              # 全部启用站发种表格演练（只审不发，绝不 POST）
 bsend formcheck --sites luckpt,hdsky   # 只演练指定站
+bsend layoutcheck --limit 20           # 落盘核对：抽 20 段内容看推种会用哪个 savepath（只读）
 ```
 
 GUI「转种草稿」页的「审阅」按钮与之等价（字段清单打进任务日志），「确认转种」= 人工
@@ -125,6 +126,8 @@ GUI「转种草稿」页的「审阅」按钮与之等价（字段清单打进�
 
 - 参与站点 = `sourceSites` 里 enabled 的站 ∩ 辅种设置（`assist.siteIDs`，空 = 全部）
   − `pausedSites`，且框架为 NexusPHP（v1 只有这套检索启发式）。
+  转种/发种另有 `assist.reseedPausedSites`：该表里的站**仍可辅种**，只是不出转种草稿
+  （账号无发布权限、上传界面 v1 不支持的站放这里）。
 - 下载器 = `assistDownloaderID` 指向的那台（缺省、或找不到指定 id 都退回主下载器）；
   沿用它的 savePath / 分类 / 限速（含 `siteUpLimits` 逐站表）。推送固定「先暂停等校验」，
   不读 skipChecking（方案 §七）。
@@ -139,6 +142,8 @@ GUI「转种草稿」页的「审阅」按钮与之等价（字段清单打进�
 | `siteIntervals` | `{}` | 逐站请求间隔（秒）：`{"hdsky": 65}` —— hdsky 实测要求 60 秒/次 |
 | `rateLimitFloorSec` | 60 | 站点报限流后该站本轮的最低间隔 |
 | `roundBudget` | 200 | 目标站检索预算，**按真实 HTTP 请求计**（一次站内检索要发 3–7 条查询词） |
+| `pausedSites` | `[]` | 完全暂停的站：辅种/转种/演练都不去敲（连不上、站点已挂、cookie 失效） |
+| `reseedPausedSites` | `[]` | 只停转种/发种的站：无发布权限、上传界面 v1 不支持；辅种照常 |
 
 ### Cookie 来源
 
@@ -169,6 +174,11 @@ GUI「转种草稿」页的「审阅」按钮与之等价（字段清单打进�
    满 100% 解除限速、已在做种（`assisted`）；不满则停住，按 `assist.removeOnVerifyFail`
    删种保文件（`failed`）或保持停止。qB 5.x 起停止态的种子不会自校验，必须 start 一次；
    校验期间的 1 B/s 兜底保证「分片结构不同」时不会开始狂下。
+   **落盘（先于添加）**：按成员种子在下载器里的**实时** savePath/根名（不信索引旧值）
+   决定——根名一致直接沿用；根名不同但去根后的文件清单全等 → `savepath` 指到既有内容
+   目录 + `contentLayout=NoSubfolder`（qB 4.4+，把新种文件直接映射进既有目录，不新建
+   文件夹）；清单不一致 → `reviewPending`，绝不碰下载器。`bsend layoutcheck --limit N`
+   只读核对一批内容的落盘决策（不推种）。
    轮询等到头还没结论 → 落 `verifying`（记下那条种子的 hash）；下一轮开头的
    收尾 pass 凭它直查下载器收尾，不花站点请求。C 级与布局对不上的 → `reviewPending`，
    绝不碰下载器。

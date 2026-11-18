@@ -10,6 +10,7 @@ pub mod config;
 pub mod cookiecloud;
 pub mod coverage;
 pub mod index;
+pub mod layout;
 pub mod manifest;
 pub mod matcher;
 pub mod models;
@@ -26,6 +27,7 @@ pub use coverage::{run_round, DraftItem, Event, RoundOptions, RoundReport};
 pub use index::{
     ContentEntry, ContentIndex, CoverageStatus, ScanDelta, SiteCoverage, SourceRecord, TorrentMeta,
 };
+pub use layout::AddLayout;
 pub use models::{JudgeLevel, Layout, LocalTorrent, TorrentFingerprint};
 pub use qbittorrent::{AddTorrentResult, QBittorrent};
 pub use report::CoverageReport;
