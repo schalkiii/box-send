@@ -454,8 +454,45 @@ fn tag_at(b: &[u8], i: usize, pat: &[u8]) -> bool {
 /// 上传表单里要提交的一对键值
 pub type Field = (String, String);
 
-/// 解析上传表单页：hidden 透传 + select 默认值（模拟浏览器首轮提交）
+/// 上传表单块：action 含 takeupload / 含文件上传框的 `<form>…</form>`。
+/// 页面导航条常带搜索表单（search_area 一类），字段解析必须限定在上传表单里。
+/// 找不到候选返回 None——页面上根本没有静态上传表单。
+pub fn upload_form_block(page: &str) -> Option<&str> {
+    let lower = page.to_ascii_lowercase();
+    let mut best: Option<(usize, usize, u8)> = None;
+    let mut i = 0;
+    while let Some(p) = lower[i..].find("<form") {
+        let start = i + p;
+        let open_end = lower[start..]
+            .find('>')
+            .map(|j| start + j + 1)
+            .unwrap_or(page.len());
+        let close = lower[open_end..]
+            .find("</form>")
+            .map(|j| open_end + j)
+            .unwrap_or(page.len());
+        let bl = &lower[start..close];
+        let score = if bl.contains("type=\"file\"") || bl.contains("type='file'") {
+            3u8
+        } else if bl.contains("takeupload") {
+            2
+        } else if bl.contains("upload") {
+            1
+        } else {
+            0
+        };
+        if score > 0 && best.map(|(_, _, s)| score > s).unwrap_or(true) {
+            best = Some((start, close, score));
+        }
+        i = open_end;
+    }
+    best.map(|(s, e, _)| &page[s..e])
+}
+
+/// 解析上传表单页：hidden 透传 + select 默认值（模拟浏览器首轮提交）。
+/// 只看上传表单块内（导航搜索表单的 search_area 等不掺进来）。
 pub fn parse_form_fields(page: &str) -> Vec<Field> {
+    let page = upload_form_block(page).unwrap_or(page);
     let mut fields: Vec<Field> = Vec::new();
     // hidden inputs（to_ascii_lowercase 找偏移、切原串：字节长度一致才安全）
     let lower = page.to_ascii_lowercase();
@@ -532,16 +569,17 @@ fn attr(tag: &str, name: &str) -> Option<String> {
     None
 }
 
-/// 业务字段：在 hidden/select 默认值之上覆盖标题/副标题/简介/MediaInfo/链接/标签。
-/// 返回实际勾选的标签值（预检要核对中字）。
+/// 业务字段：在 hidden/select 默认值之上覆盖标题/副标题/简介/MediaInfo/链接/标签，
+/// 并按发布名做选档回填（分类/媒介/编码/音频/分辨率）。返回
+/// (提交字段, 实际勾选的标签值, 选档提示)。
 pub fn build_upload_fields(
     info: &ReleaseInfo,
     page: &str,
     tags_wanted: &[&str],
-) -> (Vec<Field>, Vec<String>) {
+) -> (Vec<Field>, Vec<String>, Vec<String>) {
     let mut fields = parse_form_fields(page);
 
-    // 标题 / 副标题
+    // 标题 / 副标题（Gazelle 系如 dicmusic 用 title/subtitle）
     let (title_field, title_val) = if form_has(page, "name") {
         ("name", info.name.clone())
     } else if form_has(page, "title") {
@@ -552,8 +590,12 @@ pub fn build_upload_fields(
     if !title_field.is_empty() {
         set_field(&mut fields, title_field, title_val);
     }
-    if !info.subtitle.is_empty() && form_has(page, "small_descr") {
-        set_field(&mut fields, "small_descr", info.subtitle.clone());
+    if !info.subtitle.is_empty() {
+        if form_has(page, "small_descr") {
+            set_field(&mut fields, "small_descr", info.subtitle.clone());
+        } else if form_has(page, "subtitle") {
+            set_field(&mut fields, "subtitle", info.subtitle.clone());
+        }
     }
 
     // MediaInfo 独立文本域（新版 NexusPHP）；没有就内嵌简介
@@ -577,8 +619,13 @@ pub fn build_upload_fields(
     } else {
         info.descr.clone()
     };
-    if form_has(page, "descr") {
-        set_field(&mut fields, "descr", descr);
+    // 简介字段：NexusPHP 是 descr；Gazelle 系（dicmusic）是 release_desc
+    if let Some(f) = ["descr", "release_desc", "description", "content"]
+        .iter()
+        .find(|f| form_has(page, f))
+        .copied()
+    {
+        set_field(&mut fields, f, descr);
     }
 
     // 条目链接字段
@@ -627,7 +674,9 @@ pub fn build_upload_fields(
     {
         set_field(&mut fields, "anonymity", "no".into());
     }
-    (fields, picked)
+    // 选档回填：分类/媒介/编码/音频/分辨率（词元唯一配对才填）
+    let notes = fill_selects(&mut fields, page, info);
+    (fields, picked, notes)
 }
 
 /// 覆盖式设置字段：同名先删再推
@@ -636,8 +685,682 @@ fn set_field(fields: &mut Vec<Field>, name: &str, value: String) {
     fields.push((name.to_string(), value));
 }
 
+/// 表单控件里有没有这个名字的字段（input/textarea/select 的 name 属性）。
+/// 只认真控件：`<meta name="description">` 与 JS 里的同名字符串不算（hdcity 实测踩过）。
 fn form_has(page: &str, name: &str) -> bool {
-    page.contains(&format!("name=\"{name}\"")) || page.contains(&format!("name='{name}'"))
+    let lower = page.to_ascii_lowercase();
+    for tag_name in ["<input", "<textarea", "<select"] {
+        let mut i = 0;
+        while let Some(p) = lower[i..].find(tag_name) {
+            let start = i + p;
+            let end = lower[start..]
+                .find('>')
+                .map(|j| start + j + 1)
+                .unwrap_or(page.len());
+            if attr(&page[start..end], "name").as_deref() == Some(name) {
+                return true;
+            }
+            i = end;
+        }
+    }
+    false
+}
+
+// ---------------- 选档映射（发布名/副标题 → 分类与质量下拉） ----------------
+
+/// 媒介词元（最长优先；重叠的短词自动跳过：WEB-DL 吃掉 WEB）
+const MEDIUM_KEYWORDS: &[&str] = &[
+    "UHD Blu-ray",
+    "UHD BluRay",
+    "Blu-ray REMUX",
+    "BluRay REMUX",
+    "WEB-DL",
+    "WEBRip",
+    "Blu-ray",
+    "BluRay",
+    "BDRip",
+    "BRRip",
+    "DVDRip",
+    "HDTV",
+    "REMUX",
+    "WEB",
+    "UHD",
+    "DVD",
+];
+
+const CODEC_KEYWORDS: &[&str] = &[
+    "H.265", "H.264", "x265", "x264", "HEVC", "AVC", "XviD", "DivX", "AV1", "VC-1", "VC1",
+    "MPEG-2", "MPEG2", "MPEG4", "VP9",
+];
+
+const AUDIO_KEYWORDS: &[&str] = &[
+    "DTS-HD MA",
+    "DTS-HD",
+    "DTS-X",
+    "TrueHD",
+    "E-AC-3",
+    "DD+",
+    "DDP",
+    "EAC3",
+    "Atmos",
+    "FLAC",
+    "LPCM",
+    "ALAC",
+    "AAC",
+    "AC3",
+    "DTS",
+    "APE",
+    "WAV",
+    "MP3",
+    "Opus",
+    "DD",
+];
+
+const STANDARD_KEYWORDS: &[&str] = &[
+    "3840x2160",
+    "1920x1080",
+    "1280x720",
+    "2160p",
+    "1080p",
+    "1080i",
+    "720p",
+    "576p",
+    "480p",
+    "8K",
+    "4K",
+];
+
+const PROCESSING_KEYWORDS: &[&str] =
+    &["REMUX", "REPACK", "PROPER", "INTERNAL", "UNCUT", "RESTORED"];
+
+/// 发布名里的词元：最长优先贪心去重叠，带词边界（大小写不敏感）
+fn find_keywords(hay: &str, keywords: &[&str]) -> Vec<String> {
+    let h = hay.to_ascii_lowercase();
+    let mut hits: Vec<(usize, &str)> = Vec::new();
+    for kw in keywords {
+        let k = kw.to_ascii_lowercase();
+        let mut from = 0;
+        while let Some(p) = h[from..].find(&k) {
+            let at = from + p;
+            let end = at + k.len();
+            let pre_ok = at == 0 || !h.as_bytes()[at - 1].is_ascii_alphanumeric();
+            let post_ok = end >= h.len() || !h.as_bytes()[end].is_ascii_alphanumeric();
+            if pre_ok && post_ok {
+                hits.push((at, kw));
+                from = end;
+            } else {
+                from = at + 1;
+            }
+        }
+    }
+    // 长词优先，位置次之；与已取区间重叠的短词跳过
+    hits.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then(a.0.cmp(&b.0)));
+    let mut taken: Vec<(usize, usize)> = Vec::new();
+    let mut out: Vec<String> = Vec::new();
+    for (at, kw) in hits {
+        let end = at + kw.len();
+        if taken.iter().any(|(s, e)| at < *e && end > *s) {
+            continue;
+        }
+        taken.push((at, end));
+        // 同一关键词出现多次也只算一个词元
+        if !out.iter().any(|k| k.eq_ignore_ascii_case(kw)) {
+            out.push(kw.to_string());
+        }
+    }
+    out
+}
+
+/// 规范化词元：小写 + 只留 ASCII 字母数字（`WEB-DL` → `webdl`；标签带中文尾缀也全等）
+fn norm_token(s: &str) -> String {
+    s.chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .map(|c| c.to_ascii_lowercase())
+        .collect()
+}
+
+/// 词元 → 选项的配对结论
+enum Pairing {
+    /// 唯一命中：选项 value
+    Hit(String),
+    /// 多个候选（含同名重复项）：不猜
+    Ambiguous,
+    /// 与选项无关
+    Miss,
+}
+
+/// 在选项里找词元：规范化全等优先，其次标签里的分隔子串；命中多个不猜
+fn pair_option(options: &[(String, String)], token: &str) -> Pairing {
+    let tn = norm_token(token);
+    if !tn.is_empty() {
+        let exact: Vec<&(String, String)> = options
+            .iter()
+            .filter(|(_, l)| norm_token(l) == tn)
+            .collect();
+        if exact.len() == 1 {
+            return Pairing::Hit(exact[0].0.clone());
+        }
+        if exact.len() > 1 {
+            return Pairing::Ambiguous;
+        }
+    }
+    // 分隔子串（中文词元没有 ASCII 边界概念，子串即命中）
+    let tl = token.to_ascii_lowercase();
+    let ascii_kw = tl
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b' ' || b == b'-' || b == b'.' || b == b'+');
+    let sub: Vec<&(String, String)> = options
+        .iter()
+        .filter(|(_, l)| {
+            let ll = l.to_ascii_lowercase();
+            let mut from = 0;
+            while let Some(p) = ll[from..].find(&tl) {
+                let at = from + p;
+                let end = at + tl.len();
+                if !ascii_kw {
+                    return true;
+                }
+                let pre_ok = at == 0 || !ll.as_bytes()[at - 1].is_ascii_alphanumeric();
+                let post_ok = end >= ll.len() || !ll.as_bytes()[end].is_ascii_alphanumeric();
+                if pre_ok && post_ok {
+                    return true;
+                }
+                from = at + 1;
+            }
+            false
+        })
+        .collect();
+    if sub.len() == 1 {
+        return Pairing::Hit(sub[0].0.clone());
+    }
+    if sub.len() > 1 {
+        return Pairing::Ambiguous;
+    }
+    Pairing::Miss
+}
+
+fn match_option(options: &[(String, String)], token: &str) -> Option<String> {
+    match pair_option(options, token) {
+        Pairing::Hit(v) => Some(v),
+        _ => None,
+    }
+}
+
+/// 选项标签与词元是否有关系（规范化全等或任一方向的子串）：域判定用，宁可偏宽
+fn label_relates(label: &str, token: &str) -> bool {
+    let ln = norm_token(label);
+    let tn = norm_token(token);
+    if !ln.is_empty() && ln == tn {
+        return true;
+    }
+    let ll = label.to_ascii_lowercase();
+    let tl = token.to_ascii_lowercase();
+    if tl.is_empty() || ll.is_empty() {
+        return false;
+    }
+    ll.contains(&tl) || tl.contains(&ll)
+}
+
+/// 选项集是否属于该词表的域：防「source_sel 是地区」「audiocodec_sel 是电子书格式」
+/// 这类同名不同义的下拉被误配/误报
+fn options_in_domain(options: &[(String, String)], kws: &[&str]) -> bool {
+    options.iter().any(|(_, l)| {
+        kws.iter().any(|kw| {
+            std::iter::once(*kw)
+                .chain(token_aliases(kw).iter().copied())
+                .any(|t| label_relates(l, t))
+        })
+    })
+}
+
+/// 词元直配不上时的别名回退（同一制式的不同写法；含实测站点的简写与中文标签）
+fn token_aliases(token: &str) -> &'static [&'static str] {
+    match norm_token(token).as_str() {
+        "x264" | "h264" | "avc" => &["x264", "H.264", "AVC", "H264"],
+        "x265" | "h265" | "hevc" => &["x265", "H.265", "HEVC", "H265"],
+        "2160p" | "4k" | "uhd" => &["2160p", "2160", "4K", "UHD"],
+        // ptsbao 实测分辨率选项是 480/576/720/1080/2K/4K 裸数字
+        "1080p" => &["1080p", "1920x1080", "1080"],
+        "1080i" => &["1080i", "1920x1080", "1080"],
+        "720p" => &["720p", "1280x720", "720"],
+        "576p" => &["576p", "576"],
+        "480p" => &["480p", "480"],
+        // aling/ptcafe 实测媒介选项写「TV」，繁体站写「電視」
+        "hdtv" => &["TV", "TVRip", "HDTVRip", "Television", "电视", "電視"],
+        "eac3" | "ddp" | "dd+" => &["DD+", "E-AC-3", "EAC3", "DDP"],
+        "dtshdma" => &["DTS-HD MA", "DTS-HD", "DTS"],
+        "dtshd" => &["DTS-HD", "DTS"],
+        "webdl" => &["WEB-DL", "WEB"],
+        "webrip" => &["WEBRip", "WEB"],
+        "bluray" | "blurayremux" => &["BluRay", "Blu-ray"],
+        _ => &[],
+    }
+}
+
+/// `<select name=field>` 的全部 (value, label)；跳过 value 空/0 的占位项。
+/// 同名多块（分类分支的第二套 type）合并读——选项 value 是全局分类 id，合并配对安全。
+fn select_options(page: &str, field: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for block in select_blocks(page, field) {
+        let mut rest = block;
+        while let Some(p) = rest.to_ascii_lowercase().find("<option") {
+            let after = &rest[p..];
+            let end = after.find('>').map(|j| j + 1).unwrap_or(after.len());
+            let tag = &after[..end];
+            let v = attr(tag, "value").unwrap_or_default();
+            let text_end = after[end..]
+                .find('<')
+                .map(|i| end + i)
+                .unwrap_or(after.len());
+            let label = strip_tags(&after[end..text_end]).trim().to_string();
+            if !v.is_empty() && v != "0" {
+                out.push((v, label));
+            }
+            rest = &after[end..];
+        }
+    }
+    out
+}
+
+/// 表单里全部 `<select name=…>` 的名字（演练核对缺口用；只看上传表单块）
+fn select_names(page: &str) -> Vec<String> {
+    let page = upload_form_block(page).unwrap_or(page);
+    let lower = page.to_ascii_lowercase();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while let Some(p) = lower[i..].find("<select") {
+        let start = i + p;
+        let end = lower[start..]
+            .find('>')
+            .map(|j| start + j + 1)
+            .unwrap_or(page.len());
+        if let Some(name) = attr(&page[start..end], "name") {
+            if !out.contains(&name) {
+                out.push(name);
+            }
+        }
+        i = end;
+    }
+    out
+}
+
+/// 前缀匹配 select 字段名：`medium_sel` 或 `medium_sel[4]`
+/// 所有匹配前缀的下拉名：NexusPHP 参数化质量下拉按分类分组会出现多套
+/// （`medium_sel[4]` 视频分支与 `medium_sel[9]` AV 分支要各自独立配对）
+fn select_field_names(fields: &[Field], prefix: &str) -> Vec<String> {
+    fields
+        .iter()
+        .map(|(n, _)| n)
+        .filter(|n| *n == prefix || (n.starts_with(prefix) && n[prefix.len()..].starts_with('[')))
+        .cloned()
+        .collect()
+}
+
+/// 发布组：名尾 `-GROUP`（`x264-JING` → JING）；常见非组词缀剔除
+fn release_group(name: &str) -> Option<String> {
+    const NOT_GROUP: &[&str] = &[
+        "10bit", "8bit", "hdr", "hdr10", "dv", "remux", "repack", "proper", "complete", "internal",
+        "uncut", "restored", "subs", "multi", "dual",
+    ];
+    let p = name.rfind('-')?;
+    let g = &name[p + 1..];
+    if !(2..=20).contains(&g.len()) || !g.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return None;
+    }
+    if NOT_GROUP.iter().any(|x| x.eq_ignore_ascii_case(g)) {
+        return None;
+    }
+    Some(g.to_string())
+}
+
+/// 大小写不敏感的标记命中：拉丁词要求词边界，CJK 子串即命中
+fn marker_contains(hay_lower: &str, marker: &str) -> bool {
+    let m = marker.to_ascii_lowercase();
+    let ascii_kw = m
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b' ' || b == b'-' || b == b'.');
+    let mut from = 0;
+    while let Some(p) = hay_lower[from..].find(&m) {
+        let at = from + p;
+        let end = at + m.len();
+        if !ascii_kw {
+            return true;
+        }
+        let pre_ok = at == 0 || !hay_lower.as_bytes()[at - 1].is_ascii_alphanumeric();
+        let post_ok = end >= hay_lower.len() || !hay_lower.as_bytes()[end].is_ascii_alphanumeric();
+        if pre_ok && post_ok {
+            return true;
+        }
+        from = at + 1;
+    }
+    false
+}
+
+/// 集数/季标记：S01 / E01 / 全41集 / 第N季
+fn has_episode_marker(hay: &str) -> bool {
+    let b = hay.as_bytes();
+    for i in 0..b.len() {
+        let c = b[i] | 0x20;
+        if c == b's' || c == b'e' {
+            if i > 0 && b[i - 1].is_ascii_alphanumeric() {
+                continue;
+            }
+            if i + 2 < b.len()
+                && b[i + 1].is_ascii_digit()
+                && b[i + 2].is_ascii_digit()
+                && (i + 3 >= b.len() || !b[i + 3].is_ascii_alphanumeric())
+            {
+                return true;
+            }
+        }
+    }
+    for (i, c) in hay.char_indices() {
+        if c == '全' || c == '第' {
+            let rest = &hay[i + c.len_utf8()..];
+            let digits: String = rest.chars().take_while(|x| x.is_ascii_digit()).collect();
+            if !digits.is_empty()
+                && (rest[digits.len()..].starts_with('集')
+                    || rest[digits.len()..].starts_with('季'))
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// 分类推断：返回 (依次尝试的选项短语, 类别同义词兜底)。没把握返回 None——不猜。
+fn infer_type_candidates(
+    name: &str,
+    subtitle: &str,
+) -> Option<(Vec<&'static str>, &'static [&'static str])> {
+    const TV: &[&str] = &[
+        "电视剧",
+        "剧集",
+        "连续剧",
+        "電視劇",
+        "TV Series",
+        "TVSeries",
+        "TV",
+        "Drama",
+    ];
+    const MOVIE: &[&str] = &["电影", "影片", "Movie", "Film"];
+    const ANIME: &[&str] = &["动画", "动漫", "Anime", "Animation"];
+    const DOC: &[&str] = &["纪录", "Documentary"];
+    const VARIETY: &[&str] = &["综艺", "Variety", "真人秀", "脱口秀"];
+    const MUSIC: &[&str] = &["音乐", "MV", "Concert", "演唱会"];
+    const SPORT: &[&str] = &["体育", "Sport", "赛事"];
+    // (名里的标记, 选项短语, 类别同义词)：短语唯一命中优先，类别词唯一命中兜底
+    const MARKERS: &[(&str, &[&str], &[&str])] = &[
+        ("国产剧", &["国产剧", "华语剧"], TV),
+        ("港台剧", &["港台剧", "港剧", "台剧"], TV),
+        ("国产电影", &["国产电影", "华语电影", "大陆电影"], MOVIE),
+        ("电视剧", &["电视剧", "剧集"], TV),
+        ("美剧", &["美剧"], TV),
+        ("日剧", &["日剧"], TV),
+        ("韩剧", &["韩剧"], TV),
+        ("英剧", &["英剧"], TV),
+        ("泰剧", &["泰剧"], TV),
+        ("tv series", &["电视剧", "剧集"], TV),
+        ("tvshow", &["电视剧", "剧集"], TV),
+        ("纪录片", &["纪录片", "纪录"], DOC),
+        ("documentary", &["纪录片", "纪录"], DOC),
+        ("国家地理", &["纪录片", "纪录"], DOC),
+        ("剧场版", &["剧场版"], ANIME),
+        ("动漫", &["动漫", "动画"], ANIME),
+        ("动画", &["动漫", "动画"], ANIME),
+        ("anime", &["动漫", "动画"], ANIME),
+        ("ova", &["动漫", "动画"], ANIME),
+        ("综艺", &["综艺"], VARIETY),
+        ("脱口秀", &["综艺"], VARIETY),
+        ("真人秀", &["综艺"], VARIETY),
+        ("variety", &["综艺"], VARIETY),
+        ("演唱会", &["演唱会", "音乐", "MV"], MUSIC),
+        ("concert", &["演唱会", "音乐", "MV"], MUSIC),
+        ("体育", &["体育"], SPORT),
+        ("nba", &["体育"], SPORT),
+        ("ufc", &["体育"], SPORT),
+        ("movie", &["电影"], MOVIE),
+        ("film", &["电影"], MOVIE),
+        ("剧情片", &["电影"], MOVIE),
+        ("电影", &["电影"], MOVIE),
+    ];
+    let h = format!("{name} {subtitle}").to_ascii_lowercase();
+    for (marker, phrases, syns) in MARKERS {
+        if marker_contains(&h, marker) {
+            return Some((phrases.to_vec(), syns));
+        }
+    }
+    if has_episode_marker(&h) {
+        return Some((vec!["电视剧", "剧集"], TV));
+    }
+    None
+}
+
+/// 样本类型在该站分类里没有对应项（垂直站，如曲艺/有声书/音乐站）：
+/// 留空不算表单缺口。推断不出样本类型不算垂直站——那是名字信息不足，仍是硬缺口。
+fn type_niche_miss(options: &[(String, String)], info: &ReleaseInfo) -> bool {
+    let Some((_, syns)) = infer_type_candidates(&info.name, &info.subtitle) else {
+        return false;
+    };
+    !options
+        .iter()
+        .any(|(_, l)| syns.iter().any(|s| label_relates(l, s)))
+}
+
+/// 上传表单是 JS 自定义界面：只有种子文件与隐藏字段，没有可静态回填的文本框
+/// （hdcity 实测：name 都是 hidden，简介/MediaInfo 由网页 JS 延后生成）
+fn js_driven_form(form: &str) -> bool {
+    let lower = form.to_ascii_lowercase();
+    if !(lower.contains("type=\"file\"") || lower.contains("type='file'")) {
+        return false;
+    }
+    if lower.contains("<textarea") {
+        return false;
+    }
+    const SKIP: &[&str] = &[
+        "type=\"hidden\"",
+        "type='hidden'",
+        "type=\"file\"",
+        "type='file'",
+        "type=\"submit\"",
+        "type='submit'",
+        "type=\"button\"",
+        "type='button'",
+        "type=\"image\"",
+        "type='image'",
+        "type=\"reset\"",
+        "type='reset'",
+        "type=\"checkbox\"",
+        "type='checkbox'",
+        "type=\"radio\"",
+        "type='radio'",
+    ];
+    let mut i = 0;
+    while let Some(p) = lower[i..].find("<input") {
+        let start = i + p;
+        let end = lower[start..]
+            .find('>')
+            .map(|j| start + j + 1)
+            .unwrap_or(form.len());
+        let tag = &lower[start..end];
+        if !SKIP.iter().any(|s| tag.contains(s)) {
+            return false;
+        }
+        i = end;
+    }
+    true
+}
+
+/// 选档回填：发布名/副标题词元 → 分类与质量下拉。只动当前值为 0/空的下拉，
+/// 词元与选项唯一配对才填；有词元配不上、或推断不唯一，留提示不猜。
+/// 同前缀多组下拉（`medium_sel[4]`/`medium_sel[9]`）各自独立配对全填。
+/// 返回提示清单（审阅/演练里展示）。
+fn fill_selects(fields: &mut Vec<Field>, page: &str, info: &ReleaseInfo) -> Vec<String> {
+    let mut notes = Vec::new();
+    let hay = format!("{} {}", info.name, info.subtitle);
+    // source_sel 在不同站分别是来源媒介或地区，域无关的下拉自动跳过不误报
+    let cats: &[(&str, &[&str])] = &[
+        ("source_sel", MEDIUM_KEYWORDS),
+        ("medium_sel", MEDIUM_KEYWORDS),
+        ("codec_sel", CODEC_KEYWORDS),
+        ("audiocodec_sel", AUDIO_KEYWORDS),
+        ("standard_sel", STANDARD_KEYWORDS),
+        ("processing_sel", PROCESSING_KEYWORDS),
+    ];
+    for (prefix, kws) in cats {
+        let names = select_field_names(fields, prefix);
+        if names.is_empty() {
+            continue;
+        }
+        let tokens = find_keywords(&hay, kws);
+        let mut relevant_seen = false;
+        let mut filled_seen = false;
+        let mut ambiguous_tok: Option<String> = None;
+        for fname in &names {
+            let cur = field_lookup(fields, fname).unwrap_or("").to_string();
+            if !cur.is_empty() && cur != "0" {
+                filled_seen = true;
+                continue;
+            }
+            let options = select_options(page, fname);
+            if options.is_empty() {
+                continue;
+            }
+            if !options_in_domain(&options, kws) {
+                continue;
+            }
+            relevant_seen = true;
+            let mut picked = None;
+            'tok: for t in &tokens {
+                for c in std::iter::once(t.as_str()).chain(token_aliases(t).iter().copied()) {
+                    match pair_option(&options, c) {
+                        Pairing::Hit(v) => {
+                            picked = Some(v);
+                            break 'tok;
+                        }
+                        Pairing::Ambiguous => {
+                            ambiguous_tok.get_or_insert_with(|| t.clone());
+                        }
+                        Pairing::Miss => {}
+                    }
+                }
+            }
+            if let Some(v) = picked {
+                set_field(fields, fname, v);
+                filled_seen = true;
+            }
+        }
+        // 只有一组都没配对时才点名；歧义与「标签没配对」分开说
+        if tokens.is_empty() || filled_seen || !relevant_seen {
+            continue;
+        }
+        if let Some(t) = ambiguous_tok {
+            notes.push(format!(
+                "{prefix}：「{t}」在该站有多个同名候选选项，留空不猜"
+            ));
+        } else {
+            notes.push(format!(
+                "{prefix}：名里有「{}」但选项没配对（该站标签可能用了别的写法）",
+                tokens.join("/")
+            ));
+        }
+    }
+    // 制作组（名尾 -GROUP）→ team_sel；配不上不响（词尾误判代价低）
+    if let Some(group) = release_group(&info.name) {
+        for fname in select_field_names(fields, "team_sel") {
+            let cur = field_lookup(fields, &fname).unwrap_or("").to_string();
+            if cur.is_empty() || cur == "0" {
+                let options = select_options(page, &fname);
+                if let Some(v) = match_option(&options, &group) {
+                    set_field(fields, &fname, v);
+                }
+            }
+        }
+    }
+    // 分类（同名多块的分类分支合并配；value 是全局分类 id，填进 type 即可）
+    let type_cur = field_lookup(fields, "type").unwrap_or("").to_string();
+    if type_cur.is_empty() || type_cur == "0" {
+        let options = select_options(page, "type");
+        if !options.is_empty() {
+            let mut picked = None;
+            if let Some((phrases, syns)) = infer_type_candidates(&info.name, &info.subtitle) {
+                for ph in &phrases {
+                    if let Some(v) = match_option(&options, ph) {
+                        picked = Some(v);
+                        break;
+                    }
+                }
+                // 同义词按序逐个试，第一个「唯一命中」就用（短词如 TV 会同时
+                // 命中「TV Series/电视剧」与「TV Shows/综艺」，不能混在一起数）
+                if picked.is_none() {
+                    'syn: for s in syns {
+                        let hits: Vec<&(String, String)> =
+                            options.iter().filter(|(_, l)| l.contains(*s)).collect();
+                        if hits.len() == 1 {
+                            picked = Some(hits[0].0.clone());
+                            break 'syn;
+                        }
+                    }
+                }
+            }
+            match picked {
+                Some(v) => {
+                    set_field(fields, "type", v);
+                }
+                None => {
+                    if type_niche_miss(&options, info) {
+                        notes.push(
+                            "分类：样本类型在该站分类里没有对应项（垂直站/分类体系不同），留空需人工判断"
+                                .into(),
+                        );
+                    } else {
+                        notes.push(
+                            "分类：从名/副标题推断不出来或配不上选项，留空等人工选（官方预审会点名）"
+                                .into(),
+                        );
+                    }
+                }
+            }
+        }
+    }
+    notes
+}
+
+/// 选档摘要：`分类=剧集 媒介=HDTV 编码=x264 …`（只列已选中的下拉）
+fn select_summary(prep: &PreparedUpload) -> String {
+    const KINDS: [(&str, &str); 8] = [
+        ("type", "分类"),
+        ("source_sel", "来源"),
+        ("medium_sel", "媒介"),
+        ("codec_sel", "编码"),
+        ("standard_sel", "分辨率"),
+        ("audiocodec_sel", "音频"),
+        ("processing_sel", "处理"),
+        ("team_sel", "制作组"),
+    ];
+    let mut parts = Vec::new();
+    for (prefix, label) in KINDS {
+        // 多组下拉（medium_sel[4]/[9]）取第一组已选中的展示
+        let picked = select_field_names(&prep.fields, prefix)
+            .into_iter()
+            .find_map(|fname| {
+                let v = field_lookup(&prep.fields, &fname).unwrap_or("").to_string();
+                if v.is_empty() || v == "0" {
+                    None
+                } else {
+                    Some((fname, v))
+                }
+            });
+        let Some((fname, v)) = picked else {
+            continue;
+        };
+        let name = select_option_meta(&prep.form_html, &fname, &v)
+            .map(|(l, _)| l)
+            .unwrap_or(v);
+        parts.push(format!("{label}={name}"));
+    }
+    parts.join(" ")
 }
 
 /// 表单 action 绝对地址（站外绝对地址照收：城市等站把种子 POST 到独立域名；
@@ -657,6 +1380,15 @@ fn form_action(page: &str, base: &Url) -> Option<String> {
     Some(resolve_url(&action, base))
 }
 
+/// 把切片下标回退到最近的 UTF-8 字符边界（`end+80` 一类定长窗口可能切在汉字中间）
+fn floor_char_boundary(s: &str, i: usize) -> usize {
+    let mut i = i.min(s.len());
+    while i > 0 && !s.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
+}
+
 /// checkbox 文案匹配：`<input type=checkbox …>` 后面 60 个字符里含关键词就算选中
 fn match_checkboxes(page: &str, keyword: &str) -> Vec<Field> {
     let mut out = Vec::new();
@@ -672,9 +1404,14 @@ fn match_checkboxes(page: &str, keyword: &str) -> Vec<Field> {
         let tag = &page[start..end];
         let tl = tag.to_ascii_lowercase();
         if tl.contains("type=\"checkbox\"") || tl.contains("type='checkbox'") {
-            // 文案 = 标签后到下一个 < 之前
-            let after = &page[end..(end + 80).min(page.len())];
-            let label = strip_tags(after).to_lowercase();
+            // 文案 = 标签后到下一个 < 之前；窗口遇到下一个 <input 立即截断，
+            // 否则密集标签网格里会把邻格文案误配给本格（实机出过 200 连勾）
+            let after = &page[end..floor_char_boundary(page, end + 80)];
+            let next = after
+                .to_ascii_lowercase()
+                .find("<input")
+                .unwrap_or(after.len());
+            let label = strip_tags(&after[..next]).to_lowercase();
             if label.contains(&kw) {
                 if let Some(name) = attr(tag, "name") {
                     let value = attr(tag, "value").unwrap_or_else(|| "yes".into());
@@ -706,6 +1443,8 @@ pub struct PreparedUpload {
     pub fields: Vec<Field>,
     pub picked_tags: Vec<String>,
     pub tag_warn: Option<String>,
+    /// 选档映射提示（词元配不上选项、分类没把握等；只提示不阻断）
+    pub select_notes: Vec<String>,
     /// 表单页原文（官方预审要从中取 LUCK_AUDIT_USER / 选项文案）
     pub form_html: String,
 }
@@ -715,8 +1454,11 @@ pub fn prepare_upload(target: &NexusPhp, info: &ReleaseInfo) -> Result<PreparedU
     let form_html = target
         .fetch_html(&form_url, target.base.as_str())
         .context("抓目标站上传表单失败")?;
-    if !form_html.to_lowercase().contains("<form") {
-        bail!("目标站上传页没有表单（cookie 失效或站点拒绝发种），先检测该站登录态");
+    if upload_form_block(&form_html).is_none() {
+        if let Some(why) = upload_denied_reason(&form_html) {
+            bail!("{why}：{form_url}");
+        }
+        bail!("目标站没有可解析的静态上传表单（JS/自定义上传界面，或 cookie 失效），v1 暂不支持：{form_url}");
     }
     if let Some(notice) = crate::sites::nexusphp::block_notice(&form_html) {
         bail!("目标站限流（{notice}）：{form_url}");
@@ -727,7 +1469,7 @@ pub fn prepare_upload(target: &NexusPhp, info: &ReleaseInfo) -> Result<PreparedU
     } else {
         vec![]
     };
-    let (fields, picked_tags) = build_upload_fields(info, &form_html, &tags_wanted);
+    let (fields, picked_tags, select_notes) = build_upload_fields(info, &form_html, &tags_wanted);
     // 想勾的标签一个都没匹配上才警告（复选框 value 多是数字编码，
     // 拿 value 里含不含关键词来判会把勾上了的误报成漏勾）
     let tag_warn = if !tags_wanted.is_empty() && picked_tags.is_empty() {
@@ -746,6 +1488,7 @@ pub fn prepare_upload(target: &NexusPhp, info: &ReleaseInfo) -> Result<PreparedU
         fields,
         picked_tags,
         tag_warn,
+        select_notes,
         form_html,
     })
 }
@@ -948,6 +1691,9 @@ impl ReviewReport {
         if let Some(w) = &self.prepared.tag_warn {
             out.push_str(&format!("  警告：{w}\n"));
         }
+        for n in &self.prepared.select_notes {
+            out.push_str(&format!("  选档提示：{n}\n"));
+        }
         match (&self.audit, &self.audit_note) {
             (Some(a), _) => {
                 out.push_str(&format!(
@@ -970,6 +1716,10 @@ impl ReviewReport {
                 "标签勾选：{}\n",
                 self.prepared.picked_tags.join("、")
             ));
+        }
+        let picks = select_summary(&self.prepared);
+        if !picks.is_empty() {
+            out.push_str(&format!("选档：{picks}\n"));
         }
         out.push_str("将提交的字段：\n");
         for (n, v) in &self.prepared.fields {
@@ -1087,6 +1837,273 @@ fn verify_posted_html(html: &str, info: &ReleaseInfo) -> Vec<String> {
         }
     }
     warns
+}
+
+// ---------------- 发种表格演练（只审不发，全站体检） ----------------
+
+/// 发种表格演练结果：逐站核对 upload.php 表单与字段构造的完备性
+#[derive(Debug, Default)]
+pub struct FormDrill {
+    pub site_id: String,
+    pub site_name: String,
+    /// 表单没拿到/构造失败的原因（登录墙、限流、无上传权限…）
+    pub error: Option<String>,
+    pub field_count: usize,
+    pub select_count: usize,
+    pub title_set: bool,
+    /// 标题输入框在表单里不存在（tjupt 实测：标题由种子文件名自动生成）
+    pub title_auto: bool,
+    pub subtitle_set: bool,
+    pub descr_bytes: usize,
+    /// MediaInfo 落到哪：独立字段名，或「内嵌简介」
+    pub mediainfo_field: Option<String>,
+    /// 条目链接落到的字段名
+    pub link_fields: Vec<String>,
+    pub picked_tags: Vec<String>,
+    pub tag_warn: Option<String>,
+    /// 自动选档结果：(字段, 选项文案)
+    pub select_picks: Vec<(String, String)>,
+    /// 仍为 0/空的下拉（缺口与否由 core_select_gaps 归类）
+    pub open_selects: Vec<String>,
+    /// 硬缺口下拉（前缀级折叠；域无关与垂直站分类不算）
+    pub core_select_gaps: Vec<String>,
+    pub notes: Vec<String>,
+    /// 上传页是否带官方预审面板（LuckAudit）
+    pub audit_panel: bool,
+}
+
+impl FormDrill {
+    /// 硬缺口：分类 + 核心质量下拉仍为 0/空，或名称/简介/MediaInfo 没落上。
+    /// 标题由站点自动生成（无标题输入框）、垂直站分类不适配不算缺口。
+    pub fn core_gaps(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        if let Some(e) = &self.error {
+            out.push(e.clone());
+            return out;
+        }
+        if !self.title_set && !self.title_auto {
+            out.push("标题未落上".into());
+        }
+        if self.descr_bytes == 0 {
+            out.push("简介为空".into());
+        }
+        if self.mediainfo_field.is_none() {
+            out.push("MediaInfo 无处可落".into());
+        }
+        for s in &self.core_select_gaps {
+            out.push(format!("{s} 未选"));
+        }
+        out
+    }
+
+    /// 软缺口：制作组/处理/地区等次要或域无关下拉未选、选档提示
+    pub fn soft_gaps(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        for s in &self.open_selects {
+            // 已按前缀点名进硬缺口的不重复（多组同前缀只报一次）
+            let covered = self
+                .core_select_gaps
+                .iter()
+                .any(|c| s == c || (s.starts_with(c) && s[c.len()..].starts_with('[')));
+            if !covered {
+                out.push(format!("{s} 未选"));
+            }
+        }
+        out.extend(self.notes.iter().cloned());
+        if let Some(w) = &self.tag_warn {
+            out.push(w.clone());
+        }
+        out
+    }
+}
+
+/// 演练样本：覆盖 中字/国产剧/HDTV/1080p/x264/AAC/制作组/IMDb/豆瓣/MediaInfo 全要素
+pub fn drill_release() -> ReleaseInfo {
+    ReleaseInfo {
+        name: "The.Disguiser.Complete.1080p.HDTV.x264.AAC-JING".into(),
+        subtitle: "国产剧--伪装者[无台标完整版 全41集1080P][中字]".into(),
+        descr: "演练样本简介。IMDb：https://www.imdb.com/title/tt5154296/".into(),
+        mediainfo: "General\nUnique ID : 1\nFormat : Matroska\nBit rate : 6000 kb/s\nWidth : 1920\nHeight : 1080".into(),
+        imdb: Some("tt5154296".into()),
+        douban: Some("25823432".into()),
+        tmdb: None,
+    }
+}
+
+/// 逐站演练：与真实转种同一套字段构造（prepare_upload），但绝不 POST
+pub fn drill_upload_form(target: &NexusPhp) -> FormDrill {
+    let info = drill_release();
+    match prepare_upload(target, &info) {
+        Ok(prep) => analyze_form(&target.site_id, &target.site_name, &prep, &info),
+        Err(e) => FormDrill {
+            site_id: target.site_id.clone(),
+            site_name: target.site_name.clone(),
+            error: Some(format!("{e:#}")),
+            ..Default::default()
+        },
+    }
+}
+
+/// 上传页拿不到表单时的细分原因（权限/登录）；None = 看不出所以然
+fn upload_denied_reason(html: &str) -> Option<String> {
+    // 简繁都要：实测繁体站用「沒有發布種子的許可權」一类写法（許可權 ≠ 權限）
+    const DENIED: &[&str] = &[
+        "没有发布种子的权限",
+        "沒有發布種子的許可權",
+        "沒有發佈種子的許可權",
+        "没有发布权限",
+        "沒有發布權限",
+        "沒有發佈權限",
+        "没有上传权限",
+        "沒有上傳權限",
+        "没有发布",
+        "沒有發布",
+        "沒有發佈",
+        "上传权限不足",
+        "上傳權限不足",
+        "权限不足",
+        "權限不足",
+        "許可權不足",
+        "等级不足",
+        "等級不足",
+        "不允许上传",
+        "不允許上傳",
+        "禁止上传",
+        "禁止上傳",
+    ];
+    for kw in DENIED {
+        if html.contains(kw) {
+            return Some(format!("该账号无发布权限（页面提示含「{kw}」）"));
+        }
+    }
+    let lower = html.to_ascii_lowercase();
+    if lower.contains("type=\"password\"") || lower.contains("type='password'") {
+        return Some("登录态失效（上传页是登录表单）".into());
+    }
+    None
+}
+
+/// 演练分析（纯函数，单测友好）
+fn analyze_form(
+    site_id: &str,
+    site_name: &str,
+    prep: &PreparedUpload,
+    info: &ReleaseInfo,
+) -> FormDrill {
+    let f = |k: &str| field_lookup(&prep.fields, k).unwrap_or("").to_string();
+    let mut d = FormDrill {
+        site_id: site_id.into(),
+        site_name: site_name.into(),
+        field_count: prep.fields.len(),
+        select_count: select_names(&prep.form_html).len(),
+        ..Default::default()
+    };
+    let title = if !f("name").is_empty() {
+        f("name")
+    } else {
+        f("title")
+    };
+    d.title_set = title == info.name;
+    // 无标题输入框（tjupt 实测）：标题由种子文件名自动生成，不算缺口
+    d.title_auto =
+        !d.title_set && !form_has(&prep.form_html, "name") && !form_has(&prep.form_html, "title");
+    d.subtitle_set = f("small_descr") == info.subtitle || f("subtitle") == info.subtitle;
+    // 简介：NexusPHP descr / Gazelle 系 release_desc
+    let descr_text = ["descr", "release_desc", "description", "content"]
+        .iter()
+        .find_map(|k| {
+            let v = f(k);
+            if v.is_empty() {
+                None
+            } else {
+                Some(v)
+            }
+        })
+        .unwrap_or_default();
+    d.descr_bytes = descr_text.len();
+    for cand in ["technical_info", "media_info", "media_bdinfo", "mediainfo"] {
+        if !f(cand).is_empty() {
+            d.mediainfo_field = Some(cand.to_string());
+            break;
+        }
+    }
+    if d.mediainfo_field.is_none() && descr_text.contains("MediaInfo") {
+        d.mediainfo_field = Some("内嵌简介".into());
+    }
+    for l in [
+        "imdbid",
+        "imdb_url",
+        "url",
+        "douban",
+        "douban_id",
+        "douban_url",
+    ] {
+        if !f(l).is_empty() {
+            d.link_fields.push(l.to_string());
+        }
+    }
+    d.picked_tags = prep.picked_tags.clone();
+    d.tag_warn = prep.tag_warn.clone();
+    d.notes = prep.select_notes.clone();
+    // JS 驱动的自定义上传界面（hdcity 实测）：简介/MediaInfo 静态填不进
+    let form = upload_form_block(&prep.form_html).unwrap_or(&prep.form_html);
+    if js_driven_form(form) {
+        d.notes.push(
+            "该站上传界面是 JS 驱动（表单仅种子+隐藏字段），简介/MediaInfo 需上传后在网页里补"
+                .into(),
+        );
+    }
+    d.audit_panel = pre_audit_supported(&prep.form_html);
+    for name in select_names(&prep.form_html) {
+        // BBCode 编辑器的 color/font/size 装饰下拉与发种完备性无关
+        if matches!(name.as_str(), "color" | "font" | "size") {
+            continue;
+        }
+        let v = f(&name);
+        if v.is_empty() || v == "0" {
+            d.open_selects.push(name);
+        } else if name == "type" || name.contains("_sel") {
+            let label = select_option_meta(&prep.form_html, &name, &v)
+                .map(|(l, _)| l)
+                .unwrap_or_else(|| v.clone());
+            d.select_picks.push((name, label));
+        }
+    }
+    // 硬缺口下拉：域相关 + 前缀折叠（多组分类分支只要一组填上就不算）；
+    // 垂直站分类与样本不适配不算表单缺口
+    const CORE_QUALITY: &[(&str, &[&str])] = &[
+        ("medium_sel", MEDIUM_KEYWORDS),
+        ("codec_sel", CODEC_KEYWORDS),
+        ("standard_sel", STANDARD_KEYWORDS),
+        ("audiocodec_sel", AUDIO_KEYWORDS),
+    ];
+    if d.open_selects.iter().any(|s| s == "type") {
+        let opts = select_options(&prep.form_html, "type");
+        if !type_niche_miss(&opts, info) {
+            d.core_select_gaps.push("type".into());
+        }
+    }
+    for (prefix, kws) in CORE_QUALITY {
+        let hit = |n: &String| {
+            n == prefix || (n.starts_with(prefix) && n[prefix.len()..].starts_with('['))
+        };
+        if !d.open_selects.iter().any(&hit) {
+            continue;
+        }
+        if d.select_picks.iter().any(|(n, _)| hit(n)) {
+            continue;
+        }
+        // 域无关的同名下拉（如书站 audiocodec_sel 实为电子书格式）不算质量缺口
+        if d.open_selects.iter().any(|s| {
+            hit(s) && {
+                let opts = select_options(&prep.form_html, s);
+                !opts.is_empty() && options_in_domain(&opts, kws)
+            }
+        }) {
+            d.core_select_gaps.push((*prefix).to_string());
+        }
+    }
+    d
 }
 
 // ---------------- 站点官方预审（LuckAudit pre-audit） ----------------
@@ -1448,24 +2465,25 @@ fn field_lookup<'a>(fields: &'a [Field], key: &str) -> Option<&'a str> {
         .map(|(_, v)| v.as_str())
 }
 
-/// `<select name=field>` 里指定 value 的选项文案与 class-name
+/// `<select name=field>` 里指定 value 的选项文案与 class-name（同名多块全找）
 fn select_option_meta(page: &str, field: &str, value: &str) -> Option<(String, String)> {
-    let block = select_block(page, field)?;
-    let mut rest = block;
-    while let Some(p) = rest.to_ascii_lowercase().find("<option") {
-        let after = &rest[p..];
-        let end = after.find('>').map(|j| j + 1).unwrap_or(after.len());
-        let tag = &after[..end];
-        if attr(tag, "value").as_deref() == Some(value) {
-            let text_end = after[end..]
-                .find('<')
-                .map(|i| end + i)
-                .unwrap_or(after.len());
-            let label = strip_tags(&after[end..text_end]).trim().to_string();
-            let class_name = attr(tag, "data-class-name").unwrap_or_default();
-            return Some((label, class_name));
+    for block in select_blocks(page, field) {
+        let mut rest = block;
+        while let Some(p) = rest.to_ascii_lowercase().find("<option") {
+            let after = &rest[p..];
+            let end = after.find('>').map(|j| j + 1).unwrap_or(after.len());
+            let tag = &after[..end];
+            if attr(tag, "value").as_deref() == Some(value) {
+                let text_end = after[end..]
+                    .find('<')
+                    .map(|i| end + i)
+                    .unwrap_or(after.len());
+                let label = strip_tags(&after[end..text_end]).trim().to_string();
+                let class_name = attr(tag, "data-class-name").unwrap_or_default();
+                return Some((label, class_name));
+            }
+            rest = &after[end..];
         }
-        rest = &after[end..];
     }
     None
 }
@@ -1477,9 +2495,15 @@ fn select_mode(page: &str, field: &str) -> Option<String> {
     attr(&block[..end], "data-mode")
 }
 
-/// 取 `<select name=field>` 整块（含开闭标签内文）
+/// 取 `<select name=field>` 整块（含开闭标签内文）；同名多块取第一块
 fn select_block<'a>(page: &'a str, field: &str) -> Option<&'a str> {
+    select_blocks(page, field).into_iter().next()
+}
+
+/// 同名 `<select>` 的全部块（分类分支的第二套下拉与首套同名）
+fn select_blocks<'a>(page: &'a str, field: &str) -> Vec<&'a str> {
     let lower = page.to_ascii_lowercase();
+    let mut out = Vec::new();
     let mut i = 0;
     while let Some(p) = lower[i..].find("<select") {
         let start = i + p;
@@ -1492,11 +2516,11 @@ fn select_block<'a>(page: &'a str, field: &str) -> Option<&'a str> {
                 .find("</select>")
                 .map(|j| start + j)
                 .unwrap_or(page.len());
-            return Some(&page[start..close]);
+            out.push(&page[start..close]);
         }
         i = end;
     }
-    None
+    out
 }
 
 /// 复选框 value 对应的文案：input 标签后到下一个 `<` 之前（包装标签时退 80 字符窗口）
@@ -1513,14 +2537,19 @@ fn checkbox_label(page: &str, value: &str) -> String {
         if tag.to_ascii_lowercase().contains("checkbox")
             && attr(tag, "value").as_deref() == Some(value)
         {
-            let after = &page[end..(end + 80).min(page.len())];
-            // 先取到下一个标签为止的纯文本；input 后直接跟标签（<label>…）再退窗口
-            let cut = after.find('<').unwrap_or(after.len());
+            let after = &page[end..floor_char_boundary(page, end + 80)];
+            // 先取到下一个标签为止的纯文本；input 后直接跟标签（<label>…）再退窗口。
+            // 下一个 <input 处截断，密集标签网格不误配邻格
+            let next_input = after
+                .to_ascii_lowercase()
+                .find("<input")
+                .unwrap_or(after.len());
+            let cut = after[..next_input].find('<').unwrap_or(next_input);
             let inline = strip_tags(&after[..cut]).trim().to_string();
             if !inline.is_empty() {
                 return inline;
             }
-            return strip_tags(after).trim().to_string();
+            return strip_tags(&after[..next_input]).trim().to_string();
         }
         i = end;
     }
@@ -1984,7 +3013,7 @@ Frame rate : 25</pre>
         let fields = parse_form_fields(form);
         assert!(fields.contains(&("passkey".into(), "abc".into())));
         assert!(fields.contains(&("type".into(), "2".into())));
-        let (fs, picked) = build_upload_fields(
+        let (fs, picked, _notes) = build_upload_fields(
             &ReleaseInfo {
                 name: "T".into(),
                 subtitle: "s".into(),
@@ -2105,6 +3134,7 @@ Frame rate : 25</pre>
                 ],
                 picked_tags: vec!["cnsub".into()],
                 tag_warn: None,
+                select_notes: vec!["分类：留空等人工选".into()],
                 form_html: String::new(),
             },
             audit: Some(AuditVerdict {
@@ -2290,5 +3320,394 @@ Height : 1080</pre></div>"#;
         );
         // 没有事件属性时原样返回
         assert_eq!(strip_event_handlers("纯文本<br />结束"), "纯文本<br />结束");
+    }
+
+    #[test]
+    fn select_keywords_are_longest_first_and_deduped() {
+        // WEB-DL 内部的 WEB 被重叠规则吃掉；独立出现的 WEB 仍是词元
+        assert_eq!(
+            find_keywords("Show.WEB-DL.1080p", MEDIUM_KEYWORDS),
+            vec!["WEB-DL"]
+        );
+        assert_eq!(
+            find_keywords("Show.WEB-DL.WEB.WEB-DL.1080p", MEDIUM_KEYWORDS),
+            vec!["WEB-DL", "WEB"]
+        );
+        // 同一关键词重复出现只算一个
+        assert_eq!(
+            find_keywords("Show.HDTV.HDTV.1080p.HDTV", MEDIUM_KEYWORDS),
+            vec!["HDTV"]
+        );
+        // 词边界：HDD 里的 DD 不算
+        assert!(find_keywords("My.HDD.x264", AUDIO_KEYWORDS).is_empty());
+        assert_eq!(
+            find_keywords("Show.1080p.HDTV.x264.AAC-GRP", STANDARD_KEYWORDS),
+            vec!["1080p"]
+        );
+    }
+
+    #[test]
+    fn match_option_prefers_exact_norm_and_rejects_ambiguity() {
+        let opts = vec![
+            ("7".into(), "HDTV".into()),
+            ("8".into(), "WEB-DL 高清".into()),
+            ("9".into(), "1080p/1080i".into()),
+            ("10".into(), "720p".into()),
+            ("11".into(), "1080p".into()),
+        ];
+        // 中文尾缀不影响全等
+        assert_eq!(match_option(&opts, "WEB-DL").as_deref(), Some("8"));
+        // 分隔子串（唯一）
+        assert_eq!(match_option(&opts, "1080i").as_deref(), Some("9"));
+        // 1080p 全等命中两个（1080p/1080i 规范化不同，只有 9？不——norm(9)=1080p1080i）
+        assert_eq!(match_option(&opts, "1080p").as_deref(), Some("11"));
+        // 词元不存在
+        assert_eq!(match_option(&opts, "x264"), None);
+    }
+
+    #[test]
+    fn fill_selects_maps_quality_and_type() {
+        let form = r#"<form action="takeupload.php">
+<input type="hidden" name="passkey" value="k">
+<select name="type"><option value="0">请选择</option><option value="401">电影</option><option value="404">剧集</option><option value="405">综艺</option></select>
+<select name="medium_sel[4]"><option value="0">请选择</option><option value="7">HDTV</option><option value="8">WEB-DL</option><option value="9">BluRay</option></select>
+<select name="codec_sel[4]"><option value="0">请选择</option><option value="1">x264</option><option value="2">x265</option></select>
+<select name="audiocodec_sel[4]"><option value="0">请选择</option><option value="1">AAC</option><option value="2">FLAC</option></select>
+<select name="standard_sel[4]"><option value="0">请选择</option><option value="1">720p</option><option value="2">1080p</option></select>
+<select name="team_sel[4]"><option value="0">请选择</option><option value="5">JING</option><option value="6">WiKi</option></select>
+</form>"#;
+        let (fs, _picked, notes) = build_upload_fields(&drill_release(), form, &["中字"]);
+        let f = |k: &str| field_lookup(&fs, k).unwrap_or("").to_string();
+        assert_eq!(f("type"), "404", "国产剧/全41集 → 剧集");
+        assert_eq!(f("medium_sel"), "7", "HDTV");
+        assert_eq!(f("codec_sel"), "1", "x264");
+        assert_eq!(f("audiocodec_sel"), "1", "AAC");
+        assert_eq!(f("standard_sel"), "2", "1080p");
+        assert_eq!(f("team_sel"), "5", "名尾 -JING");
+        assert!(notes.is_empty(), "全部配对成功不该有提示：{notes:?}");
+    }
+
+    #[test]
+    fn fill_selects_notes_when_token_unmatched() {
+        let form = r#"<select name="medium_sel[4]"><option value="0">请选择</option><option value="9">BluRay</option></select>"#;
+        let info = ReleaseInfo {
+            name: "Show.S01.HDTV.1080p".into(),
+            ..Default::default()
+        };
+        let (_fs, _p, notes) = build_upload_fields(&info, form, &[]);
+        assert!(
+            notes
+                .iter()
+                .any(|n| n.contains("medium_sel") && n.contains("HDTV")),
+            "HDTV 配不上 BluRay 选项要点名：{notes:?}"
+        );
+        // 没有质量词元的名字不该有提示
+        let (_fs, _p, notes2) = build_upload_fields(
+            &ReleaseInfo {
+                name: "Plain".into(),
+                ..Default::default()
+            },
+            form,
+            &[],
+        );
+        assert!(notes2.is_empty(), "{notes2:?}");
+    }
+
+    #[test]
+    fn type_inference_variants() {
+        let g = infer_type_candidates("The Disguiser Complete", "国产剧--伪装者 全41集").unwrap();
+        assert!(g.0.contains(&"国产剧"));
+        assert!(infer_type_candidates("Show.S01.1080p", "").is_some());
+        assert!(infer_type_candidates("Show.第3季", "").is_some());
+        // 没有任何标记的电影名：不猜
+        assert!(infer_type_candidates("Dune.2021.1080p.BluRay.x264-GRP", "").is_none());
+    }
+
+    #[test]
+    fn release_group_takes_tail_suffix() {
+        assert_eq!(
+            release_group("The.Disguiser.Complete.HDTV.1080p.AAC.x264-JING").as_deref(),
+            Some("JING")
+        );
+        assert_eq!(release_group("Movie.2020.1080p.BluRay.x264-10bit"), None);
+        assert_eq!(release_group("Show.S01"), None);
+    }
+
+    #[test]
+    fn form_parsing_scoped_to_upload_form() {
+        // 导航条搜索表单（search_area）不能掺进上传字段
+        let page = r#"<form action="search.php"><input name="search"><select name="search_area"><option value="1">全站</option></select></form>
+<form action="takeupload.php" method="post"><input type="hidden" name="passkey" value="k">
+<select name="type"><option value="0">请选择</option><option value="404">剧集</option></select></form>"#;
+        let fields = parse_form_fields(page);
+        assert!(fields.contains(&("passkey".into(), "k".into())));
+        assert!(fields.contains(&("type".into(), "0".into())));
+        assert!(
+            !fields.iter().any(|(n, _)| n == "search_area"),
+            "{fields:?}"
+        );
+        assert_eq!(select_names(page), vec!["type".to_string()]);
+        assert!(upload_form_block("<p>无表单</p>").is_none());
+    }
+
+    #[test]
+    fn checkbox_grid_does_not_bleed_into_neighbor() {
+        // 密集标签网格：第一个复选框的 80 字节窗口会盖住邻格「中字」，不能误配
+        let page = r#"<input type="checkbox" name="tags[]" value="10"> 原创首发高清首发字幕首发
+<input type="checkbox" name="tags[]" value="6"> 中字"#;
+        assert_eq!(
+            match_checkboxes(page, "中字"),
+            vec![("tags[]".to_string(), "6".to_string())]
+        );
+    }
+
+    #[test]
+    fn type_syns_match_sequentially_not_pooled() {
+        // hdfans 式双语选项：短词 TV 同时命中「TV Series/电视剧」与「TV Shows/综艺」，
+        // 逐同义词唯一命中才能落到电视剧
+        let form = r#"<select name="type"><option value="0">请选择</option>
+<option value="401">Movies/电影</option>
+<option value="402">TV Series/电视剧</option>
+<option value="416">TV Shows/综艺</option></select>"#;
+        let info = ReleaseInfo {
+            name: "The.Disguiser.Complete.1080p.HDTV.x264.AAC-JING".into(),
+            subtitle: "国产剧--伪装者 全41集".into(),
+            ..Default::default()
+        };
+        let (fs, _p, _n) = build_upload_fields(&info, form, &[]);
+        assert_eq!(field_lookup(&fs, "type"), Some("402"));
+    }
+
+    #[test]
+    fn denial_reason_covers_traditional_chinese() {
+        let t = "對不起... 你沒有發布種子的許可權。如果你是普通會員，請到 候選區 提交你的發布請求";
+        assert!(upload_denied_reason(t).unwrap().contains("无发布权限"));
+        assert!(upload_denied_reason("对不起... 你没有发布种子的权限").is_some());
+        assert!(upload_denied_reason("<p>随便看看</p>").is_none());
+    }
+
+    #[test]
+    fn fixed_windows_do_not_split_utf8() {
+        // 任意窗口端点都回退到字符边界，切片不 panic
+        let s = "中文标签中字测试";
+        for i in 0..=s.len() + 4 {
+            let f = floor_char_boundary(s, i);
+            assert!(s.is_char_boundary(f));
+            let _ = &s[..f];
+        }
+        // 定长 80 字节窗口切在汉字中间的真实页面（实机 panic 过）
+        let page = format!(
+            r#"<input type="checkbox" name="tags[4][]" value="23"> 中字{}"#,
+            "字".repeat(40)
+        );
+        assert_eq!(match_checkboxes(&page, "中字").len(), 1);
+        assert!(checkbox_label(&page, "23").contains("中字"));
+    }
+
+    #[test]
+    fn analyze_form_reports_core_and_soft_gaps() {
+        let prep = PreparedUpload {
+            action: "https://x/takeupload.php".into(),
+            form_url: "https://x/upload.php".into(),
+            fields: vec![
+                ("name".into(), "T".into()),
+                ("small_descr".into(), "s".into()),
+                ("descr".into(), "d".into()),
+                ("technical_info".into(), "m".into()),
+                ("imdb_url".into(), "u".into()),
+                ("type".into(), "0".into()),
+                ("medium_sel[4]".into(), "7".into()),
+            ],
+            picked_tags: vec![],
+            tag_warn: None,
+            select_notes: vec!["分类：留空等人工选".into()],
+            form_html: r#"<select name="type"><option value="0">请选择</option><option value="404">剧集</option></select>
+<select name="medium_sel[4]"><option value="0">请选择</option><option value="7">HDTV</option></select>
+<select name="codec_sel[4]"><option value="0">请选择</option><option value="1">x264</option></select>"#
+                .into(),
+        };
+        let info = ReleaseInfo {
+            name: "T".into(),
+            subtitle: "s".into(),
+            ..Default::default()
+        };
+        let d = analyze_form("sx", "站X", &prep, &info);
+        assert!(d.title_set && d.subtitle_set);
+        assert_eq!(d.mediainfo_field.as_deref(), Some("technical_info"));
+        assert_eq!(d.link_fields, vec!["imdb_url".to_string()]);
+        assert_eq!(
+            d.select_picks,
+            vec![("medium_sel[4]".into(), "HDTV".into())]
+        );
+        let core = d.core_gaps();
+        assert!(core.iter().any(|g| g.contains("type")), "{core:?}");
+        assert!(core.iter().any(|g| g.contains("codec_sel")), "{core:?}");
+        let soft = d.soft_gaps();
+        assert!(soft.iter().any(|g| g.contains("分类")), "{soft:?}");
+    }
+
+    #[test]
+    fn hdtv_alias_matches_tv_label() {
+        // aling/ptcafe 实测：媒介选项写「TV」而不是「HDTV」
+        let form = r#"<select name="medium_sel[4]"><option value="0">请选择</option><option value="4">TV</option><option value="5">WEB-DL</option></select>"#;
+        let (fs, _p, notes) = build_upload_fields(&drill_release(), form, &[]);
+        assert_eq!(field_lookup(&fs, "medium_sel"), Some("4"), "{notes:?}");
+    }
+
+    #[test]
+    fn bare_resolution_labels_match() {
+        // ptsbao 实测：分辨率选项是 480/576/720/1080/2K/4K 裸数字
+        let form = r#"<select name="standard_sel[1]"><option value="0">请选择一项</option><option value="1">1080</option><option value="2">720</option></select>"#;
+        let (fs, _p, notes) = build_upload_fields(&drill_release(), form, &[]);
+        assert_eq!(field_lookup(&fs, "standard_sel"), Some("1"), "{notes:?}");
+    }
+
+    #[test]
+    fn multi_group_selects_all_filled() {
+        // ptba 实测：medium_sel[4] 与 medium_sel[9] 是两套分类分支，都要独立配对填上
+        let form = r#"<select name="medium_sel[4]"><option value="0">请选择</option><option value="7">HDTV</option></select>
+<select name="medium_sel[9]"><option value="0">请选择</option><option value="3">HDTV</option><option value="8">Remux</option></select>"#;
+        let (fs, _p, notes) = build_upload_fields(&drill_release(), form, &[]);
+        assert_eq!(field_lookup(&fs, "medium_sel[4]"), Some("7"));
+        assert_eq!(field_lookup(&fs, "medium_sel[9]"), Some("3"), "{notes:?}");
+    }
+
+    #[test]
+    fn ambiguous_options_leave_note_not_guess() {
+        // muxuege 实测：两个同名 AAC 选项（value 6/14），不猜
+        let form = r#"<select name="audiocodec_sel[4]"><option value="0">请选择一项</option><option value="6">AAC</option><option value="14">AAC</option></select>"#;
+        let (fs, _p, notes) = build_upload_fields(&drill_release(), form, &[]);
+        assert_eq!(field_lookup(&fs, "audiocodec_sel").unwrap_or("0"), "0");
+        assert!(
+            notes
+                .iter()
+                .any(|n| n.contains("AAC") && n.contains("多个")),
+            "{notes:?}"
+        );
+    }
+
+    #[test]
+    fn region_selects_not_treated_as_quality() {
+        // aling/ubits 实测：source_sel 是地区下拉，HDTV 不往里配，也不点名「没配对」
+        let form = r#"<select name="source_sel[4]"><option value="0">请选择一项</option><option value="1">内地</option><option value="2">香港</option></select>"#;
+        let (fs, _p, notes) = build_upload_fields(&drill_release(), form, &[]);
+        assert_eq!(field_lookup(&fs, "source_sel").unwrap_or("0"), "0");
+        assert!(notes.is_empty(), "{notes:?}");
+    }
+
+    #[test]
+    fn off_domain_selects_not_core_gaps() {
+        // soulvoice 实测：audiocodec_sel 选项是电子书格式（PDF/MOBI），不算音频质量缺口
+        let prep = PreparedUpload {
+            action: "https://x/takeupload.php".into(),
+            form_url: "https://x/upload.php".into(),
+            fields: vec![
+                ("name".into(), "T".into()),
+                ("descr".into(), "d".into()),
+                ("technical_info".into(), "m".into()),
+                ("type".into(), "402".into()),
+                ("audiocodec_sel[8]".into(), "0".into()),
+            ],
+            picked_tags: vec![],
+            tag_warn: None,
+            select_notes: vec![],
+            form_html: r#"<select name="type"><option value="0">请选择</option><option value="402">剧集</option></select>
+<select name="audiocodec_sel[8]"><option value="0">请选择</option><option value="1">PDF</option><option value="2">MOBI</option></select>"#
+                .into(),
+        };
+        let info = ReleaseInfo {
+            name: "T".into(),
+            ..Default::default()
+        };
+        let d = analyze_form("sv", "声之形", &prep, &info);
+        assert!(
+            d.core_gaps().iter().all(|g| !g.contains("audiocodec")),
+            "{:?}",
+            d.core_gaps()
+        );
+        assert!(d.soft_gaps().iter().any(|g| g.contains("audiocodec_sel")));
+    }
+
+    #[test]
+    fn vertical_site_type_is_soft_not_core() {
+        // haitang/kelu 实测：曲艺/垂直站分类里没有影视类，样本不适配不算表单缺口
+        let form = r#"<select name="type"><option value="0">请选择</option><option value="4097">戏曲</option><option value="1">相声</option></select>"#;
+        let (fs, _p, notes) = build_upload_fields(&drill_release(), form, &[]);
+        assert_eq!(field_lookup(&fs, "type").unwrap_or("0"), "0");
+        assert!(notes.iter().any(|n| n.contains("分类")), "{notes:?}");
+        let prep = PreparedUpload {
+            action: "https://x/takeupload.php".into(),
+            form_url: "https://x/upload.php".into(),
+            fields: fs,
+            picked_tags: vec![],
+            tag_warn: None,
+            select_notes: notes,
+            form_html: form.into(),
+        };
+        let d = analyze_form("ht", "海棠", &prep, &drill_release());
+        assert!(
+            d.core_gaps().iter().all(|g| !g.contains("type")),
+            "{:?}",
+            d.core_gaps()
+        );
+        assert!(d.soft_gaps().iter().any(|g| g.contains("分类")));
+    }
+
+    #[test]
+    fn meta_tags_are_not_form_fields() {
+        // hdcity 实测：<meta name="description"> 不能当成简介字段
+        let page = r#"<meta name="description" content="HDCiTY is a platform">
+<form action="takeupload.php"><input type="file" name="file"><input type="hidden" name="uid" value="1"></form>"#;
+        assert!(!form_has(page, "description"));
+        assert!(form_has(page, "file"));
+        assert!(form_has(page, "uid"));
+    }
+
+    #[test]
+    fn gazelle_field_names_fallback() {
+        // dicmusic 实测：Gazelle 架构用 title/subtitle/release_desc
+        let form = r#"<form action="upload.php"><input type="file" name="file_input">
+<input type="text" name="title"><input type="text" name="subtitle">
+<textarea name="release_desc"></textarea></form>"#;
+        let (fs, _p, _n) = build_upload_fields(&drill_release(), form, &[]);
+        let f = |k: &str| field_lookup(&fs, k).unwrap_or("").to_string();
+        assert_eq!(
+            f("title"),
+            "The.Disguiser.Complete.1080p.HDTV.x264.AAC-JING"
+        );
+        assert_eq!(
+            f("subtitle"),
+            "国产剧--伪装者[无台标完整版 全41集1080P][中字]"
+        );
+        assert!(
+            f("release_desc").contains("MediaInfo"),
+            "MediaInfo 内嵌简介"
+        );
+    }
+
+    #[test]
+    fn missing_title_field_is_note_not_gap() {
+        // tjupt 实测：表单没有标题输入框，标题由种子文件名自动生成
+        let form = r#"<form action="takeupload.php"><input type="file" name="file">
+<select name="type"><option value="0">请选择</option><option value="402">剧集</option></select>
+<textarea name="descr"></textarea></form>"#;
+        let (fs, _p, _n) = build_upload_fields(&drill_release(), form, &[]);
+        assert!(field_lookup(&fs, "name").is_none());
+        let prep = PreparedUpload {
+            action: "https://x/takeupload.php".into(),
+            form_url: "https://x/upload.php".into(),
+            fields: fs,
+            picked_tags: vec![],
+            tag_warn: None,
+            select_notes: _n,
+            form_html: form.into(),
+        };
+        let d = analyze_form("tjupt", "北洋", &prep, &drill_release());
+        assert!(d.title_auto);
+        assert!(
+            d.core_gaps().iter().all(|g| !g.contains("标题")),
+            "{:?}",
+            d.core_gaps()
+        );
     }
 }

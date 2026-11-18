@@ -111,6 +111,12 @@ enum Cmd {
         #[arg(long, value_delimiter = ',')]
         sites: Option<Vec<String>>,
     },
+    /// 发种表格演练（只审不发）：逐站拉 upload.php 构造字段核对完备性，绝不 POST
+    Formcheck {
+        /// 只查这些站（逗号分隔的站点 id）
+        #[arg(long, value_delimiter = ',')]
+        sites: Option<Vec<String>>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -134,6 +140,7 @@ fn main() -> Result<()> {
         Cmd::Status => cmd_status(&cfg),
         Cmd::Reseed { draft, yes } => cmd_reseed(&cfg, draft, yes),
         Cmd::Report { top, json, sites } => cmd_report(&cfg, top, json, sites),
+        Cmd::Formcheck { sites } => cmd_formcheck(&cfg, sites),
     }
 }
 
@@ -475,6 +482,80 @@ fn cmd_reseed(cfg: &Config, draft: Option<usize>, yes: bool) -> Result<()> {
     } else {
         println!("转种完成：{url}");
     }
+    Ok(())
+}
+
+/// 发种表格演练（只审不发）：逐站拉 upload.php 跑与真实转种同一套字段构造，
+/// 核对表单完备性与选档映射，绝不 POST。
+fn cmd_formcheck(cfg: &Config, sites: Option<Vec<String>>) -> Result<()> {
+    let adapters = build_adapters(cfg, &sites)?;
+    let info = bsend::reseed::drill_release();
+    println!(
+        "发种表格演练（只审不发，绝不 POST）｜样本「{}」｜共 {} 站\n",
+        info.name,
+        adapters.len()
+    );
+    let mut ok_n = 0usize;
+    let mut gap_n = 0usize;
+    let mut fail_n = 0usize;
+    for a in &adapters {
+        let d = bsend::reseed::drill_upload_form(a);
+        let core = d.core_gaps();
+        let soft = d.soft_gaps();
+        let icon = if d.error.is_some() {
+            fail_n += 1;
+            "✗"
+        } else if core.is_empty() {
+            ok_n += 1;
+            "✅"
+        } else {
+            gap_n += 1;
+            "⚠ "
+        };
+        let picks: Vec<String> = d
+            .select_picks
+            .iter()
+            .map(|(f, l)| {
+                let k = match f.as_str() {
+                    "type" => "分类",
+                    s if s.starts_with("source_sel") => "来源",
+                    s if s.starts_with("medium_sel") => "媒介",
+                    s if s.starts_with("codec_sel") => "编码",
+                    s if s.starts_with("standard_sel") => "分辨率",
+                    s if s.starts_with("audiocodec_sel") => "音频",
+                    s if s.starts_with("processing_sel") => "处理",
+                    s if s.starts_with("team_sel") => "制作组",
+                    _ => "其他",
+                };
+                format!("{k}={l}")
+            })
+            .collect();
+        let media = d.mediainfo_field.as_deref().unwrap_or("缺");
+        let tags = if d.picked_tags.is_empty() {
+            "—".to_string()
+        } else {
+            d.picked_tags.join("、")
+        };
+        let picks_text = if picks.is_empty() {
+            "—".to_string()
+        } else {
+            picks.join(" ")
+        };
+        println!(
+            "{icon} {:<16} 字段{:<3} 下拉{:<2} MediaInfo:{:<6} 标签:{:<4} 选档：{picks_text}",
+            d.site_id, d.field_count, d.select_count, media, tags,
+        );
+        for g in core.iter().chain(soft.iter()) {
+            println!("     · {g}");
+        }
+    }
+    println!(
+        "\n汇总：{} 站｜表单齐 {}｜有缺口 {}｜不可发种/失败 {}（权限/登录/限流）",
+        adapters.len(),
+        ok_n,
+        gap_n,
+        fail_n
+    );
     Ok(())
 }
 
