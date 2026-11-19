@@ -1,0 +1,11 @@
+[package]
+name = "bsend-gui"
+description = "bsend 的 GPUI 图形界面：覆盖概览、草稿确认、后台任务"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+bsend = { path = "../bsend" }
+gpui = "0.2.2"
+anyhow = "1"

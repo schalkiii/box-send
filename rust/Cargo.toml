@@ -1,0 +1,26 @@
+[workspace]
+resolver = "2"
+members = ["crates/bsend", "crates/bsend-cli", "crates/bsend-gui"]
+# GPUI 在 Linux 上有上游传递依赖不兼容（xattr 0.2.3 引用 libc::ENOATTR，
+# 新版 libc 已移除；0.2.x 无修复版）。默认成员只含核心库与 CLI：
+# - 裸 cargo build/test/clippy 在任何平台都只碰可移植代码；
+# - GUI 必须显式 -p bsend-gui 或 --workspace 才构建；
+# - CI 的 Windows job 用 --workspace 全量检查 GUI（它的交接目标也是 Windows）。
+default-members = ["crates/bsend", "crates/bsend-cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+rust-version = "1.82"
+
+[profile.release]
+lto = "thin"
+strip = true
+
+# GPUI 0.2.2 在 Windows 的 release 构建会调用 fxc.exe 预编译 HLSL（需 Windows SDK）。
+# 该 profile 打开 debug-assertions，走 GPUI 的运行时着色器编译分支，无需 SDK。
+# 用法：cargo build --profile gui-release -p bsend-gui
+[profile.gui-release]
+inherits = "release"
+debug-assertions = true
