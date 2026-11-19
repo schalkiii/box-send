@@ -46,6 +46,9 @@ pub struct SiteRules {
     /// 允许的分类（为空 = 不限制）；与站点「分类」下拉文案比对
     #[serde(default)]
     pub allowed_types: Vec<String>,
+    /// 逐站显式选档覆盖：字段前缀 → 选项 value（实测取证后配置，消歧用）
+    #[serde(default)]
+    pub select_picks: std::collections::BTreeMap<String, String>,
     /// 每日自动发种上限（缺省 2）
     pub daily_limit: Option<u32>,
     /// 规则来源备注

@@ -1594,6 +1594,27 @@ pub struct PreparedUpload {
     pub form_html: String,
 }
 
+/// 应用逐站显式选档覆盖（`reseedRules.<site>.selectPicks`）：只在字段当前为空/0 时写入，
+/// 且 value 必须是该站表单真实存在的选项（防旧规则在新版表单上写无效值）。
+pub fn apply_site_rules(prep: &mut PreparedUpload, rules: &crate::gates::SiteRules) {
+    for (prefix, want) in &rules.select_picks {
+        for name in select_field_names(&prep.fields, prefix) {
+            let cur = field_lookup(&prep.fields, &name).unwrap_or("").to_string();
+            if !cur.is_empty() && cur != "0" {
+                continue;
+            }
+            let valid = select_options(&prep.form_html, &name)
+                .iter()
+                .any(|(v, _)| v == want);
+            if valid {
+                set_field(&mut prep.fields, &name, want.clone());
+                prep.select_notes
+                    .push(format!("{name}：按站点显式规则选 value={want}"));
+            }
+        }
+    }
+}
+
 pub fn prepare_upload(target: &NexusPhp, info: &ReleaseInfo) -> Result<PreparedUpload> {
     let form_url = resolve_url("upload.php", &target.base);
     let form_html = target

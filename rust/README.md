@@ -155,7 +155,7 @@ GUI「转种草稿」页的「审阅」按钮与之等价（字段清单打进�
 | `mediaInfoDll` | 自动 | MediaInfo.dll 路径（源站没有 MediaInfo 时从本地文件生成用）；缺省按常见安装路径找 |
 | `piecesHash` | `auto` | pieces-hash 批量通道（站点支持就走，失败回退名字检索；`off` 关闭） |
 | `autoReseedSites` | `[]` | 自动发种白名单（当前演练用 luckpt/hdfans/ptba） |
-| `reseedRules` | `{}` | 逐站发种规范（标题长度/链接/MediaInfo/禁发词/日限额） |
+| `reseedRules` | `{}` | 逐站发种规范（标题长度/链接/MediaInfo/禁发词/日限额/`selectPicks` 显式选档） |
 | `publishEnabled` | `false` | **真实发种总闸**：三处入口都从此过；默认关闭，演练不受影响 |
 
 ### Cookie 来源

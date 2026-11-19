@@ -1487,7 +1487,7 @@ fn cmd_gatecheck(cfg: &Config, sites: Option<Vec<String>>, as_json: bool) -> Res
         adapters.len()
     );
     for a in &adapters {
-        let prep = match bsend::reseed::prepare_upload(a, &info) {
+        let mut prep = match bsend::reseed::prepare_upload(a, &info) {
             Ok(p) => p,
             Err(e) => {
                 rows.push(GatecheckRow {
@@ -1503,6 +1503,13 @@ fn cmd_gatecheck(cfg: &Config, sites: Option<Vec<String>>, as_json: bool) -> Res
                 continue;
             }
         };
+        let site_rules = cfg
+            .coverage
+            .reseed_rules
+            .get(&a.site_id)
+            .cloned()
+            .unwrap_or_default();
+        bsend::reseed::apply_site_rules(&mut prep, &site_rules);
         let drill = bsend::reseed::analyze_prepared(&a.site_id, &a.site_name, &prep, &info);
         let core = drill.core_gaps();
         let type_label = drill
@@ -1510,12 +1517,7 @@ fn cmd_gatecheck(cfg: &Config, sites: Option<Vec<String>>, as_json: bool) -> Res
             .iter()
             .find(|(n, _)| n == "type")
             .map(|(_, l)| l.clone());
-        let rules = cfg
-            .coverage
-            .reseed_rules
-            .get(&a.site_id)
-            .cloned()
-            .unwrap_or_default();
+        let rules = site_rules;
         let mut audit_text = "站点无预审".to_string();
         let mut audit_details = Vec::new();
         let mut audit_passed = None;

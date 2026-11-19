@@ -83,6 +83,9 @@
 - **MediaInfo 生成**：MediaInfo GUI 版 `MediaInfo.exe` 无法无头运行（带参数会挂起），必须走
   `MediaInfo.dll` 的 C 接口（`MediaInfo_New/Open/Option/Inform`）；`Language=en` 输出标准
   英文标签文本；内容目录取最大视频作代表（剧集包取单集）。
+- **同名重复的急救方式**：通用规则不猜（muxuege 两个 AAC 留空）；确属站点表单重复项时，
+  用逐站 `assist.reseedRules.<site>.selectPicks` 指定**实测 value**（ptfans 媒介两个 Encode
+  value 7/8，取 8；写入前校验该 value 在表单中真实存在，防旧规则失效）。
 - **HDTV 的媒介归类**：站点若有 `HDTV`/`TV` 直接对应；没有但有 `Encode` 且发布名带
   x264/x265 → 归 `Encode`（ptfans 实测）；音乐站只有 CD/SACD/DVD 时不硬塞，留空阻断。
 - **演练样本要满足站点预审规范**：LuckAudit 要求 MediaInfo 含 `General` / 空行 /
