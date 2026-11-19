@@ -146,3 +146,15 @@ qB /torrents/export?hash=…（或 BT_backup 目录）
   待接入：`coverage::process_item` 走「先 pieces-hash 探针、未命中再名字检索」+ e2e 三路径。
 - **2026-11-18 · 方法学归档**：`doc/SITE-DEBUG-GUIDE.md` 统一收纳七步调试流程、
   16 类根因、可复用经验、54 站问题档案与复现模板。
+- **2026-11-19 · 选档补齐（由真实门禁驳回驱动）**：① 无集数标记但有 19xx/20xx 年份 →
+  按电影推断分类（luckpt 预审 79→89）；② 光盘源 + x264/x265 重编码 → 媒介选 `Encode`
+  而非 Blu-ray 原盘（89→96）；③ MediaInfo 里 Audio 段有中文轨 → 勾「国语」标签
+  （96→100，零 ❌ 零 ⚠️）。三条均有单测。
+- **2026-11-19 · 真实新种 canary 成功**：Dark.City.1998（源 carpt → 目标 luckpt）
+  门禁全绿、官方预审 100/100，上传回「发布成功」，详情页 `id=10230`。
+  但站点几秒后回读显示「没有该ID的种子」（删除/待审）→ 修正 `run_reseed`：
+  发布成功后详情页回读失败不再把整轮判失败，格子记 Reseeded + 提示人工确认，绝不重发。
+- **交付状态**：P1/P2/P3/P4 代码与测试闭环；137→139 单测 + 17 e2e 全过，
+  CI 彩排通过。白名单仍为 luckpt/hdfans/ptba，日限额 2，自动发种入口
+  `bsend autopost`（`--dry-run` 只跑门禁）；若要扩大到 54 站，改 `autoReseedSites`
+  并先逐站 `gatecheck`/`autopost --dry-run` 校准规则。

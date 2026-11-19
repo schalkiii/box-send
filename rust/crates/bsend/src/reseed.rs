@@ -103,6 +103,31 @@ impl ReleaseInfo {
         false
     }
 
+    /// MediaInfo 里是否有中文音轨（Audio 段的 Language=Chinese 或 国语/普通话/国配/Mandarin）
+    pub fn has_chinese_audio(&self) -> bool {
+        let mut section = String::new();
+        for line in self.mediainfo.lines() {
+            let l = line.trim();
+            let low = l.to_ascii_lowercase();
+            if ["audio", "text", "general", "video", "chapters", "menu"]
+                .iter()
+                .any(|p| low.starts_with(p))
+            {
+                section = low.split('#').next().unwrap_or("").to_string();
+            }
+            if section.starts_with("audio")
+                && ((low.starts_with("language") && low.contains("chinese"))
+                    || low.contains("mandarin")
+                    || l.contains("国语")
+                    || l.contains("普通话")
+                    || l.contains("国配"))
+            {
+                return true;
+            }
+        }
+        false
+    }
+
     /// 简介里是否已带 IMDb/豆瓣/TMDB 任一链接
     pub fn has_media_links(&self) -> bool {
         let d = self.descr.to_lowercase();
@@ -182,6 +207,9 @@ fn wanted_tags(info: &ReleaseInfo) -> Vec<&'static str> {
     }
     if info.is_completed_series() {
         out.push("完结");
+    }
+    if info.has_chinese_audio() {
+        out.push("国语");
     }
     out
 }
@@ -1178,7 +1206,40 @@ fn infer_type_candidates(
     if has_episode_marker(&h) {
         return Some((vec!["电视剧", "剧集"], TV));
     }
+    // 电影惯用命名：`Title.1998.1080p.BluRay...`——有年份、无集数/季标记。
+    // 属强信号但仍只是推断：官方预审与站点规范门禁是最终闸门。
+    if has_release_year(&h) {
+        return Some((vec!["电影", "Movie"], MOVIE));
+    }
     None
+}
+
+/// 发布名里是否带 19xx/20xx 年份（要求两侧非数字）
+fn has_release_year(h: &str) -> bool {
+    let b = h.as_bytes();
+    for i in 0..b.len().saturating_sub(3) {
+        if !b[i].is_ascii_digit()
+            || !b[i + 1].is_ascii_digit()
+            || !b[i + 2].is_ascii_digit()
+            || !b[i + 3].is_ascii_digit()
+        {
+            continue;
+        }
+        if i > 0 && b[i - 1].is_ascii_digit() {
+            continue;
+        }
+        if i + 4 < b.len() && b[i + 4].is_ascii_digit() {
+            continue;
+        }
+        let y = (b[i] - b'0') as u32 * 1000
+            + (b[i + 1] - b'0') as u32 * 100
+            + (b[i + 2] - b'0') as u32 * 10
+            + (b[i + 3] - b'0') as u32;
+        if (1900..=2099).contains(&y) {
+            return true;
+        }
+    }
+    false
 }
 
 /// 样本类型在该站分类里没有对应项（垂直站，如曲艺/有声书/音乐站）：
@@ -1252,6 +1313,13 @@ fn fill_selects(fields: &mut Vec<Field>, page: &str, info: &ReleaseInfo) -> Vec<
         ("standard_sel", STANDARD_KEYWORDS),
         ("processing_sel", PROCESSING_KEYWORDS),
     ];
+    let codec_tokens = find_keywords(&hay, CODEC_KEYWORDS);
+    let reencoded = codec_tokens.iter().any(|t| {
+        matches!(
+            t.to_ascii_lowercase().as_str(),
+            "x264" | "x265" | "h264" | "h265" | "avc" | "hevc"
+        )
+    });
     for (prefix, kws) in cats {
         let names = select_field_names(fields, prefix);
         if names.is_empty() {
@@ -1276,7 +1344,23 @@ fn fill_selects(fields: &mut Vec<Field>, page: &str, info: &ReleaseInfo) -> Vec<
             }
             relevant_seen = true;
             let mut picked = None;
+            // 原盘/光盘源 + 有损重编码 → 站点规范通常归「Encode」而非「Blu-ray 原盘」
+            // （luckpt 官方预审实测：x265 10bit 标 Blu-ray 会报「媒介与标题不匹配」）。
+            // 只在站点确实提供 Encode 选项时生效；REMUX/HDTV 不受影响。
+            let disc_source = tokens.iter().any(|t| {
+                let l = t.to_ascii_lowercase();
+                l.contains("blu") || l.contains("bluray") || l == "dvd"
+            });
+            let is_remux = tokens
+                .iter()
+                .any(|t| t.to_ascii_lowercase().contains("remux"));
+            if reencoded && disc_source && !is_remux {
+                picked = match_option(&options, "Encode");
+            }
             'tok: for t in &tokens {
+                if picked.is_some() {
+                    break 'tok;
+                }
                 for c in std::iter::once(t.as_str()).chain(token_aliases(t).iter().copied()) {
                     match pair_option(&options, c) {
                         Pairing::Hit(v) => {
@@ -2870,7 +2954,26 @@ pub fn run_reseed(
     }
 
     // ---- 4 回推下载器并校验 ----
-    let tpage = tgt.fetch_torrent_page(&detail_url)?;
+    // 发布本身已成功；若站点随即删除/转待审导致详情页回读不到，不能再把整轮判失败
+    // （luckpt 实测：上传回「发布成功」并给出详情页，几秒后再读却是「没有该ID的种子」）。
+    let tpage = match tgt.fetch_torrent_page(&detail_url) {
+        Ok(p) => p,
+        Err(e) => {
+            log(&format!(
+                "发后回读详情页失败（{e:#}）——发布已成功，格子记 Reseeded 并提示人工确认（不重发）"
+            ));
+            write_cell(
+                index,
+                &req.content_key,
+                &req.target_site,
+                CoverageStatus::Reseeded,
+                Some(detail_url.clone()),
+                "发布成功，但回读详情页失败（站点可能删除/待审），请人工确认；勿重发",
+            );
+            index.save()?;
+            return Ok(detail_url);
+        }
+    };
     let tdata = tgt.download_torrent(&tpage, &detail_url)?;
     let (rep_hash, meta_save_path, category) = {
         let entry = index
@@ -3550,6 +3653,30 @@ Height : 1080</pre></div>"#;
     }
 
     #[test]
+    fn chinese_audio_detection() {
+        let mk = |mi: &str| ReleaseInfo {
+            mediainfo: mi.into(),
+            ..Default::default()
+        };
+        assert!(mk("Audio #1
+Language : English
+Audio #2
+Language : Chinese")
+        .has_chinese_audio());
+        assert!(mk("Audio #1
+Title : Mandarin 2.0 国配")
+        .has_chinese_audio());
+        assert!(!mk("Audio #1
+Language : English
+Text #1
+Language : Chinese")
+        .has_chinese_audio());
+        let t = wanted_tags(&mk("Audio #1
+Language : Chinese"));
+        assert!(t.contains(&"国语"), "{t:?}");
+    }
+
+    #[test]
     fn completed_series_detection() {
         let mk = |n: &str, s: &str| ReleaseInfo {
             name: n.into(),
@@ -3571,8 +3698,10 @@ Height : 1080</pre></div>"#;
         assert!(g.0.contains(&"国产剧"));
         assert!(infer_type_candidates("Show.S01.1080p", "").is_some());
         assert!(infer_type_candidates("Show.第3季", "").is_some());
-        // 没有任何标记的电影名：不猜
-        assert!(infer_type_candidates("Dune.2021.1080p.BluRay.x264-GRP", "").is_none());
+        // 年份 + 无集数标记 = 电影惯用命名（强信号；仍由官方预审做最终闸门）
+        let m = infer_type_candidates("Dune.2021.1080p.BluRay.x264-GRP", "").unwrap();
+        assert!(m.0.contains(&"电影"));
+        assert!(infer_type_candidates("Plain.Title.1080p", "").is_none());
     }
 
     #[test]
@@ -3696,6 +3825,24 @@ Height : 1080</pre></div>"#;
         assert!(core.iter().any(|g| g.contains("codec_sel")), "{core:?}");
         let soft = d.soft_gaps();
         assert!(soft.iter().any(|g| g.contains("分类")), "{soft:?}");
+    }
+
+    #[test]
+    fn reencoded_disc_maps_to_encode() {
+        let form = r#"<select name="medium_sel[4]"><option value="0">请选择</option><option value="1">Blu-ray</option><option value="2">Encode</option><option value="3">Remux</option></select>"#;
+        let info = ReleaseInfo {
+            name: "Dark.City.1998.BluRay.1080p.x265.10bit-GRP".into(),
+            ..Default::default()
+        };
+        let (fs, _p, notes) = build_upload_fields(&info, form, &[]);
+        assert_eq!(field_lookup(&fs, "medium_sel"), Some("2"), "{notes:?}");
+        // REMUX 仍按原盘归类，不改判 Encode
+        let remux = ReleaseInfo {
+            name: "Dark.City.1998.BluRay.REMUX.1080p-GRP".into(),
+            ..Default::default()
+        };
+        let (fs, _p, _n) = build_upload_fields(&remux, form, &[]);
+        assert_eq!(field_lookup(&fs, "medium_sel"), Some("1"));
     }
 
     #[test]

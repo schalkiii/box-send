@@ -83,6 +83,10 @@
 - **MediaInfo 生成**：MediaInfo GUI 版 `MediaInfo.exe` 无法无头运行（带参数会挂起），必须走
   `MediaInfo.dll` 的 C 接口（`MediaInfo_New/Open/Option/Inform`）；`Language=en` 输出标准
   英文标签文本；内容目录取最大视频作代表（剧集包取单集）。
+- **选档按官方驳回迭代**：无集数但有年份 → 电影；光盘源 + x264/x265 → `Encode` 而非原盘；
+  MediaInfo 的 Audio 段有中文轨 → 「国语」标签。每次改动用官方预审分数验证（79→89→96→100）。
+- **发后回读失败不等于发布失败**：站点可能发布成功后立刻删种/转待审；此时记 Reseeded
+  + 人工确认，绝不自动重发。
 - **WAF 与内联事件属性**：站点 Cloudflare 对表单体里的 `on*=` 属性按出现次数计分
   （预审载荷实测 2 处放行、4 处 403）；**真实上传同理**（luckpt 403 实测）——简介提交前
   统一 `strip_event_handlers`，正文不动。
