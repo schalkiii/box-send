@@ -1911,6 +1911,55 @@ pub fn review_reseed(
 
 /// 发后自检：重读新种详情页，核对标题 / MediaInfo / 条目链接真的落上了。
 /// 只出警告不推翻上传结论（抓不到页面也算一条警告）。
+/// 标题归一化：大小写 + 非字母数字统一成点（站点常把 `.`/空格互换写法）
+fn norm_post_title(s: &str) -> String {
+    s.to_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '.' })
+        .collect::<String>()
+        .split('.')
+        .filter(|x| !x.is_empty())
+        .collect::<Vec<_>>()
+        .join(".")
+}
+
+/// 发后校正：上传回包给的详情页可能是中转/错误 id（luckpt 实测回包 id=10230，
+/// 真实种子 61140）。按发布标题站内检索 + 逐条核对详情页标题定位真实链接。
+fn relocate_posted_detail(tgt: &NexusPhp, name: &str, log: &mut dyn FnMut(&str)) -> Option<String> {
+    let q = url::form_urlencoded::byte_serialize(name.as_bytes()).collect::<String>();
+    let base = tgt.base.as_str().trim_end_matches('/');
+    let url = format!("{base}/torrents.php?search={q}&search_area=0&incldead=1");
+    let html = match tgt.fetch_html(&url, tgt.base.as_str()) {
+        Ok(h) => h,
+        Err(e) => {
+            log(&format!("发后检索失败：{e:#}"));
+            return None;
+        }
+    };
+    let mut ids: Vec<String> = Vec::new();
+    let mut rest = html.as_str();
+    while let Some(pos) = rest.find("details.php?id=") {
+        let after = &rest[pos + "details.php?id=".len()..];
+        let digits: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if !digits.is_empty() && !ids.contains(&digits) {
+            ids.push(digits);
+        }
+        rest = after;
+    }
+    ids.truncate(8);
+    log(&format!("发后检索到 {} 个候选详情页", ids.len()));
+    let want = norm_post_title(name);
+    for id in ids {
+        let u = format!("{base}/details.php?id={id}");
+        if let Ok(page) = tgt.fetch_torrent_page(&u) {
+            if norm_post_title(&page.name) == want {
+                return Some(u);
+            }
+        }
+    }
+    None
+}
+
 pub fn verify_posted(target: &NexusPhp, detail_url: &str, info: &ReleaseInfo) -> Vec<String> {
     match target.fetch_html(detail_url, target.base.as_str()) {
         Ok(html) => verify_posted_html(&html, info),
@@ -2949,13 +2998,29 @@ pub fn run_reseed(
     log(&format!("新种详情页：{detail_url}"));
 
     // ---- 发后自检：回读新种页核对标题/MediaInfo/链接（只警告不推翻）----
+    // 站点回包给的详情页可能是中转/错误 id；先按标题校正，再做自检与回推
+    let detail_url = match tgt.fetch_torrent_page(&detail_url) {
+        Ok(_) => detail_url,
+        Err(e) => {
+            log(&format!(
+                "回包详情页打不开（{e:#}），按标题检索校正真实详情页…"
+            ));
+            match relocate_posted_detail(&tgt, &info.name, log) {
+                Some(u) => {
+                    log(&format!("发后校正：{u}"));
+                    u
+                }
+                None => detail_url,
+            }
+        }
+    };
     for w in verify_posted(&tgt, &detail_url, &info) {
         log(&format!("发后自检·{w}"));
     }
 
     // ---- 4 回推下载器并校验 ----
     // 发布本身已成功；若站点随即删除/转待审导致详情页回读不到，不能再把整轮判失败
-    // （luckpt 实测：上传回「发布成功」并给出详情页，几秒后再读却是「没有该ID的种子」）。
+    // （luckpt 实测：上传回包给的中转 id 不是真实种子 id；已先按标题校正）。
     let tpage = match tgt.fetch_torrent_page(&detail_url) {
         Ok(p) => p,
         Err(e) => {
@@ -2968,7 +3033,7 @@ pub fn run_reseed(
                 &req.target_site,
                 CoverageStatus::Reseeded,
                 Some(detail_url.clone()),
-                "发布成功，但回读详情页失败（站点可能删除/待审），请人工确认；勿重发",
+                "发布成功，但回包详情页与站内检索都定位失败（回包 id 可能有误），请人工确认；勿重发",
             );
             index.save()?;
             return Ok(detail_url);
@@ -3650,6 +3715,18 @@ Height : 1080</pre></div>"#;
         let d = field_lookup(&fs, "descr").unwrap_or("");
         assert!(!d.contains("onload") && !d.contains("onclick"), "{d}");
         assert!(d.contains("正文") && d.contains("y.jpg"), "{d}");
+    }
+
+    #[test]
+    fn post_title_normalization() {
+        assert_eq!(
+            norm_post_title("Dark City 1998 DC BluRay 1080p-BeiTai"),
+            norm_post_title("dark.city.1998.dc.bluray.1080p.beitai")
+        );
+        assert_ne!(
+            norm_post_title("Dark City 1998"),
+            norm_post_title("Dark City 1999")
+        );
     }
 
     #[test]
