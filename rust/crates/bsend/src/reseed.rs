@@ -1357,6 +1357,23 @@ fn fill_selects(fields: &mut Vec<Field>, page: &str, info: &ReleaseInfo) -> Vec<
             if reencoded && disc_source && !is_remux {
                 picked = match_option(&options, "Encode");
             }
+            // HDTV.x264/x265 属重编码发布：站点若没有 HDTV/TV 类媒介但有 Encode，
+            // 归 Encode 是正确的（ptfans 实测：选项 Other/Encode/Blu-ray/Web-DL/…）。
+            // 只在带 x264/x265 且有 Encode 选项时生效；音乐站（无 Encode）不受影响。
+            let hdtv_source = tokens
+                .iter()
+                .any(|t| t.to_ascii_lowercase().contains("hdtv"));
+            let has_hdtv_option = options.iter().any(|(_, l)| {
+                let ll = l.to_ascii_lowercase();
+                ll.contains("hdtv")
+                    || ll.contains("tvrip")
+                    || ll == "tv"
+                    || l.contains("电视")
+                    || l.contains("電視")
+            });
+            if picked.is_none() && reencoded && hdtv_source && !is_remux && !has_hdtv_option {
+                picked = match_option(&options, "Encode");
+            }
             'tok: for t in &tokens {
                 if picked.is_some() {
                     break 'tok;
@@ -2096,8 +2113,8 @@ pub fn drill_release() -> ReleaseInfo {
     ReleaseInfo {
         name: "The.Disguiser.Complete.1080p.HDTV.x264.AAC-JING".into(),
         subtitle: "国产剧--伪装者[无台标完整版 全41集1080P][中字]".into(),
-        descr: "演练样本简介。IMDb：https://www.imdb.com/title/tt5154296/".into(),
-        mediainfo: "General\nUnique ID : 1\nFormat : Matroska\nBit rate : 6000 kb/s\nWidth : 1920\nHeight : 1080".into(),
+        descr: "演练样本简介（中字）。IMDb：https://www.imdb.com/title/tt5154296/\n豆瓣：https://movie.douban.com/subject/25823432/\n截图：<img src=\"https://img.example/shot01.jpg\"><img src=\"https://img.example/shot02.jpg\"><img src=\"https://img.example/shot03.jpg\">".into(),
+        mediainfo: "General\nUnique ID : 1\nFormat : Matroska\nDuration : 47mn 17s\nOverall bit rate : 6000 kb/s\n\nVideo\nFormat : AVC\nFormat/Info : Advanced Video Codec\nWidth : 1920 pixels\nHeight : 1080 pixels\n\nAudio\nLanguage : Chinese\nFormat : AAC\nChannel(s) : 2 channels".into(),
         imdb: Some("tt5154296".into()),
         douban: Some("25823432".into()),
         tmdb: None,
@@ -2923,6 +2940,8 @@ pub fn run_reseed(
     index: &mut ContentIndex,
     log: &mut dyn FnMut(&str),
 ) -> Result<String> {
+    // 真实发种总闸：缺省关闭，任何调用方（CLI --yes / autopost / GUI）都过这里。
+    crate::config::ensure_publish_enabled(cfg)?;
     let rel = prepare_released(cfg, req, log)?;
     if !rel.preflight.ok() {
         for e in &rel.preflight.errors {
@@ -3902,6 +3921,21 @@ Language : Chinese"));
         assert!(core.iter().any(|g| g.contains("codec_sel")), "{core:?}");
         let soft = d.soft_gaps();
         assert!(soft.iter().any(|g| g.contains("分类")), "{soft:?}");
+    }
+
+    #[test]
+    fn hdtv_x264_maps_to_encode_when_no_hdtv_option() {
+        let form = r#"<select name="medium_sel[4]"><option value="0">请选择</option><option value="1">Blu-ray</option><option value="2">Encode</option><option value="3">Web-DL</option></select>"#;
+        let info = ReleaseInfo {
+            name: "Show.Complete.HDTV.1080p.x264-GRP".into(),
+            ..Default::default()
+        };
+        let (fs, _p, _notes) = build_upload_fields(&info, form, &[]);
+        assert_eq!(field_lookup(&fs, "medium_sel"), Some("2"));
+        // 音乐站没有 Encode：不硬塞，保持留空（站点不收该内容）
+        let music = r#"<select name="medium_sel[4]"><option value="0">请选择</option><option value="1">CD</option><option value="2">SACD</option></select>"#;
+        let (fs, _p, _n) = build_upload_fields(&info, music, &[]);
+        assert_eq!(field_lookup(&fs, "medium_sel"), Some("0"));
     }
 
     #[test]

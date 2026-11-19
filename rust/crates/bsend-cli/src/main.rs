@@ -117,6 +117,16 @@ enum Cmd {
         #[arg(long, value_delimiter = ',')]
         sites: Option<Vec<String>>,
     },
+    /// 全站门禁演练（只读）：构造上传字段 + 官方预审 + 门禁矩阵，绝不上传种子
+    Gatecheck {
+        /// 只演练这些站（逗号分隔站点 id）
+        #[arg(long, value_delimiter = ',')]
+        sites: Option<Vec<String>>,
+        /// 输出 JSON
+        #[arg(long)]
+        json: bool,
+    },
+
     /// 自动发种：草稿 → 审阅 → 门禁 → 发布（白名单 + 日限额 + 审计）；--dry-run 只跑门禁
     Autopost {
         /// 只跑门禁与审阅，不发布
@@ -172,6 +182,7 @@ fn main() -> Result<()> {
         Cmd::Formcheck { sites } => cmd_formcheck(&cfg, sites),
         Cmd::Layoutcheck { limit, only } => cmd_layoutcheck(&cfg, limit, only),
         Cmd::Sites { json, md } => cmd_sites(&cfg, json, md),
+        Cmd::Gatecheck { sites, json } => cmd_gatecheck(&cfg, sites, json),
         Cmd::Autopost { dry_run, limit } => cmd_autopost(&cfg, dry_run, limit),
     }
 }
@@ -458,6 +469,9 @@ fn cmd_status(cfg: &Config) -> Result<()> {
 
 /// 转种草稿的审阅与提交：`--draft N` 审阅第 N 条（不 POST），加 `--yes` 才真发
 fn cmd_reseed(cfg: &Config, draft: Option<usize>, yes: bool) -> Result<()> {
+    if yes {
+        bsend::config::ensure_publish_enabled(cfg)?;
+    }
     let mut index = ContentIndex::load(&cfg.coverage_state_path());
     let path_text = cfg.coverage_state_path().display().to_string();
     let report = CoverageReport::build(
@@ -1248,6 +1262,9 @@ fn yn(v: &serde_json::Value, k: &str) -> &'static str {
 /// 自动发种：按草稿逐条走「审阅 → 门禁 → 发布」，白名单 + 日限额 + 审计留痕。
 /// `--dry-run` 只打印门禁矩阵（等价 gatecheck），不碰站点写接口。
 fn cmd_autopost(cfg: &Config, dry_run: bool, limit: Option<usize>) -> Result<()> {
+    if !dry_run {
+        bsend::config::ensure_publish_enabled(cfg)?;
+    }
     let mut index = ContentIndex::load(&cfg.coverage_state_path());
     let qb = connect_qb(cfg)?;
     let report = CoverageReport::build(&index, &cfg.sites, 20, bsend::coverage::now_unix(), "");
@@ -1444,4 +1461,161 @@ fn append_audit(path: &PathBuf, entry: serde_json::Value) {
     {
         let _ = writeln!(f, "{entry}");
     }
+}
+
+/// 全站门禁演练：用演练样本逐站构造上传字段 → 官方预审（有则调，不上传种子）→ 门禁矩阵。
+/// 全程只 GET 上传页 / POST 官方预审接口，绝不调用 takeupload.php。
+#[derive(Debug, serde::Serialize)]
+struct GatecheckRow {
+    site: String,
+    name: String,
+    verdict: String,
+    note: String,
+    audit: String,
+    audit_details: Vec<String>,
+    core_gaps: Vec<String>,
+    gates: Vec<(String, String, String)>,
+}
+
+fn cmd_gatecheck(cfg: &Config, sites: Option<Vec<String>>, as_json: bool) -> Result<()> {
+    let adapters = build_adapters(cfg, &sites)?;
+    let info = bsend::reseed::drill_release();
+    let mut rows: Vec<GatecheckRow> = Vec::new();
+    println!(
+        "全站门禁演练（只构造字段 + 官方预审，绝不上传种子）｜样本「{}」｜{} 站",
+        info.name,
+        adapters.len()
+    );
+    for a in &adapters {
+        let prep = match bsend::reseed::prepare_upload(a, &info) {
+            Ok(p) => p,
+            Err(e) => {
+                rows.push(GatecheckRow {
+                    site: a.site_id.clone(),
+                    name: a.site_name.clone(),
+                    verdict: "error".into(),
+                    note: format!("{e:#}"),
+                    audit: "—".into(),
+                    audit_details: vec![],
+                    core_gaps: vec![],
+                    gates: vec![],
+                });
+                continue;
+            }
+        };
+        let drill = bsend::reseed::analyze_prepared(&a.site_id, &a.site_name, &prep, &info);
+        let core = drill.core_gaps();
+        let type_label = drill
+            .select_picks
+            .iter()
+            .find(|(n, _)| n == "type")
+            .map(|(_, l)| l.clone());
+        let rules = cfg
+            .coverage
+            .reseed_rules
+            .get(&a.site_id)
+            .cloned()
+            .unwrap_or_default();
+        let mut audit_text = "站点无预审".to_string();
+        let mut audit_details = Vec::new();
+        let mut audit_passed = None;
+        if bsend::reseed::pre_audit_supported(&prep.form_html) {
+            match bsend::reseed::run_pre_audit(a, &info, &prep) {
+                Ok(v) => {
+                    audit_text = v.summary();
+                    audit_details = v
+                        .details
+                        .iter()
+                        .map(|d| d.line())
+                        .chain(v.suggestions.iter().cloned())
+                        .collect();
+                    audit_passed = Some(v.passed);
+                }
+                Err(e) => audit_text = format!("预审接口失败：{e:#}"),
+            }
+        }
+        let input = bsend::gates::GateInput {
+            rules: &rules,
+            name: &info.name,
+            subtitle: &info.subtitle,
+            descr: &info.descr,
+            mediainfo: &info.mediainfo,
+            has_links: info.has_media_links(),
+            type_label: type_label.as_deref(),
+            core_gaps: &core,
+            audit_passed,
+        };
+        let results = bsend::gates::evaluate(&input);
+        let pass = bsend::gates::all_passed(&results);
+        let gates = results
+            .iter()
+            .map(|r| {
+                (
+                    r.gate.to_string(),
+                    r.verdict.as_str().to_string(),
+                    r.message.clone(),
+                )
+            })
+            .collect();
+        rows.push(GatecheckRow {
+            site: a.site_id.clone(),
+            name: a.site_name.clone(),
+            verdict: if pass { "pass" } else { "block" }.into(),
+            note: format!(
+                "字段{} / 下拉{} / MediaInfo:{}",
+                drill.field_count,
+                drill.select_count,
+                drill.mediainfo_field.as_deref().unwrap_or("缺")
+            ),
+            audit: audit_text,
+            audit_details,
+            core_gaps: core,
+            gates,
+        });
+    }
+    let save_path = cfg
+        .coverage_state_path()
+        .parent()
+        .map(|p| p.join("gatecheck.json"))
+        .unwrap_or_else(|| PathBuf::from("gatecheck.json"));
+    let payload = serde_json::to_string_pretty(&rows)?;
+    if let Some(dir) = save_path.parent() {
+        std::fs::create_dir_all(dir).ok();
+    }
+    if let Err(e) = std::fs::write(&save_path, &payload) {
+        println!("门禁结果落盘失败（不影响演练）：{e}");
+    }
+    if as_json {
+        println!("{payload}");
+        return Ok(());
+    }
+    println!(
+        "{:<14}{:<10}{:<8}{:<44}阻断项",
+        "站点", "名称", "门禁", "官方预审"
+    );
+    for r in &rows {
+        let blockers: Vec<String> = r
+            .gates
+            .iter()
+            .filter(|(_, v, _)| v == "block")
+            .map(|(g, _, m)| format!("{g}:{m}"))
+            .collect();
+        println!(
+            "{:<14}{:<10}{:<8}{:<44}{}",
+            r.site,
+            r.name,
+            r.verdict,
+            r.audit.chars().take(42).collect::<String>(),
+            blockers.join("；").chars().take(90).collect::<String>()
+        );
+    }
+    let ok = rows.iter().filter(|r| r.verdict == "pass").count();
+    println!(
+        "\n汇总：{} 站｜门禁通过 {}｜阻断 {}｜错误 {}",
+        rows.len(),
+        ok,
+        rows.iter().filter(|r| r.verdict == "block").count(),
+        rows.iter().filter(|r| r.verdict == "error").count()
+    );
+    Ok(())
 }

@@ -85,6 +85,8 @@ bsend formcheck              # 全部启用站发种表格演练（只审不发�
 bsend formcheck --sites luckpt,hdsky   # 只演练指定站
 bsend layoutcheck --limit 20           # 落盘核对：抽 20 段内容看推种会用哪个 savepath（只读）
 bsend sites [--md|--json]              # 站点总账：启用/暂停/实测/pieces/cookie 一处看全
+bsend gatecheck [--sites a,b|--json]  # 全站门禁演练：字段 + 官方预审，不上传种子
+bsend autopost --dry-run               # 草稿审阅 + 门禁矩阵（不发布）
 ```
 
 GUI「转种草稿」页的「审阅」按钮与之等价（字段清单打进任务日志），「确认转种」= 人工
@@ -151,6 +153,10 @@ GUI「转种草稿」页的「审阅」按钮与之等价（字段清单打进�
 | `pausedSites` | `[]` | 完全暂停的站：辅种/转种/演练都不去敲（连不上、站点已挂、cookie 失效） |
 | `reseedPausedSites` | `[]` | 只停转种/发种的站：无发布权限、上传界面 v1 不支持；辅种照常 |
 | `mediaInfoDll` | 自动 | MediaInfo.dll 路径（源站没有 MediaInfo 时从本地文件生成用）；缺省按常见安装路径找 |
+| `piecesHash` | `auto` | pieces-hash 批量通道（站点支持就走，失败回退名字检索；`off` 关闭） |
+| `autoReseedSites` | `[]` | 自动发种白名单（当前演练用 luckpt/hdfans/ptba） |
+| `reseedRules` | `{}` | 逐站发种规范（标题长度/链接/MediaInfo/禁发词/日限额） |
+| `publishEnabled` | `false` | **真实发种总闸**：三处入口都从此过；默认关闭，演练不受影响 |
 
 ### Cookie 来源
 
@@ -166,6 +172,13 @@ GUI「转种草稿」页的「审阅」按钮与之等价（字段清单打进�
 站点级别名也可以在 `sourceSites[].overrides.announceHosts` 里追加（数组）：
 判断「这份文件已经在该站做种」时，页面域名与 announce 域名不一致的站（实机 luckpt / chdbits）
 靠它命中；内置别名表在 `sites::extra_announce_hosts`。
+
+## 发种安全闸门
+
+`assist.publishEnabled` **缺省 false**：`reseed --yes` / `autopost` / `run_reseed` 三处入口
+在任何站点写请求之前先检查总闸（CLI 早于连 qB/拉源页），因此本阶段只能演练，不能真发。
+演练命令：`formcheck`（表单）、`gatecheck`（字段 + 官方预审 + 门禁矩阵）、
+`reseed --draft N`（单草稿审阅）、`autopost --dry-run`（草稿门禁）。开启真发前需显式设为 true。
 
 ## 一轮流水线
 

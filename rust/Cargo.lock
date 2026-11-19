@@ -745,6 +745,7 @@ dependencies = [
  "bsend",
  "chrono",
  "clap",
+ "serde",
  "serde_json",
 ]
 

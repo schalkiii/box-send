@@ -165,3 +165,14 @@
 | yinghua | 樱花 | pt.ying.us.kg | NexusPHP | — | 是 | — | 未测 |  | 未测 | 0 | 已关站（savept.icu 2026-09-20）：域名 pt.ying.us.kg 已无法解析 |
 | yzyy | YZYY | yzyy.org | Discuz | — | — | — | 未测 |  | 未测 | 0 |  |
 | zhuque | 朱雀 | zhuque.in | TNode | — | — | — | 未测 |  | 未测 | 1 |  |
+## 门禁演练（只读，不上传种子）
+
+`bsend gatecheck` 逐站构造字段 + 官方预审（有该接口的站）+ G1–G5 门禁矩阵，
+结果落 `dataDir/gatecheck.json`。最近一次：1 站 →
+通过 1 / 阻断 0 / 错误 0（错误多为无发布权限/连不通）。
+
+| 站点 | 门禁结论 | 官方预审 | 阻断原因 |
+| --- | --- | --- | --- |
+
+通过门禁 ≠ 可立即发种：`assist.publishEnabled` 默认 false，只有用户显式开启、站点在
+`autoReseedSites` 白名单内、且日限额未用完时才会真实上传。

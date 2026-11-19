@@ -103,6 +103,8 @@ pub struct CoverageSettings {
     pub reseed_rules: std::collections::BTreeMap<String, crate::gates::SiteRules>,
     /// 自动发种白名单（空 = 不自动发，仅演练）
     pub auto_reseed_sites: Vec<String>,
+    /// 真实发种总开关（缺省 false；所有 run_reseed 路径都过这道闸，演练不受影响）
+    pub reseed_publish_enabled: bool,
     /// 索引归档：下载器里消失超过这么多天的内容从索引里清掉
     pub archive_days: i64,
     /// 并行站 worker 数（Swift 版全局串行；Rust 版按站并行，默认 4）
@@ -143,6 +145,7 @@ impl Default for CoverageSettings {
             pieces_hash: PiecesHashMode::Auto,
             reseed_rules: std::collections::BTreeMap::new(),
             auto_reseed_sites: Vec::new(),
+            reseed_publish_enabled: false,
             archive_days: 30,
             max_concurrent_sites: 4,
             rate_limit_floor_sec: 60,
@@ -151,6 +154,14 @@ impl Default for CoverageSettings {
             reseed_mode: ReseedMode::Draft,
         }
     }
+}
+
+/// 真实发种总闸（默认关）；CLI 与库入口都过这里
+pub fn ensure_publish_enabled(cfg: &Config) -> Result<()> {
+    if !cfg.coverage.reseed_publish_enabled {
+        anyhow::bail!("真实发种总开关关闭（assist.publishEnabled=false）；演练用 `reseed --draft N` 或 `gatecheck`");
+    }
+    Ok(())
 }
 
 /// pieces-hash 批量通道开关（`assist.piecesHash`：auto/off）
@@ -330,6 +341,7 @@ impl Config {
                 })
                 .unwrap_or_default(),
             auto_reseed_sites: v_str_list(&assist, "autoReseedSites"),
+            reseed_publish_enabled: v_bool(&assist, "publishEnabled", d.reseed_publish_enabled),
             archive_days: d.archive_days,
             max_concurrent_sites: (v_i64(
                 &assist,
@@ -587,6 +599,29 @@ mod tests {
       "assist": {"siteIDs": ["hdsky", "pter"], "perSiteIntervalSec": 5, "roundBudget": 120,
                  "missTTLDays": 3, "pausedSites": ["pter"]}
     }"#;
+
+    #[test]
+    fn publish_is_off_by_default() {
+        let cfg = Config {
+            config_path: std::env::temp_dir().join("no-such-boxsend.json"),
+            data_dir: None,
+            downloader: crate::config::DownloaderSettings {
+                url: String::new(),
+                username: String::new(),
+                password: String::new(),
+                save_path: None,
+                category: None,
+                default_up_limit: 0,
+                site_up_limits: std::collections::HashMap::new(),
+            },
+            sites: vec![],
+            coverage: crate::config::CoverageSettings::default(),
+            user_agent: "x".into(),
+            cookies: std::collections::HashMap::new(),
+            cookie_cloud: None,
+        };
+        assert!(!cfg.coverage.reseed_publish_enabled);
+    }
 
     #[test]
     fn loads_boxsend_json_compat() {

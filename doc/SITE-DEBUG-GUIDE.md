@@ -83,6 +83,10 @@
 - **MediaInfo 生成**：MediaInfo GUI 版 `MediaInfo.exe` 无法无头运行（带参数会挂起），必须走
   `MediaInfo.dll` 的 C 接口（`MediaInfo_New/Open/Option/Inform`）；`Language=en` 输出标准
   英文标签文本；内容目录取最大视频作代表（剧集包取单集）。
+- **HDTV 的媒介归类**：站点若有 `HDTV`/`TV` 直接对应；没有但有 `Encode` 且发布名带
+  x264/x265 → 归 `Encode`（ptfans 实测）；音乐站只有 CD/SACD/DVD 时不硬塞，留空阻断。
+- **演练样本要满足站点预审规范**：LuckAudit 要求 MediaInfo 含 `General` / 空行 /
+  `Video` / 空行 / `Audio` 分段且 General 有 `Duration`，简介含 ≥3 张图；样本不合格会假性拦站。
 - **选档按官方驳回迭代**：无集数但有年份 → 电影；光盘源 + x264/x265 → `Encode` 而非原盘；
   MediaInfo 的 Audio 段有中文轨 → 「国语」标签。每次改动用官方预审分数验证（79→89→96→100）。
 - **发后回包 id 未必是真实种子 id**：luckpt 实测回包 `id=10230`，真实种子是 `61140`
