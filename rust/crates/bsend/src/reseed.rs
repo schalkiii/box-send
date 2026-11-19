@@ -1910,7 +1910,10 @@ pub fn review_reseed(
 ) -> Result<ReviewReport> {
     let rel = prepare_released(cfg, req, log)?;
     log("抓目标站上传表单，构造提交字段…");
-    let prepared = prepare_upload(&rel.tgt, &rel.info)?;
+    let mut prepared = prepare_upload(&rel.tgt, &rel.info)?;
+    if let Some(rules) = cfg.coverage.reseed_rules.get(&req.target_site) {
+        apply_site_rules(&mut prepared, rules);
+    }
     log(&format!(
         "审阅完成：{} 个字段 → {}（未提交）",
         prepared.fields.len(),
@@ -2979,7 +2982,10 @@ pub fn run_reseed(
     } = rel;
 
     // ---- 3 构造上传字段 + 站点官方预审（LuckAudit）----
-    let prep = prepare_upload(&tgt, &info)?;
+    let mut prep = prepare_upload(&tgt, &info)?;
+    if let Some(rules) = cfg.coverage.reseed_rules.get(&req.target_site) {
+        apply_site_rules(&mut prep, rules);
+    }
     if pre_audit_supported(&prep.form_html) {
         log("调用站点官方预审（LuckAudit）…");
         match run_pre_audit(&tgt, &info, &prep) {

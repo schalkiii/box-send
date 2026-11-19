@@ -160,3 +160,11 @@ qB /torrents/export?hash=…（或 BT_backup 目录）
   CI 彩排通过。白名单仍为 luckpt/hdfans/ptba，日限额 2，自动发种入口
   `bsend autopost`（`--dry-run` 只跑门禁）；若要扩大到 54 站，改 `autoReseedSites`
   并先逐站 `gatecheck`/`autopost --dry-run` 校准规则。
+- **2026-11-19 · 演练开发（禁止真发）**：新增只读 `bsend gatecheck` 与
+  `assist.publishEnabled` 总闸（缺省 false；CLI 与库三处入口在写请求前拦截）。
+  演练样本补齐 MediaInfo 标准分段/截图后 luckpt 官方预审 100/100。
+  ptfans 的媒介有两个同名 Encode（value 7/8）通过逐站
+  `reseedRules.ptfans.selectPicks.medium_sel=8` 显式消歧；通用规则仍保留
+  「同名不同标签 → 不猜」（muxuege 两个 AAC 留空）。
+- **真发解冻步骤**：编辑 `boxsend.json` 的 `assist.publishEnabled=true`，
+  同时确认 `autoReseedSites` 白名单；未显式改前任何 `--yes`/autopost 都会在请求前退出。

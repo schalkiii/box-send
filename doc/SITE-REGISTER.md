@@ -169,10 +169,46 @@
 
 `bsend gatecheck` 逐站构造字段 + 官方预审（有该接口的站）+ G1–G5 门禁矩阵，
 结果落 `dataDir/gatecheck.json`。最近一次：1 站 →
-通过 1 / 阻断 0 / 错误 0（错误多为无发布权限/连不通）。
+通过 55 / 阻断 3 / 错误 34（错误多为无发布权限/连不通）。
 
 | 站点 | 门禁结论 | 官方预审 | 阻断原因 |
 | --- | --- | --- | --- |
-
+| hdsky | error | — | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://hdsky.me/upload.php |
+| chdbits | error | — | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://ptchdbits.co/upload.php |
+| hdhome | error | — | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://hdhome.org/upload.php |
+| cmct | error | — | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://springsunday.net/upload.php |
+| ttg | error | — | 目标站没有可解析的静态上传表单（JS/自定义上传界面，或 cookie 失效），v1 暂不支持：https://totheglory.im/upload.php |
+| pter | error | — | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://pterclub.net/upload.php |
+| hhanclub | error | — | 该账号无发布权限（页面提示含「没有发布」）：https://hhanclub.net/upload.php |
+| pt52 | error | — | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://52pt.site/upload.php |
+| carpt | error | — | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://carpt.net/upload.php |
+| discfan | error | — | 该账号无发布权限（页面提示含「沒有發布種子的許可權」）：https://discfan.net/upload.php |
+| march | error | — | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://duckboobee.org/upload.php |
+| tccf | error | — | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://et8.org/upload.php |
+| ggpt | error | — | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://www.gamegamept.com/upload.php |
+| hdarea | error | — | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://hdarea.club/upload.php |
+| hitpt | error | — | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://www.hitpt.com/upload.php |
+| njtupt | error | — | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://njtupt.top/upload.php |
+| okpt | error | — | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://www.okpt.net/upload.php |
+| btschool | error | — | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://pt.btschool.club/upload.php |
+| muxuege | block | 站点无预审 | 质量下拉有缺口：audiocodec_sel 未选 |
+| hdu | error | — | 目标站没有可解析的静态上传表单（JS/自定义上传界面，或 cookie 失效），v1 暂不支持：https://pt.upxin.net/upload.php |
+| ptskit | error | — | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://www.ptskit.org/upload.php |
+| ptt | error | — | 目标站没有可解析的静态上传表单（JS/自定义上传界面，或 cookie 失效），v1 暂不支持：https://www.pttime.org/upload.ph |
+| ultrahd | error | — | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://ultrahd.net/upload.php |
+| wtsakura | error | — | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://wintersakura.net/upload.php |
+| zmpt | error | — | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://zmpt.cc/upload.php |
+| dstudio | error | — | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://dstudio.me/upload.php |
+| kamept | error | — | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://kamept.com/upload.php |
+| playlet | error | — | 抓目标站上传表单失败: 请求没通：https://playlet.cc/upload.php: error sending request for url (h |
+| daxiangjiao | error | — | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://pt.daxiangjiao.org/upload.php |
+| keepfrds | error | — | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://pt.keepfrds.com/upload.php |
+| mypt | error | — | 目标站没有可解析的静态上传表单（JS/自定义上传界面，或 cookie 失效），v1 暂不支持：https://pt.mypt.cc/upload.php |
+| rousi | error | — | 目标站没有可解析的静态上传表单（JS/自定义上传界面，或 cookie 失效），v1 暂不支持：https://rousi.pro/upload.php |
+| siqi | error | — | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://si-qi.xyz/upload.php |
+| musopia | block | 站点无预审 | 质量下拉有缺口：medium_sel 未选 |
+| tokyo | error | — | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://www.tokyo-manga.top/upload.php |
+| xingwan | error | — | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://xingwan.cc/upload.php |
+| hdcity | block | 站点无预审 | 质量下拉有缺口：简介为空；MediaInfo 无处可落 |
 通过门禁 ≠ 可立即发种：`assist.publishEnabled` 默认 false，只有用户显式开启、站点在
 `autoReseedSites` 白名单内、且日限额未用完时才会真实上传。
