@@ -3,7 +3,9 @@
 //! 用途：源站详情页没有 MediaInfo 块时，从本地文件生成标准文本报告——luckpt 等站发种
 //! 要求 MediaInfo 非空，缺了官方预审会直接报错（实测 -9 分）。
 
-use anyhow::{bail, Context, Result};
+#[cfg(windows)]
+use anyhow::Context;
+use anyhow::{bail, Result};
 use std::path::{Path, PathBuf};
 
 /// 视频扩展名（挑代表文件用）
