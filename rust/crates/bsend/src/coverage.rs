@@ -393,7 +393,7 @@ pub fn run_round(
         .parent()
         .map(|p| p.to_path_buf())
         .unwrap_or_default();
-    let pieces = Arc::new(Mutex::new(PiecesApi::load(&pieces_dir)));
+    let pieces = Arc::new(Mutex::new(PiecesApi::load(&pieces_dir, &cfg.cookies)));
     let mut handles = Vec::new();
     for _ in 0..n_workers {
         let (pool, throttle, fp_cache, source_cache, qb) = (
@@ -554,10 +554,84 @@ fn worker_loop(
                 &dl,
                 dry_run,
                 &hits,
+                &pieces,
             );
             let _ = tx.send(ev);
         }
     }
+}
+
+/// 源站定位的 pieces-hash 快通道：本地代表种子 → pieces hash → 源站 /api/pieces-hash
+/// → torrent id → 详情页 → .torrent。只有 SameHash/SameFiles 才算同源。
+/// 命中后调用方直接出草稿；未命中返回 None，由名字检索继续兜底。
+#[allow(clippy::too_many_arguments)]
+fn resolve_source_by_pieces(
+    item: &WorkItem,
+    qb: &QBittorrent,
+    adapters: &[Arc<NexusPhp>],
+    pieces: &Arc<Mutex<PiecesApi>>,
+    fp: &TorrentFingerprint,
+    throttle: &SiteThrottle,
+    target_site: &str,
+) -> Option<(String, String, String)> {
+    let ph = {
+        let mut api = pieces.lock().unwrap();
+        api.pieces_hash_for(qb, &item.rep_hash)?
+    };
+    for a in adapters {
+        if a.site_id == target_site {
+            continue;
+        }
+        // 能力表明确不支持的站不浪费请求；Unknown 允许试一次（站点会回 404/405）
+        if let Some(api) = pieces.try_lock().ok().as_ref() {
+            if api.capability(&a.site_id) == Capability::Unsupported {
+                continue;
+            }
+        }
+        if !throttle.acquire(&a.site_id, BudgetKind::Source) {
+            continue;
+        }
+        let hit = {
+            let mut api = pieces.lock().unwrap();
+            let mut out = api.query(&a.site_id, a.base.as_str(), std::slice::from_ref(&ph));
+            if out == QueryOutcome::Auth && api.harvest_passkeys(qb) > 0 {
+                out = api.query(&a.site_id, a.base.as_str(), std::slice::from_ref(&ph));
+            }
+            match out {
+                QueryOutcome::Hit(list) => {
+                    list.into_iter().find(|(h, _)| h == &ph).map(|(_, id)| id)
+                }
+                _ => None,
+            }
+        };
+        let Some(id) = hit else { continue };
+        let detail = format!(
+            "{}/details.php?id={id}",
+            a.base.as_str().trim_end_matches('/')
+        );
+        if !throttle.acquire(&a.site_id, BudgetKind::Source) {
+            continue;
+        }
+        let page = match a.fetch_torrent_page(&detail) {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+        if !throttle.acquire(&a.site_id, BudgetKind::Source) {
+            continue;
+        }
+        let data = match a.download_torrent(&page, &detail) {
+            Ok(d) => d,
+            Err(_) => continue,
+        };
+        let (level, note) = matcher::judge(&item.hashes, fp, &data, &page.name);
+        match level {
+            JudgeLevel::SameHash { .. } | JudgeLevel::SameFiles => {
+                return Some((a.site_id.clone(), detail, note));
+            }
+            _ => continue,
+        }
+    }
+    None
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -633,6 +707,7 @@ fn process_item(
     dl: &DownloaderSettings,
     dry_run: bool,
     pieces_hits: &std::collections::HashMap<String, (String, String)>,
+    pieces: &Arc<Mutex<PiecesApi>>,
 ) -> Event {
     let done = |status: CoverageStatus, note: String| Event::ItemDone {
         site_id: site_id.to_string(),
@@ -722,6 +797,8 @@ fn process_item(
             item,
             site_id,
             &fp,
+            qb,
+            pieces,
             throttle,
             source_cache,
             adapters,
@@ -969,6 +1046,8 @@ fn reseed_arm(
     item: &WorkItem,
     site_id: &str,
     fp: &TorrentFingerprint,
+    qb: &QBittorrent,
+    pieces: &Arc<Mutex<PiecesApi>>,
     throttle: &SiteThrottle,
     source_cache: &SourceCache,
     adapters: &[Arc<NexusPhp>],
@@ -1044,7 +1123,27 @@ fn reseed_arm(
             }
         }
     }
-    // 走源种定位：源站名单 = 全部参与站点（已在做种的源站优先，resolver 内排序）。
+    // pieces-hash 精确反查优先：本地内容字节命中源站即同源，不受片名改写影响。
+    if let Some((src_site, detail_url, note)) =
+        resolve_source_by_pieces(item, qb, adapters, pieces, fp, throttle, site_id)
+    {
+        let rec = SourceRecord {
+            site_id: src_site.clone(),
+            detail_url: detail_url.clone(),
+            resolved_at: now(),
+            miss_at: None,
+        };
+        source_cache
+            .lock()
+            .unwrap()
+            .insert(item.key.clone(), rec.clone());
+        return mk_draft_event(
+            CoverageStatus::ReseedDraft,
+            format!("站内没有；源种定位成功（{src_site}：pieces-hash 精确命中 {note}），转种草稿待人工确认"),
+            rec,
+        );
+    }
+    // 走源种定位：名字检索兜底。
     // 刚检索过的目标站要剔掉——同一套查询词再问一遍「源站」纯属白花请求
     // （站内没有就是没有，换目标站才是新信息）。实机一轮里这一条能省掉一半请求。
     let sites: Vec<SourceSite<'_>> = adapters

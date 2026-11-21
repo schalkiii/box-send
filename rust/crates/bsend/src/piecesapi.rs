@@ -73,17 +73,38 @@ struct CacheFile {
 pub struct PiecesApi {
     path: PathBuf,
     cache: CacheFile,
+    /// host（小写）→ Cookie 头；WAF 需要登录 cookie 才放行 /api/pieces-hash
+    cookie_headers: std::collections::HashMap<String, String>,
 }
 
 impl PiecesApi {
     /// 从 dataDir 载入（不存在则空表）
-    pub fn load(data_dir: &Path) -> Self {
+    pub fn load(
+        data_dir: &Path,
+        cookies: &std::collections::HashMap<String, Vec<crate::config::CookieEntry>>,
+    ) -> Self {
         let path = data_dir.join("pieces-cache.json");
         let cache = std::fs::read_to_string(&path)
             .ok()
             .and_then(|s| serde_json::from_str::<CacheFile>(&s).ok())
             .unwrap_or_default();
-        Self { path, cache }
+        let mut cookie_headers = std::collections::HashMap::new();
+        for (host, list) in cookies {
+            let header = list
+                .iter()
+                .filter(|c| !c.value.is_empty() || c.expiration_date.is_none())
+                .map(|c| format!("{}={}", c.name, c.value))
+                .collect::<Vec<_>>()
+                .join("; ");
+            if !header.is_empty() {
+                cookie_headers.insert(host.to_lowercase(), header);
+            }
+        }
+        Self {
+            path,
+            cache,
+            cookie_headers,
+        }
     }
 
     /// 落盘（只读场景可跳过；失败不致命）
@@ -181,15 +202,17 @@ impl PiecesApi {
             Ok(b) => b,
             Err(e) => return QueryOutcome::Error(format!("请求体序列化失败：{e}")),
         };
-        let resp = client
+        let mut req = client
             .post(&url)
             .header("Accept", "application/json")
             .header("Content-Type", "application/json")
             .header("X-Requested-With", "XMLHttpRequest")
             .header("Origin", base.trim_end_matches('/'))
-            .header("Referer", format!("{}/", base.trim_end_matches('/')))
-            .body(body)
-            .send();
+            .header("Referer", format!("{}/", base.trim_end_matches('/')));
+        if let Some(ck) = self.cookie_headers.get(&host) {
+            req = req.header("Cookie", ck);
+        }
+        let resp = req.body(body).send();
         let resp = match resp {
             Ok(r) => r,
             Err(e) => {
@@ -370,12 +393,12 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         {
-            let mut api = PiecesApi::load(&dir);
+            let mut api = PiecesApi::load(&dir, &std::collections::HashMap::new());
             api.set_passkey("PT.Example.test", "k");
             api.mark("pter", Capability::Supported);
             api.save().unwrap();
         }
-        let api = PiecesApi::load(&dir);
+        let api = PiecesApi::load(&dir, &std::collections::HashMap::new());
         assert_eq!(api.passkey("pt.example.test"), Some("k"));
         assert_eq!(api.capability("pter"), Capability::Supported);
         assert_eq!(api.capability("nope"), Capability::Unknown);
@@ -390,11 +413,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         {
-            let mut api = PiecesApi::load(&dir);
+            let mut api = PiecesApi::load(&dir, &std::collections::HashMap::new());
             api.set_passkey("pt.luckpt.de", "k1");
             api.save().unwrap();
         }
-        let api = PiecesApi::load(&dir);
+        let api = PiecesApi::load(&dir, &std::collections::HashMap::new());
         assert_eq!(api.passkey("luckpt.de"), Some("k1"));
         assert_eq!(api.passkey("www.luckpt.de"), Some("k1"));
         assert_eq!(api.passkey("other.test"), None);
@@ -411,7 +434,7 @@ mod tests {
 
     #[test]
     fn query_without_passkey_reports_auth() {
-        let mut api = PiecesApi::load(&std::env::temp_dir());
+        let mut api = PiecesApi::load(&std::env::temp_dir(), &std::collections::HashMap::new());
         let out = api.query("x", "https://pt.example.test/", &["a".repeat(40)]);
         assert_eq!(out, QueryOutcome::Auth);
     }
