@@ -138,6 +138,27 @@ impl ReleaseInfo {
     }
 
     /// MediaInfo 里是否有中文音轨（Audio 段的 Language=Chinese 或 国语/普通话/国配/Mandarin）
+    /// 英语音轨：MediaInfo Audio Language=English / Title 带 English/英语
+    pub fn has_english_audio(&self) -> bool {
+        let mut section = String::new();
+        for line in self.mediainfo.lines() {
+            let l = line.trim();
+            let low = l.to_ascii_lowercase();
+            if ["audio", "video", "text", "general", "menu"]
+                .iter()
+                .any(|p| low.starts_with(p))
+            {
+                section = low.split('#').next().unwrap_or("").to_string();
+            }
+            if section.starts_with("audio")
+                && (low.contains("english") || l.contains("英语") || l.contains("英語"))
+            {
+                return true;
+            }
+        }
+        false
+    }
+
     /// 粤语音轨：MediaInfo 的 Audio Title/Language 出现 Cantonese/粤语
     pub fn has_cantonese_audio(&self) -> bool {
         let hay = format!("{} {} {}", self.name, self.subtitle, self.descr).to_lowercase();
@@ -277,6 +298,9 @@ fn wanted_tags(info: &ReleaseInfo) -> Vec<&'static str> {
     }
     if info.has_cantonese_audio() {
         out.push("粤语");
+    }
+    if info.has_english_audio() && !info.has_chinese_audio() && !info.has_cantonese_audio() {
+        out.push("英语");
     }
     out
 }
@@ -882,6 +906,7 @@ const AUDIO_KEYWORDS: &[&str] = &[
     "DDP",
     "EAC3",
     "Atmos",
+    "AC-3",
     "FLAC",
     "LPCM",
     "ALAC",
@@ -1069,7 +1094,7 @@ fn token_aliases(token: &str) -> &'static [&'static str] {
         "480p" => &["480p", "480"],
         // aling/ptcafe 实测媒介选项写「TV」，繁体站写「電視」
         "hdtv" => &["TV", "TVRip", "HDTVRip", "Television", "电视", "電視"],
-        "eac3" | "ddp" | "dd+" => &["DD+", "E-AC-3", "EAC3", "DDP"],
+        "eac3" | "ddp" | "dd+" => &["DD+", "E-AC-3", "EAC3", "DDP", "DDP/E-AC3"],
         // AC3 不能靠子串：会同时命中 DD/AC3 与 DDP/E-AC3
         "ac3" => &["DD/AC3", "DD/AC-3", "AC3"],
         "dtshdma" => &["DTS-HD MA", "DTS-HD", "DTS"],
@@ -1378,6 +1403,7 @@ fn js_driven_form(form: &str) -> bool {
 fn fill_selects(fields: &mut Vec<Field>, page: &str, info: &ReleaseInfo) -> Vec<String> {
     let mut notes = Vec::new();
     let hay = format!("{} {}", info.name, info.subtitle);
+    let audio_hay = format!("{} {}", hay, info.mediainfo);
     // source_sel 在不同站分别是来源媒介或地区，域无关的下拉自动跳过不误报
     let cats: &[(&str, &[&str])] = &[
         ("source_sel", MEDIUM_KEYWORDS),
@@ -1398,7 +1424,11 @@ fn fill_selects(fields: &mut Vec<Field>, page: &str, info: &ReleaseInfo) -> Vec<
         if names.is_empty() {
             continue;
         }
-        let tokens = find_keywords(&hay, kws);
+        let tokens = if *prefix == "audiocodec_sel" {
+            find_keywords(&audio_hay, kws)
+        } else {
+            find_keywords(&hay, kws)
+        };
         let mut relevant_seen = false;
         let mut filled_seen = false;
         let mut ambiguous_tok: Option<String> = None;
