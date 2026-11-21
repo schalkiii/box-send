@@ -302,6 +302,10 @@ fn wanted_tags(info: &ReleaseInfo) -> Vec<&'static str> {
     if info.has_english_audio() && !info.has_chinese_audio() && !info.has_cantonese_audio() {
         out.push("英语");
     }
+    let hdr_hay = format!("{} {} {}", info.name, info.subtitle, info.mediainfo).to_lowercase();
+    if hdr_hay.contains("hdr10") || hdr_hay.contains("hdr 10") {
+        out.push("HDR10");
+    }
     out
 }
 
@@ -1424,10 +1428,13 @@ fn fill_selects(fields: &mut Vec<Field>, page: &str, info: &ReleaseInfo) -> Vec<
         if names.is_empty() {
             continue;
         }
-        let tokens = if *prefix == "audiocodec_sel" {
+        let title_tokens = find_keywords(&hay, kws);
+        // 音频：标题里已有码（DTS/DD+/AAC…）就以标题为准；不要再把 MediaInfo
+        // 的多音轨混进来，否则会因多个候选而留空（国际市场/玻璃樽实测）。
+        let tokens = if *prefix == "audiocodec_sel" && title_tokens.is_empty() {
             find_keywords(&audio_hay, kws)
         } else {
-            find_keywords(&hay, kws)
+            title_tokens
         };
         let mut relevant_seen = false;
         let mut filled_seen = false;
@@ -4194,6 +4201,18 @@ Language : English"
         };
         let (fs, _p, notes) = build_upload_fields(&info, form, &[]);
         assert_eq!(field_lookup(&fs, "medium_sel"), Some("2"), "{notes:?}");
+    }
+
+    #[test]
+    fn hdr10_tag_detected_from_mediainfo() {
+        let info = ReleaseInfo {
+            name: "Movie.2014.1080p.BluRay.x265-GRP".into(),
+            mediainfo: "Video
+HDR format : SMPTE ST 2086, HDR10 compatible"
+                .into(),
+            ..Default::default()
+        };
+        assert!(wanted_tags(&info).contains(&"HDR10"));
     }
 
     #[test]
