@@ -14,7 +14,8 @@ pub fn normalized_path(path: &str, root: &str) -> String {
     if parts.is_empty() {
         parts.push(unified);
     }
-    if parts.len() > 1 && parts[0] == root {
+    // 根名比较必须大小写不敏感：归一化结果后面会小写，先比较会把「Root」与「root」剥不掉根
+    if parts.len() > 1 && parts[0].eq_ignore_ascii_case(root) {
         parts.remove(0);
     }
     parts.retain(|p| p != ".");
@@ -75,11 +76,19 @@ pub fn common_root(files: &[(String, i64)]) -> String {
     let Some(first) = files.first() else {
         return String::new();
     };
-    let Some(head) = first.0.split('/').next() else {
+    // 反斜杠路径也要认（Windows 下载器/手工数据可能给 '\'）
+    let first = first.0.replace('\\', "/");
+    let Some(head) = first.split('/').next() else {
         return String::new();
     };
+    if head.is_empty() {
+        return String::new();
+    }
     let pre = format!("{}/", head);
-    if files.iter().all(|(p, _)| p.starts_with(&pre)) {
+    let all_under = files
+        .iter()
+        .all(|(p, _)| p.replace('\\', "/").starts_with(&pre));
+    if all_under {
         head.to_string()
     } else {
         String::new()
@@ -118,6 +127,9 @@ mod tests {
         );
         // 单段路径不去首段（单文件种子的路径就是文件名本身）
         assert_eq!(normalized_path("Root", "Root"), "root");
+        // 根名大小写差异（qB 与种子声明不一致）也要剥掉
+        assert_eq!(normalized_path("Root/a.mkv", "root"), "a.mkv");
+        assert_eq!(normalized_path("root/a.mkv", "Root"), "a.mkv");
     }
 
     #[test]
@@ -149,5 +161,10 @@ mod tests {
         assert_eq!(common_root(&[("R/a".into(), 1), ("R/b".into(), 1)]), "R");
         assert_eq!(common_root(&[("a".into(), 1), ("b".into(), 1)]), "");
         assert_eq!(common_root(&[]), "");
+        // 反斜杠路径同样能反推共同根
+        assert_eq!(
+            common_root(&[("R\\a.mkv".into(), 1), ("R\\b.mkv".into(), 1)]),
+            "R"
+        );
     }
 }

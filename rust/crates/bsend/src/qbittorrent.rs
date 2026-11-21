@@ -32,11 +32,13 @@ pub struct QBittorrent {
     files_param: Mutex<Option<&'static str>>,
 }
 
-/// 推种结果：`id` 是 v1 info hash（.torrent 解不出时为空），`note` 给人看（已存在/补挂/限速未生效…）
+/// 推种结果：`id` 是 v1 info hash（.torrent 解不出时为空），`note` 给人看（已存在/补挂/限速未生效…），
+/// `already` 区分「下载器里早有这个种」（409/补挂）与「本次新加」——新加即使带 note 也要走校验流程
 #[derive(Debug, Clone)]
 pub struct AddTorrentResult {
     pub id: String,
     pub note: String,
+    pub already: bool,
 }
 
 /// `torrents/add` 的表单字段；单独抽出以便单测 qB 5.3 的 seedMode 语义。
@@ -301,24 +303,9 @@ impl QBittorrent {
                     continue;
                 };
                 // 多 hash 查询时 qB 回 [[file,…],…]；单 hash 直接回 [file,…]
-                let list: Vec<Value> = if let Some(arr) = obj.as_array() {
-                    arr.clone()
-                } else if let Some(outer) = obj.as_array().and_then(|a| a.first().cloned()) {
-                    match outer.as_array() {
-                        Some(inner) => inner.clone(),
-                        None => continue,
-                    }
-                } else {
+                let Some(files) = parse_files_value(&obj) else {
                     continue;
                 };
-                let files: Vec<(String, i64)> = list
-                    .into_iter()
-                    .filter_map(|f| {
-                        let path = f.get("name")?.as_str()?.to_string();
-                        let size = f.get("size").and_then(|v| v.as_i64()).unwrap_or(0);
-                        Some((path, size))
-                    })
-                    .collect();
                 if !files.is_empty() {
                     *self.files_param.lock().unwrap() = Some(param);
                     return Ok(files);
@@ -404,6 +391,10 @@ impl QBittorrent {
         let list: Value = serde_json::from_str(&text).context("种子清单不是 JSON")?;
         let mut out = Vec::new();
         if let Some(arr) = list.as_array() {
+            // 触顶即告警：静默截断会让 passkey/tracker 集不全，辅种源定位悄悄缺站
+            if arr.len() >= 50_000 {
+                eprintln!("警告：torrents/info 达到 50000 条上限，tracker 采集可能不完整");
+            }
             for t in arr {
                 if let Some(u) = t.get("tracker").and_then(|v| v.as_str()) {
                     if !u.is_empty() {
@@ -584,24 +575,28 @@ impl QBittorrent {
                 return AddTorrentResult {
                     id: String::new(),
                     note: "已存在于下载器".into(),
+                    already: true,
                 };
             }
             let note = self.attach_site_tracker(hash, torrent_data);
             return AddTorrentResult {
                 id: hash.to_string(),
                 note,
+                already: true,
             };
         }
         if hash.is_empty() {
             return AddTorrentResult {
                 id: String::new(),
                 note: String::new(),
+                already: false,
             };
         }
         let Some(t) = self.torrent_info(hash) else {
             return AddTorrentResult {
                 id: hash.to_string(),
                 note: String::new(),
+                already: false,
             };
         };
         let mut notes: Vec<String> = Vec::new();
@@ -624,6 +619,7 @@ impl QBittorrent {
         AddTorrentResult {
             id: hash.to_string(),
             note: notes.join("；"),
+            already: false,
         }
     }
 
@@ -829,6 +825,32 @@ pub fn parse_torrent(t: &Value) -> Option<LocalTorrent> {
         tracker_hosts_of(t),
         t.get("added_on").and_then(|v| v.as_i64()).unwrap_or(0),
     ))
+}
+
+/// 解析 `/torrents/files` 回包：单 hash 是 `[file,…]`，多 hash 是 `[[file,…],…]`。
+/// 两种形态都要认，嵌套形态逐层摊平。
+fn parse_files_value(obj: &Value) -> Option<Vec<(String, i64)>> {
+    let arr = obj.as_array()?;
+    let nested = arr.first().is_some_and(|v| v.is_array());
+    let mut out = Vec::new();
+    let mut push = |f: &Value| {
+        if let Some(path) = f.get("name").and_then(|v| v.as_str()) {
+            let size = f.get("size").and_then(|v| v.as_i64()).unwrap_or(0);
+            out.push((path.to_string(), size));
+        }
+    };
+    if nested {
+        for inner in arr.iter().filter_map(|v| v.as_array()) {
+            for f in inner {
+                push(f);
+            }
+        }
+    } else {
+        for f in arr {
+            push(f);
+        }
+    }
+    Some(out)
 }
 
 #[cfg(test)]

@@ -3,8 +3,10 @@
 //! 与 Swift 版 `BoxSendKit` 的关系：判定口径（`matcher`）、bencode 语义（`bencode`）、
 //! qB 字段兼容（`qbittorrent`）、NexusPHP 检索启发式（`sites::nexusphp`）全部逐函数对齐；
 //! 编排层（`coverage`）按 `COVERAGE-PLAN.md` 重写：内容级索引、站点 worker 并发、
-//! 转种只出草稿。设计文档见仓库根目录 `COVERAGE-PLAN.md` 与 `RUST-ANALYSIS.md`。
+//! 辅种真推下载器、转种出草稿并经 `autopost` 门禁发布。
+//! 设计文档见仓库根目录 `COVERAGE-PLAN.md` 与 `RUST-ANALYSIS.md`。
 
+pub mod autopost;
 pub mod bencode;
 pub mod config;
 pub mod cookiecloud;
@@ -38,3 +40,16 @@ pub use report::CoverageReport;
 pub use resolver::{resolve_source, ResolveOutcome, SiteClient, SourceSite};
 pub use sites::{builtin_sites, url_host, Framework, SiteDef};
 pub use throttle::{BudgetKind, SiteThrottle};
+
+/// 原子写：先写 `.tmp` 再 rename（进程中断/磁盘满时旧文件保持完好）。
+/// 索引/配置已有各自的实现；pieces-cache、formcheck/gatecheck 等台账统一走这里。
+pub fn atomic_write(path: &std::path::Path, body: &[u8]) -> anyhow::Result<()> {
+    use anyhow::Context as _;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).ok();
+    }
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, body).with_context(|| format!("写不进 {}", tmp.display()))?;
+    std::fs::rename(&tmp, path).with_context(|| format!("落盘 {} 失败", path.display()))?;
+    Ok(())
+}

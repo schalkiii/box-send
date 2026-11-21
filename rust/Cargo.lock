@@ -756,6 +756,7 @@ dependencies = [
  "anyhow",
  "bsend",
  "gpui",
+ "serde_json",
 ]
 
 [[package]]

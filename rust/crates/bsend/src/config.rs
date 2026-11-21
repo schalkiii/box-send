@@ -306,9 +306,10 @@ impl Config {
             // 负值钳成 0：负预算会让 acquire 永远失败、整轮静默空转
             search_budget: (v_i64(&assist, "roundBudget", d.search_budget as i64) as i32).max(0),
             source_budget: (v_i64(&assist, "roundBudget", d.source_budget as i64) as i32).max(0),
-            upload_budget: d.upload_budget,
+            upload_budget: (v_i64(&assist, "uploadBudget", d.upload_budget as i64).max(0) as i32),
             miss_ttl_days: v_i64(&assist, "missTTLDays", d.miss_ttl_days),
-            source_miss_ttl_days: d.source_miss_ttl_days,
+            source_miss_ttl_days: v_i64(&assist, "sourceMissTTLDays", d.source_miss_ttl_days)
+                .max(0),
             auto_accept_same_files: v_bool(
                 &assist,
                 "autoAcceptSameFiles",
@@ -318,8 +319,11 @@ impl Config {
             min_size_gb: v_f64(&assist, "minSizeGB", d.min_size_gb),
             max_size_gb: v_f64(&assist, "maxSizeGB", d.max_size_gb),
             categories: v_str_list(&assist, "categories"),
-            verify_wait_sec: v_i64(&assist, "verifyWaitSec", d.verify_wait_sec as i64) as u64,
-            verify_poll_sec: v_i64(&assist, "verifyPollSec", d.verify_poll_sec as i64) as u64,
+            // 负值钳成 0：as u64 回绕成巨值会让 push_tail 的轮询 sleep 数年，整轮无声挂死
+            verify_wait_sec: v_i64(&assist, "verifyWaitSec", d.verify_wait_sec as i64).max(0)
+                as u64,
+            verify_poll_sec: v_i64(&assist, "verifyPollSec", d.verify_poll_sec as i64).max(0)
+                as u64,
             relaxed_retry_search: v_bool(&assist, "relaxedRetrySearch", d.relaxed_retry_search),
             paused_sites: v_str_list(&assist, "pausedSites"),
             reseed_paused_sites: v_str_list(&assist, "reseedPausedSites"),
@@ -350,7 +354,7 @@ impl Config {
             reseed_publish_enabled: v_bool(&assist, "publishEnabled", d.reseed_publish_enabled),
             skip_post_check: v_bool(&assist, "skipPostCheck", d.skip_post_check),
             skip_hash_check: v_bool(&assist, "skipHashCheck", d.skip_hash_check),
-            archive_days: d.archive_days,
+            archive_days: v_i64(&assist, "archiveDays", d.archive_days).max(0),
             max_concurrent_sites: (v_i64(
                 &assist,
                 "maxConcurrentSites",
@@ -501,9 +505,13 @@ impl Config {
     }
 
     /// 站点 host 的 Cookie 头（Swift CookieStore.cookieHeader 语义：host 等于 jar 键，
-    /// 或 host 是 jar 键的子域；空值 cookie 只在无过期时间时携带）
+    /// 或 host 是 jar 键的子域；空值 cookie 只在无过期时间时携带；已过期的一律不发）
     pub fn cookie_header_for(&self, host: &str) -> Option<String> {
         let host = host.to_lowercase();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs_f64())
+            .unwrap_or(0.0);
         let mut pairs: Vec<String> = Vec::new();
         for (key, list) in &self.cookies {
             let key = key.to_lowercase();
@@ -511,6 +519,10 @@ impl Config {
                 continue;
             }
             for c in list {
+                // 过期 cookie 照发只会撞登录墙，白耗请求且账面原因误导
+                if c.expiration_date.is_some_and(|e| e > 0.0 && e < now) {
+                    continue;
+                }
                 if !c.value.is_empty() || c.expiration_date.is_none() {
                     pairs.push(format!("{}={}", c.name, c.value));
                 }
@@ -823,5 +835,24 @@ mod tests {
         let cfg = Config::load(&p).unwrap();
         assert_eq!(cfg.coverage.search_budget, 0);
         assert_eq!(cfg.coverage.source_budget, 0);
+    }
+
+    #[test]
+    fn negative_verify_timings_are_clamped() {
+        // verifyWaitSec/verifyPollSec 负值不能 as u64 回绕成巨值（轮询 sleep 数年）
+        let p = write_temp_isolated(
+            "negverify",
+            "boxsend.json",
+            r#"{
+          "sourceSites": [
+            {"id": "nx", "name": "正常", "url": "https://nx.example/", "framework": "NexusPHP", "enabled": true}
+          ],
+          "downloader": {"url": "http://x"},
+          "assist": {"verifyWaitSec": -10, "verifyPollSec": -3}
+        }"#,
+        );
+        let cfg = Config::load(&p).unwrap();
+        assert_eq!(cfg.coverage.verify_wait_sec, 0);
+        assert_eq!(cfg.coverage.verify_poll_sec, 0);
     }
 }

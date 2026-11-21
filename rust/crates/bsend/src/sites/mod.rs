@@ -1156,6 +1156,52 @@ pub fn site_def_by_host(host: &str) -> Option<&'static SiteDef> {
         .find(|s| url_host(s.url).as_deref() == Some(h.as_str()))
 }
 
+/// 按配置构造站点适配器（CLI 与 GUI 共用一份实现，防止「缺 cookie 警告」两边漂移）。
+/// `filter` 非空时只构造这些站点 id；缺 cookie 的站通过回调点名（CLI 打 stderr、
+/// GUI 进日志面板），请求照发——站点侧会给出 failed，账面原因才不会丢。
+pub fn build_adapters(
+    cfg: &crate::config::Config,
+    filter: Option<&[String]>,
+    mut on_missing_cookie: impl FnMut(&[String]),
+) -> anyhow::Result<Vec<std::sync::Arc<nexusphp::NexusPhp>>> {
+    use anyhow::Context as _;
+    let allow: Option<std::collections::HashSet<&str>> =
+        filter.map(|v| v.iter().map(|s| s.as_str()).collect());
+    let mut out = Vec::new();
+    let mut missing_cookie: Vec<String> = Vec::new();
+    for s in &cfg.sites {
+        if let Some(a) = &allow {
+            if !a.contains(s.id.as_str()) {
+                continue;
+            }
+        }
+        let cookie = cfg.cookie_header_for(s.primary_host());
+        if cookie.is_none() {
+            missing_cookie.push(s.id.clone());
+        }
+        let mut adapter = nexusphp::NexusPhp::new(
+            &s.id,
+            &s.name,
+            &s.url,
+            s.search_url.as_deref(),
+            cookie.as_deref(),
+        )
+        .with_context(|| format!("站点配置不合法：{}", s.id))?;
+        adapter.user_agent = cfg.user_agent.clone();
+        adapter = adapter.with_announce_hosts(s.announce_hosts.clone());
+        out.push(std::sync::Arc::new(adapter));
+    }
+    if out.is_empty() {
+        anyhow::bail!(
+            "没有可参与的站点（检查 boxsend.json sourceSites 的 enabled/assist.siteIDs/pausedSites）"
+        );
+    }
+    if !missing_cookie.is_empty() {
+        on_missing_cookie(&missing_cookie);
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

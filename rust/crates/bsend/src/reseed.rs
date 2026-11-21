@@ -29,6 +29,7 @@ use crate::qbittorrent::QBittorrent;
 use crate::sites::nexusphp::{
     decode_entities, decode_entities_once, resolve_url, strip_tags, NexusPhp, TorrentPage,
 };
+use crate::throttle::{BudgetKind, SiteThrottle};
 
 /// 从源站详情页解析出的发布要素（Swift `ReleaseInfo` 的通用子集）
 #[derive(Debug, Clone, Default)]
@@ -3424,9 +3425,19 @@ pub fn run_reseed(
     req: &ReseedRequest,
     index: &mut ContentIndex,
     log: &mut dyn FnMut(&str),
+    throttle: Option<&SiteThrottle>,
 ) -> Result<String> {
     // 真实发种总闸：缺省关闭，任何调用方（CLI --yes / autopost / GUI）都过这里。
     crate::config::ensure_publish_enabled(cfg)?;
+    // 调用方传共享节流（autopost 全局预算）就用它；单发一条时本地建一份
+    let owned_throttle;
+    let throttle = match throttle {
+        Some(t) => t,
+        None => {
+            owned_throttle = SiteThrottle::from_coverage(&cfg.coverage);
+            &owned_throttle
+        }
+    };
     let rel = prepare_released(cfg, req, log)?;
     if !rel.preflight.ok() {
         for e in &rel.preflight.errors {
@@ -3445,7 +3456,7 @@ pub fn run_reseed(
             &rel.info.subtitle,
             false,
             imdb_for_search.unwrap_or(""),
-            &mut || true,
+            &mut || throttle.acquire(&rel.tgt.site_id, BudgetKind::Search),
         ) {
             Ok(crate::sites::nexusphp::SearchOutcome::Hit(hit)) => {
                 Some((hit.detail_url, hit.title))
@@ -3464,38 +3475,42 @@ pub fn run_reseed(
     };
     if let Some((detail_url, title)) = dup {
         // 判重命中不直接假定“其他版本”：下载目标种比较 pieces。
-        // 同分片 = 站点已有同一内容（标 Assisted）；不同分片 = 其他版本（ReviewPending）。
-        let same_content = rel
-            .tgt
-            .fetch_torrent_page(&detail_url)
-            .and_then(|page| rel.tgt.download_torrent(&page, &detail_url))
-            .ok()
-            .and_then(|data| {
-                index.contents.get(&req.content_key).and_then(|entry| {
-                    matching_local_member(qb, entry, &data)
-                        .ok()
-                        .flatten()
-                        .map(|_| true)
-                })
-            })
-            .unwrap_or(false);
-        let (status, why) = if same_content {
-            (
+        // 三态：同分片 = 站点已有同一内容（Assisted）；不同分片 = 其他版本（OtherVersion）；
+        // 复核失败（网络/下载/索引） = Unknown——不能谎称「pieces 不一致」，
+        // 落 Failed 带真实原因，TTL 后重查。
+        // 复核要下载目标种，也是目标站请求：按检索预算领号，耗尽就 fail-closed
+        if !throttle.acquire(&rel.tgt.site_id, BudgetKind::Search) {
+            bail!("目标站判重复核预算用完，拒绝在未确认重复情况的上传");
+        }
+        let verdict: Result<bool> = (|| {
+            let page = rel.tgt.fetch_torrent_page(&detail_url)?;
+            let data = rel.tgt.download_torrent(&page, &detail_url)?;
+            let entry = index
+                .contents
+                .get(&req.content_key)
+                .context("判重复核：索引缺内容条目")?;
+            Ok(matching_local_member(qb, entry, &data)?.is_some())
+        })();
+        let (status, why) = match verdict {
+            Ok(true) => (
                 CoverageStatus::Assisted,
                 format!("目标站已有同内容同分片「{title}」，未重复上传"),
-            )
-        } else {
-            (
+            ),
+            Ok(false) => (
                 CoverageStatus::OtherVersion,
                 format!("目标站已有其他版本「{title}」；pieces 不一致，未上传"),
-            )
+            ),
+            Err(e) => (
+                CoverageStatus::Failed,
+                format!("目标站已有条目「{title}」，但复核失败（{e:#}），不判其他版本"),
+            ),
         };
         log(&format!(
             "目标站判重命中：{title} → {detail_url}；{}",
-            if same_content {
-                "同分片，已覆盖"
-            } else {
-                "不同版本，跳过"
+            match status {
+                CoverageStatus::Assisted => "同分片，已覆盖",
+                CoverageStatus::OtherVersion => "不同版本，跳过",
+                _ => "复核失败，待重查",
             }
         ));
         write_cell(
@@ -3574,6 +3589,11 @@ pub fn run_reseed(
         req.target_site
     ));
     let filename = format!("{}.torrent", info.name);
+    // 上传是唯一有站点副作用的动作：全局上传预算耗尽必须 fail-closed，
+    // 否则多站并发/循环异常时没有任何总量闸（日限额只管单站）
+    if !throttle.acquire(&tgt.site_id, BudgetKind::Upload) {
+        bail!("上传预算用完（assist.roundBudget / uploadBudget），拒绝继续上传");
+    }
     let up = submit_upload(&tgt, &prep, &torrent_data, &filename)?;
     log(&format!("上传结果：{}", up.message));
 
@@ -3598,19 +3618,6 @@ pub fn run_reseed(
     let detail_url = match up.detail_url {
         Some(u) => u,
         None => {
-            if up.duplicate {
-                // 已存在但没解析出链接：记覆盖，不再推种
-                write_cell(
-                    index,
-                    &req.content_key,
-                    &req.target_site,
-                    CoverageStatus::Assisted,
-                    None,
-                    &format!("上传时站点提示已存在（{}）", up.message),
-                );
-                index.save()?;
-                return Ok(String::new());
-            }
             // 站点「发布成功」但回包没给链接：用 IMDb 区检索找回真实详情页。
             match target_has_imdb(&tgt, info.imdb.as_deref(), log) {
                 Ok(Some((u, title))) => {
@@ -3755,6 +3762,10 @@ pub fn run_reseed(
     )?;
     if !add.note.is_empty() {
         log(&format!("下载器回执：{}", add.note));
+    }
+    if add.already {
+        // 只有「下载器里早有这个种」才直接落终态；新加种的 note（限速未生效/
+        // missingFiles）必须继续走校验，否则种子永远暂停不作种
         write_cell(
             index,
             &req.content_key,

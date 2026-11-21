@@ -9,3 +9,4 @@ license.workspace = true
 bsend = { path = "../bsend" }
 gpui = "0.2.2"
 anyhow = "1"
+serde_json = "1"

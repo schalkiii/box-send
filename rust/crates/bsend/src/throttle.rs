@@ -126,6 +126,24 @@ impl SiteThrottle {
         self
     }
 
+    /// 按 assist 配置构造：辅种轮、转种上传、自动发种共用同一份节流/预算语义
+    pub fn from_coverage(cov: &crate::config::CoverageSettings) -> Self {
+        Self::with_rate_limit_floor(
+            Duration::from_secs_f64(cov.per_site_interval_sec.max(0.0)),
+            Duration::from_secs_f64(cov.jitter_sec.max(0.0)),
+            cov.search_budget,
+            cov.source_budget,
+            cov.upload_budget,
+            Duration::from_secs(cov.rate_limit_floor_sec),
+        )
+        .with_site_intervals(
+            cov.site_intervals
+                .iter()
+                .map(|(k, v)| (k.clone(), Duration::from_secs_f64((*v).max(0.0))))
+                .collect(),
+        )
+    }
+
     /// 预算余量（纯查询，报告用）
     pub fn budget_left(&self, kind: BudgetKind) -> i32 {
         let used = self.used.lock().unwrap().get(&kind).copied().unwrap_or(0);

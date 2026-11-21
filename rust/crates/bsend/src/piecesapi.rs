@@ -109,11 +109,9 @@ impl PiecesApi {
 
     /// 落盘（只读场景可跳过；失败不致命）
     pub fn save(&self) -> Result<()> {
-        if let Some(dir) = self.path.parent() {
-            std::fs::create_dir_all(dir).ok();
-        }
         let text = serde_json::to_string_pretty(&self.cache)?;
-        std::fs::write(&self.path, text).with_context(|| format!("写 {} 失败", self.path.display()))
+        // 原子写：进程中断/磁盘满时旧缓存保持完好（重建要数千次 qB 导出）
+        crate::atomic_write(&self.path, text.as_bytes())
     }
 
     /// 取站点 passkey：精确 host → 去掉 www./pt. 前缀 → 同根域（tracker 常是

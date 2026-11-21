@@ -1469,3 +1469,91 @@ fn e2e_pieces_hash_fast_path_skips_search() {
         "应走 pieces-hash 预扫"
     );
 }
+
+/// BUG-H1 回归：配了上传限速但 qB 未生效（mock 单查回 up_limit=-1）时 verify 带 note，
+/// 但这是「本次新加」不是「早已存在」——必须继续 start + 校验到 100%，
+/// 不能见 note 就静默落 Assisted 终态（否则种子永远暂停不作种）。
+#[test]
+fn e2e_assist_new_add_with_limit_note_still_verifies() {
+    let dir = temp_dir("assist-limit-note");
+    let t_same = Arc::new(torrent_bytes("Pack", FILES));
+    let hash = bencode::info_hash_v1(&t_same).unwrap();
+
+    let qb = qb_server(hash.clone(), Vec::new());
+    let pter = nexus_site_server("hit", t_same.clone());
+    let hdsky = nexus_site_server("miss", t_same.clone());
+    let mut cfg = test_config(qb.port, pter.port, hdsky.port, &dir);
+    cfg.downloader.default_up_limit = 1024;
+
+    let qb_client = Arc::new(QBittorrent::new(&cfg.downloader.url, "admin", "pass").unwrap());
+    let ads = adapters(&cfg);
+    let mut index = ContentIndex::load(&cfg.coverage_state_path());
+    run_round(
+        &cfg,
+        qb_client,
+        &ads,
+        &mut index,
+        |_| {},
+        RoundOptions {
+            persist: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    let entry = index.contents.values().next().unwrap();
+    let cell = &entry.coverage["pter"];
+    assert_eq!(cell.status, CoverageStatus::Assisted, "{cell:?}");
+    let note = cell.note.as_deref().unwrap_or("");
+    assert!(
+        note.contains("校验到 100%"),
+        "新加种必须走校验流程而不是 note 捷径：{note}"
+    );
+    assert!(
+        note.contains("限速未生效"),
+        "限速 note 应并入校验结论备注：{note}"
+    );
+}
+
+/// BUG-M4 回归：源种定位预算耗尽不等于「站内没有」——
+/// 不能落 Miss（那是查过才有的 7 天负缓存），本轮跳过、格子留白等下轮重试。
+#[test]
+fn e2e_source_budget_exhaustion_writes_no_cell() {
+    let dir = temp_dir("source-budget");
+    let t = Arc::new(torrent_bytes("Pack", FILES));
+    let hash = bencode::info_hash_v1(&t).unwrap();
+
+    let qb = qb_server(hash.clone(), Vec::new());
+    let pter = nexus_site_server("miss", t.clone());
+    let hdsky = nexus_site_server("miss", t.clone());
+    let mut cfg = test_config(qb.port, pter.port, hdsky.port, &dir);
+    cfg.coverage.search_budget = 40;
+    cfg.coverage.source_budget = 0;
+
+    let qb_client = Arc::new(QBittorrent::new(&cfg.downloader.url, "admin", "pass").unwrap());
+    let ads = adapters(&cfg);
+    let mut index = ContentIndex::load(&cfg.coverage_state_path());
+    let report = run_round(
+        &cfg,
+        qb_client,
+        &ads,
+        &mut index,
+        |_| {},
+        RoundOptions {
+            persist: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    let entry = index.contents.values().next().unwrap();
+    assert!(
+        entry.coverage.is_empty(),
+        "源种预算耗尽不落任何结论：{:?}",
+        entry.coverage
+    );
+    assert_eq!(
+        report.skipped_no_budget, 2,
+        "两个站都因预算耗尽跳过（不是预筛跳过）"
+    );
+}

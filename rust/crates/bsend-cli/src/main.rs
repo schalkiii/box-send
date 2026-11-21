@@ -11,7 +11,7 @@
 //! bsend status                   # 看索引现状
 //! ```
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -166,7 +166,14 @@ fn main() -> Result<()> {
     let mut cfg = Config::load(&cli.config)
         .with_context(|| format!("加载配置 {} 失败", cli.config.display()))?;
     if cli.cookiecloud {
-        apply_cookiecloud(&mut cfg)?;
+        // 无人值守时 CookieCloud 服务可能没起：降级用本地 cookies.json，不让整轮挂掉。
+        // 只打根因（不打含访问键的完整 URL）。
+        if let Err(e) = apply_cookiecloud(&mut cfg) {
+            eprintln!(
+                "警告：CookieCloud 拉取失败，改用本地 cookies.json（{}）",
+                e.root_cause()
+            );
+        }
     }
     match cli.cmd {
         Cmd::Scan => cmd_scan(&cfg),
@@ -208,41 +215,12 @@ fn connect_qb(cfg: &Config) -> Result<Arc<QBittorrent>> {
 }
 
 fn build_adapters(cfg: &Config, filter: &Option<Vec<String>>) -> Result<Vec<Arc<NexusPhp>>> {
-    let allow: Option<HashSet<String>> = filter.as_ref().map(|v| v.iter().cloned().collect());
-    let mut out = Vec::new();
-    let mut missing_cookie: Vec<String> = Vec::new();
-    for s in &cfg.sites {
-        if let Some(a) = &allow {
-            if !a.contains(&s.id) {
-                continue;
-            }
-        }
-        let cookie = cfg.cookie_header_for(s.primary_host());
-        if cookie.is_none() {
-            missing_cookie.push(s.id.clone());
-        }
-        let mut adapter = NexusPhp::new(
-            &s.id,
-            &s.name,
-            &s.url,
-            s.search_url.as_deref(),
-            cookie.as_deref(),
-        )
-        .with_context(|| format!("站点配置不合法：{}", s.id))?;
-        adapter.user_agent = cfg.user_agent.clone();
-        adapter = adapter.with_announce_hosts(s.announce_hosts.clone());
-        out.push(Arc::new(adapter));
-    }
-    if out.is_empty() {
-        anyhow::bail!("没有可参与的站点（检查 boxsend.json sourceSites 的 enabled/assist.siteIDs/pausedSites）");
-    }
-    if !missing_cookie.is_empty() {
+    bsend::sites::build_adapters(cfg, filter.as_deref(), |missing| {
         eprintln!(
             "注意：这些站没有 cookie，本轮到它们只会得到 failed：{}（可用 --cookiecloud 或 bsend cookies --from cookiecloud --write 补）",
-            missing_cookie.join("、")
+            missing.join("、")
         );
-    }
-    Ok(out)
+    })
 }
 
 fn cmd_scan(cfg: &Config) -> Result<()> {
@@ -530,7 +508,7 @@ fn cmd_reseed(cfg: &Config, draft: Option<usize>, yes: bool) -> Result<()> {
         return Ok(());
     }
     let qb = connect_qb(cfg)?;
-    let url = bsend::reseed::run_reseed(cfg, &qb, &req, &mut index, &mut log)?;
+    let url = bsend::reseed::run_reseed(cfg, &qb, &req, &mut index, &mut log, None)?;
     if url.is_empty() {
         println!("转种结束（站点已有该种子，格子记为已覆盖）");
     } else {
@@ -642,21 +620,13 @@ fn cmd_formcheck(cfg: &Config, sites: Option<Vec<String>>) -> Result<()> {
         "sample": info.name,
         "results": merged,
     });
-    match std::fs::write(&path, serde_json::to_string_pretty(&payload)?) {
+    let body = serde_json::to_string_pretty(&payload)?;
+    match bsend::atomic_write(&path, body.as_bytes()) {
         Ok(_) => println!("实测结论已落盘：{}", path.display()),
         Err(e) => println!("实测结论落盘失败（不影响演练）：{e}"),
     }
 
     Ok(())
-}
-
-/// 自动发种退避：门禁拦截 24h 内不重试（规则一天内通常不变），
-/// 失败/审阅失败 6h 内不重试（网络抖动恢复快，死源也别每轮白跑）
-fn autopost_in_backoff(last: Option<(i64, bool)>, now: i64) -> bool {
-    match last {
-        Some((at, is_block)) => now - at < if is_block { 86400 } else { 21600 },
-        None => false,
-    }
 }
 
 /// formcheck 结论按站点合并：未重跑站保留旧结论，重跑站以本次为准
@@ -929,7 +899,9 @@ fn commas(n: i64) -> String {
     let digits = n.abs().to_string();
     let mut out = String::new();
     for (i, c) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+        // 从右往左每 3 位插逗号。等价写法 `(len-i) % 3 == 0` 会被 clippy 要求用
+        // is_multiple_of（1.87 才稳定），而 Cargo.toml 承诺 MSRV 1.82
+        if i > 0 && i % 3 == digits.len() % 3 {
             out.push(',');
         }
         out.push(c);
@@ -1309,255 +1281,43 @@ fn yn(v: &serde_json::Value, k: &str) -> &'static str {
     }
 }
 
-/// 自动发种：按草稿逐条走「审阅 → 门禁 → 发布」，白名单 + 日限额 + 审计留痕。
-/// `--dry-run` 只打印门禁矩阵（等价 gatecheck），不碰站点写接口。
+/// 自动发种：核心流程在 bsend::autopost（CLI/GUI 共用），这里只把事件渲染成终端输出。
 fn cmd_autopost(
     cfg: &Config,
     dry_run: bool,
     limit: Option<usize>,
     sites: Option<Vec<String>>,
 ) -> Result<()> {
-    if !dry_run {
-        bsend::config::ensure_publish_enabled(cfg)?;
-    }
-    let mut index = ContentIndex::load(&cfg.coverage_state_path());
-    let qb = connect_qb(cfg)?;
-    let report = CoverageReport::build(&index, &cfg.sites, 20, bsend::coverage::now_unix(), "");
-    if report.drafts.is_empty() {
-        println!("没有转种草稿。先 `bsend run` 跑一轮，站里没有的段落定位到源种后会出草稿。");
-        return Ok(());
-    }
-    let allow: HashSet<String> = cfg.coverage.auto_reseed_sites.iter().cloned().collect();
-    if allow.is_empty() {
-        println!(
-            "未配置 assist.autoReseedSites（自动发种白名单）——本次只做门禁演练，不会发布任何东西。"
-        );
-    }
-    let audit_path = cfg
-        .coverage_state_path()
-        .parent()
-        .map(|p| p.join("auto-audit.jsonl"))
-        .unwrap_or_else(|| PathBuf::from("auto-audit.jsonl"));
-    let now = bsend::coverage::now_unix();
-    let today_start = now - now % 86400;
-    let mut posted_today: HashMap<String, u32> = HashMap::new();
-    // (内容, 站点) → (最近一次拦截/失败时间, 是否门禁拦截)，用于退避
-    let mut last_bad: HashMap<(String, String), (i64, bool)> = HashMap::new();
-    if let Ok(text) = std::fs::read_to_string(&audit_path) {
-        for line in text.lines() {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
-                let result = v.get("result").and_then(|r| r.as_str()).unwrap_or("");
-                let at = v.get("at").and_then(|a| a.as_i64()).unwrap_or(0);
-                if result == "posted" && at >= today_start {
-                    if let Some(s) = v.get("site").and_then(|s| s.as_str()) {
-                        *posted_today.entry(s.to_string()).or_insert(0) += 1;
-                    }
-                }
-                if matches!(result, "blocked" | "failed" | "review_failed") {
-                    if let (Some(k), Some(s)) = (
-                        v.get("key").and_then(|s| s.as_str()),
-                        v.get("site").and_then(|s| s.as_str()),
-                    ) {
-                        let slot = last_bad
-                            .entry((k.to_string(), s.to_string()))
-                            .or_insert((0, false));
-                        if at > slot.0 {
-                            *slot = (at, result == "blocked");
-                        }
-                    }
-                }
+    use bsend::autopost::{run_autopost, AutopostEvent, AutopostOptions};
+    let opts = AutopostOptions {
+        dry_run,
+        limit,
+        sites,
+    };
+    run_autopost(cfg, &opts, &mut |ev| match ev {
+        AutopostEvent::Log(line) => println!("{line}"),
+        AutopostEvent::DraftStart {
+            name,
+            source_site,
+            target_site,
+        } => println!("== 「{name}」{source_site} → {target_site}"),
+        AutopostEvent::Gates { gates, .. } => {
+            for r in &gates {
+                println!("   [{:5}] {}：{}", r.verdict.as_str(), r.gate, r.message);
             }
         }
-    }
-
-    println!(
-        "自动发种（{}）｜草稿 {} 条｜白名单 {} 站｜审计 {}\n",
-        if dry_run {
-            "演练，不发布"
-        } else {
-            "真实发布"
+        AutopostEvent::Outcome {
+            result, url, error, ..
+        } => match result {
+            "review_failed" => println!("   审阅失败：{}", error.unwrap_or_default()),
+            "blocked" => println!("   → 门禁拦截，转人工\n"),
+            "skipped_duplicate" => println!("   → 已跳过：目标站已有同条目，未上传\n"),
+            "posted" => println!("   → 已发布：{}\n", url.unwrap_or_default()),
+            "failed" => println!("   → 发布失败：{}\n", error.unwrap_or_default()),
+            _ => {}
         },
-        report.drafts.len(),
-        allow.len(),
-        audit_path.display()
-    );
-    let mut done = 0usize;
-    for d in &report.drafts {
-        if let Some(l) = limit {
-            if done >= l {
-                break;
-            }
-        }
-        let site = &d.target_site;
-        if let Some(ss) = &sites {
-            if !ss.iter().any(|s| s.eq_ignore_ascii_case(site)) {
-                continue;
-            }
-        }
-        if !allow.contains(site) {
-            println!("跳过 {}：不在自动发种白名单", site);
-            continue;
-        }
-        if autopost_in_backoff(
-            last_bad
-                .get(&(d.content_key.clone(), site.clone()))
-                .copied(),
-            now,
-        ) {
-            println!(
-                "跳过 {}：上次拦截/失败还在退避期内（门禁 24h / 失败 6h）",
-                d.name
-            );
-            continue;
-        }
-        let rules = cfg
-            .coverage
-            .reseed_rules
-            .get(site)
-            .cloned()
-            .unwrap_or_default();
-        let used = posted_today.get(site).copied().unwrap_or(0);
-        if used >= rules.daily_limit() {
-            println!(
-                "跳过 {}：「{}」今日已自动发 {used}/{}",
-                site,
-                d.name,
-                rules.daily_limit()
-            );
-            continue;
-        }
-        let site_name = cfg
-            .sites
-            .iter()
-            .find(|s| &s.id == site)
-            .map(|s| s.name.clone())
-            .unwrap_or_else(|| site.clone());
-        let req = bsend::reseed::request_from_draft(
-            &d.content_key,
-            &d.name,
-            &d.source_site,
-            &d.source_url,
-            site,
-        );
-        println!("== 「{}」{} → {}", d.name, d.source_site, site);
-        let mut log = |line: &str| {
-            if dry_run {
-                println!("   {line}");
-            }
-        };
-        let rep = match bsend::reseed::review_reseed(cfg, &req, &mut log) {
-            Ok(r) => r,
-            Err(e) => {
-                println!("   审阅失败：{e:#}");
-                append_audit(
-                    &audit_path,
-                    serde_json::json!({"at": now, "site": site, "key": d.content_key,
-                        "result": "review_failed", "error": format!("{e:#}")}),
-                );
-                continue;
-            }
-        };
-        let drill = bsend::reseed::analyze_prepared(site, &site_name, &rep.prepared, &rep.info);
-        let core = drill.core_gaps();
-        let type_label = drill
-            .select_picks
-            .iter()
-            .find(|(n, _)| n == "type")
-            .map(|(_, l)| l.clone());
-        let input = bsend::gates::GateInput {
-            rules: &rules,
-            name: &rep.info.name,
-            subtitle: &rep.info.subtitle,
-            descr: &rep.info.descr,
-            mediainfo: &rep.info.mediainfo,
-            has_links: rep.info.has_media_links(),
-            type_label: type_label.as_deref(),
-            core_gaps: &core,
-            audit_passed: rep.audit.as_ref().map(|a| a.passed),
-        };
-        let results = bsend::gates::evaluate(&input);
-        for r in &results {
-            println!("   [{:5}] {}：{}", r.verdict.as_str(), r.gate, r.message);
-        }
-        let pass = bsend::gates::all_passed(&results);
-        let gate_json: Vec<serde_json::Value> = results
-            .iter()
-            .map(|r| {
-                serde_json::json!({"gate": r.gate, "verdict": r.verdict.as_str(), "message": r.message})
-            })
-            .collect();
-        if dry_run {
-            println!(
-                "   → {}（演练，未发布）\n",
-                if pass { "门禁通过" } else { "门禁拦截" }
-            );
-            continue;
-        }
-        if !pass {
-            append_audit(
-                &audit_path,
-                serde_json::json!({"at": now, "site": site, "key": d.content_key,
-                    "result": "blocked", "gates": gate_json}),
-            );
-            println!("   → 门禁拦截，转人工\n");
-            continue;
-        }
-        match bsend::reseed::run_reseed(cfg, &qb, &req, &mut index, &mut |l| println!("   {l}")) {
-            Ok(url) if url.is_empty() => {
-                // 目标站已有同条目：索引已落 ReviewPending，不算发布成功，也不占日限额。
-                index.save()?;
-                append_audit(
-                    &audit_path,
-                    serde_json::json!({"at": now, "site": site, "key": d.content_key,
-                        "result": "skipped_duplicate", "gates": gate_json}),
-                );
-                println!("   → 已跳过：目标站已有同条目，未上传\n");
-            }
-            Ok(url) => {
-                done += 1;
-                index.save()?;
-                *posted_today.entry(site.clone()).or_insert(0) += 1;
-                append_audit(
-                    &audit_path,
-                    serde_json::json!({"at": now, "site": site, "key": d.content_key,
-                        "result": "posted", "url": url, "gates": gate_json}),
-                );
-                println!("   → 已发布：{url}\n");
-            }
-            Err(e) => {
-                append_audit(
-                    &audit_path,
-                    serde_json::json!({"at": now, "site": site, "key": d.content_key,
-                        "result": "failed", "error": format!("{e:#}"), "gates": gate_json}),
-                );
-                println!("   → 发布失败：{e:#}\n");
-            }
-        }
-    }
-    println!(
-        "结束：{}",
-        if dry_run {
-            "演练模式，未发布任何内容"
-        } else {
-            "已按门禁执行（明细见 auto-audit.jsonl）"
-        }
-    );
+    })?;
     Ok(())
-}
-
-/// 审计追加（JSONL；失败不致命）
-fn append_audit(path: &PathBuf, entry: serde_json::Value) {
-    use std::io::Write as _;
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).ok();
-    }
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-    {
-        let _ = writeln!(f, "{entry}");
-    }
 }
 
 /// 全站门禁演练：用演练样本逐站构造上传字段 → 官方预审（有则调，不上传种子）→ 门禁矩阵。
@@ -1678,10 +1438,7 @@ fn cmd_gatecheck(cfg: &Config, sites: Option<Vec<String>>, as_json: bool) -> Res
         .map(|p| p.join("gatecheck.json"))
         .unwrap_or_else(|| PathBuf::from("gatecheck.json"));
     let payload = serde_json::to_string_pretty(&rows)?;
-    if let Some(dir) = save_path.parent() {
-        std::fs::create_dir_all(dir).ok();
-    }
-    if let Err(e) = std::fs::write(&save_path, &payload) {
+    if let Err(e) = bsend::atomic_write(&save_path, payload.as_bytes()) {
         println!("门禁结果落盘失败（不影响演练）：{e}");
     }
     if as_json {
@@ -1745,17 +1502,5 @@ mod tests {
         let old = vec![serde_json::json!({"site": "a"})];
         let merged = merge_formcheck_results(&old, vec![serde_json::json!({"site": "b"})]);
         assert_eq!(merged.len(), 2);
-    }
-
-    #[test]
-    fn autopost_backoff_windows() {
-        let now = 1_800_000_000i64;
-        assert!(!autopost_in_backoff(None, now));
-        // 门禁拦截：23h 内退避，25h 后放行
-        assert!(autopost_in_backoff(Some((now - 23 * 3600, true)), now));
-        assert!(!autopost_in_backoff(Some((now - 25 * 3600, true)), now));
-        // 失败：5h 内退避，7h 后放行
-        assert!(autopost_in_backoff(Some((now - 5 * 3600, false)), now));
-        assert!(!autopost_in_backoff(Some((now - 7 * 3600, false)), now));
     }
 }

@@ -1,9 +1,9 @@
 # bsend（Rust 转种引擎 + 覆盖运营）
 
-以「本地库 × 站点覆盖矩阵」为核心的 PT 运营引擎：**辅种是基础能力**（当前走站内名字检索，
-pieces-hash 批量通道见 `doc/AUTO-RESEED-PLAN.md` P1），**核心是带站点规范门禁的自动发种**
-（规划 P2–P3）。判定级别、推送与校验尾巴、配置格式从 Swift 版逐条移植
-（方案文档见 `COVERAGE-PLAN.md`）。
+以「本地库 × 站点覆盖矩阵」为核心的 PT 运营引擎：**辅种是基础能力**（pieces-hash 批量通道
+与站内名字检索兜底，已实现），**核心是带站点规范门禁的自动发种**（审阅 → 门禁 → 发布，
+已实现并由 `autopost` 白名单 + 日限额 + 退避 + 审计驱动）。判定级别、推送与校验尾巴、
+配置格式从 Swift 版逐条移植（方案文档见 `COVERAGE-PLAN.md`）。
 
 ## 构建
 
@@ -187,9 +187,10 @@ nl2br 的裸 `<br />`），按「转义标签占绝对多数 + 富文本标记/�
 ## 发种安全闸门
 
 `assist.publishEnabled` **缺省 false**：`reseed --yes` / `autopost` / `run_reseed` 三处入口
-在任何站点写请求之前先检查总闸（CLI 早于连 qB/拉源页），因此本阶段只能演练，不能真发。
-演练命令：`formcheck`（表单）、`gatecheck`（字段 + 官方预审 + 门禁矩阵）、
-`reseed --draft N`（单草稿审阅）、`autopost --dry-run`（草稿门禁）。开启真发前需显式设为 true。
+在任何站点写请求之前先检查总闸（CLI 早于连 qB/拉源页）。默认只能演练；显式设为 true 后
+才允许真实发布（实测已打通 luckpt / sbpt）。演练命令：`formcheck`（表单）、
+`gatecheck`（字段 + 官方预审 + 门禁矩阵）、`reseed --draft N`（单草稿审阅）、
+`autopost --dry-run`（草稿门禁）。
 
 ## 一轮流水线
 
@@ -217,7 +218,9 @@ nl2br 的裸 `<br />`），按「转义标签占绝对多数 + 富文本标记/�
    收尾 pass 凭它直查下载器收尾，不花站点请求。C 级与布局对不上的 → `reviewPending`，
    绝不碰下载器。
 4. **转种臂**（站内没有）：定位源种（已在做种的源站优先，刚查过的目标站不重复问）→
-   v1 只出草稿（`reseedDraft`：源站 + 详情页链接 + 目标站清单），上传是后续版本的事。
+   出 `reseedDraft` 草稿（源站 + 详情页链接 + 目标站清单）。上传由 `autopost`
+   （白名单 + 日限额 + 门禁 + 退避）或 `reseed --draft N --yes` 执行；上传前过
+   判重 fail-closed、源种分片硬闸与全局上传预算。
    哪都没有 → `waitSource` 并记 30 天负缓存；检索报错标 `failed`，不记负缓存。
 
 **不落负缓存的四种情况**（实机都踩到过）：cookie 失效（401/403、被跳到登录页、
@@ -226,18 +229,20 @@ NexusPHP 的 `index.php?returnto=…` 跳转）、站点限流页（HTTP 200 但
 
 ## 预算与节流（方案第九节）
 
-- 三类独立预算，每轮重置：目标站检索 200 / 源站定位 200（两个都读 `assist.roundBudget`，
-  与 GUI 版同一个旋钮）/ 转种上传 10（Rust 侧固定）。预算按**真实请求**记：一次站内检索
-  会走查询词阶梯（严格 3 条 + 宽松至多 4 条），每条都是一发请求、都要领号。
+- 三类独立预算，每轮重置：目标站检索 200 / 源站定位 200（都读 `assist.roundBudget`，
+  与 GUI 版同一个旋钮）/ 转种上传 10（`assist.uploadBudget`）。预算按**真实请求**记：
+  一次站内检索会走查询词阶梯（严格 3 条 + 宽松至多 4 条），每条都是一发请求、都要领号。
   预算耗尽的格子本轮直接跳过、不记任何结论——「没查成」不能当成「查过没有」。
+- 转种上传同样领上传预算：`run_reseed` 在 `submit_upload` 前 `acquire(Upload)`，
+  耗尽即 fail-closed；`autopost` 一次运行共用一个节流器，预算/站间隔跨草稿累计。
 - 每站串行（缺省 8s 间隔 + 3s 抖动，`assist.perSiteIntervalSec` / `assist.jitterSec`），
   可用 `assist.siteIntervals` 逐站放宽（hdsky 实测 60 秒/次）；全局 worker 上限 4，
   替代 Swift 版的全流水线单线程。
 - 站点报限流（HTTP 429/503、或限流提示页）→ 该站间隔翻倍退避，且本轮最低间隔抬到
   `rateLimitFloorSec`（缺省 60s）；一次成功请求恢复。
 - 重试节流：`miss` / `waitSource` / `reviewPending` / `failed` 都歇
-  `assist.missTTLDays` 天（默认 7）再重查；源种「定位不到」的负缓存 30 天
-  （Rust 侧固定）。校验收尾 pass 不占任何预算。
+  `assist.missTTLDays` 天（默认 7）再重查；源种「定位不到」的负缓存
+  `assist.sourceMissTTLDays` 天（默认 30）。校验收尾 pass 不占任何预算。
 - 每站每轮最多排 `roundBudget` 格（一轮的预算撑不起更多，排进来只会白占内存）。
 - 网络一律直连（`no_proxy`）：PT 站 passkey 与 IP 绑定，且 Windows 上「系统代理已停用但
   注册表留着 ProxyServer」会让客户端去连不存在的 SOCKS、每请求卡满超时（实机踩到）。
@@ -260,8 +265,9 @@ NexusPHP 的 `index.php?returnto=…` 跳转）、站点限流页（HTTP 200 但
 - 每段内容一条：名字、总大小、文件清单摘要、全部 info hash（多个站同一内容合并成一条）、
   各站覆盖格子（status / at / url / note）、源种记录（siteId + detailUrl，或 missAt 负缓存）。
 - 状态机：`seeding / assisted / reseeded / verifying / reviewPending / rejected /
-  miss / waitSource / failed / reseedDraft`。`seeding / assisted / reseeded /
-  rejected / reseedDraft` 为终态，不会再产生请求；`verifying` 由下一轮收尾 pass
+  miss / waitSource / failed / reseedDraft / otherVersion`。`seeding / assisted /
+  reseeded / rejected / reseedDraft` 为终态，不会再产生请求；`otherVersion`
+  （目标站已有其他版本、pieces 不一致）不自动重传；`verifying` 由下一轮收尾 pass
   接管（凭格子里的 verifyHash 直查下载器）；其余四类歇一个 missTTL 再重查。
 - 解析失败的文件会被挪成 `coverage.json.corrupt` 留证，不会被下一轮 save 无声覆盖。
   **手改账本必须保持完整字段形状**：格子的 `url`/`note` 无 serde 缺省，漏写会让
@@ -275,8 +281,12 @@ NexusPHP 的 `index.php?returnto=…` 跳转）、站点限流页（HTTP 200 但
   布局门、推送尾巴（暂停添加 → 校验 → 启动/回滚）、qB WebAPI 兼容补丁（参数名两版并记住
   可用的那个、回包两种包装、409 已存在补挂 tracker、登录一次复用）、登录墙检测
   （401/403、登录页跳转、`returnto=`）、站点限流页检测、148 站识别表。
-- 未移植（v1 范围外）：GUI、上传表单填充（转种只出草稿）、非 NexusPHP 框架的站点适配、
-  Transmission。
+- 已移植：Rust GUI（`bsend-gui`，与 CLI 共用配置/索引）、上传表单填充与发种全流程
+  （预检 → 上传 → 发后自检 → 推种校验 → 台账）、自动发种调度、源站全量适配器。
+- 未移植：非 NexusPHP 框架的站点适配、Transmission。
+
+> qB 5.3 语义：该版本移除了 `skip_checking`，改用 `seedMode=true`（跳过哈希校验、直接
+> 以完整数据入种）。`add_form_fields` 同时发送两者：4.x 认旧键，5.3 认新键。
 
 ## 测试
 
@@ -287,12 +297,11 @@ bash scripts/ci-check.sh
 ```
 
 ```bash
-cargo test          # 70 个单测（判定/分词/节流/索引/配置与 cookie 兼容/限流与拦截页/
-                    # CookieCloud 解密/报告/站点别名）+ 14 个端到端
-                    #（mock qBittorrent + mock NexusPHP 走真实 TCP HTTP 跑完整一轮：
-                    #  辅种全流程、已做种预筛（含 qB 5.x 单 tracker 字段）、源站优先、
-                    #  负缓存、dry-run、C 级人工确认、409 已存在补挂 tracker、
-                    #  校验中跨轮收尾（启动/回滚两分支）、预算耗尽不记负缓存、
+cargo test          # 数量以本次 cargo test 输出为准（单测 + e2e：mock qBittorrent +
+                    # mock NexusPHP 走真实 TCP HTTP 跑完整一轮：辅种全流程、已做种预筛
+                    # （含 qB 5.x 单 tracker 字段）、源站优先、负缓存、dry-run、
+                    # C 级人工确认、409 已存在补挂 tracker、校验中跨轮收尾
+                    # （启动/回滚两分支）、预算耗尽不记负缓存、
                     #  登录墙（login.php 与 returnto 两种）、限流页、429 映射失败）
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check

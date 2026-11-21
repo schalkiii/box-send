@@ -351,23 +351,7 @@ pub fn run_round(
     }
 
     // ---- 4 站点 worker 池 ----
-    let throttle = Arc::new(
-        SiteThrottle::with_rate_limit_floor(
-            Duration::from_secs_f64(cfg.coverage.per_site_interval_sec.max(0.0)),
-            Duration::from_secs_f64(cfg.coverage.jitter_sec.max(0.0)),
-            cfg.coverage.search_budget,
-            cfg.coverage.source_budget,
-            cfg.coverage.upload_budget,
-            Duration::from_secs(cfg.coverage.rate_limit_floor_sec),
-        )
-        .with_site_intervals(
-            cfg.coverage
-                .site_intervals
-                .iter()
-                .map(|(k, v)| (k.clone(), Duration::from_secs_f64(*v)))
-                .collect(),
-        ),
-    );
+    let throttle = Arc::new(SiteThrottle::from_coverage(&cfg.coverage));
     let fp_cache: Arc<FingerprintCache> = Arc::new(Mutex::new(HashMap::new()));
     let source_cache: Arc<SourceCache> = Arc::new(Mutex::new(HashMap::new()));
     let pool: SiteQueuePool = Arc::new(Mutex::new(site_queues.into_iter().collect()));
@@ -1060,14 +1044,21 @@ fn push_tail(
     } else {
         add.id
     };
-    if !add.note.is_empty() {
-        // 「已存在于下载器」等回执：tracker 补挂结果带进格子备注
+    if add.already {
+        // 「已存在于下载器」回执：tracker 补挂结果带进格子备注。
+        // 只有 already 才走终态捷径——新加种的 note（限速未生效/missingFiles）
+        // 不是「已存在」，必须继续 start + 校验，否则会永远暂停不作种。
         return done_url(
             CoverageStatus::Assisted,
             format!("{}（{why}）", add.note),
             detail_url.to_string(),
         );
     }
+    let add_note_suffix = if add.note.is_empty() {
+        String::new()
+    } else {
+        format!("；{}", add.note)
+    };
     // qB 5.x：停止态的种子不会开始校验，必须 start 一次才会核对数据（实机 qB 5.3 验证）。
     // 核对期间的下载兜底由 add 时的 dlLimit=1 保证——内容对不上也不会开始狂下。
     let _ = qb.set_paused(&[&site_hash], false);
@@ -1080,7 +1071,7 @@ fn push_tail(
                 let _ = qb.set_download_limit(&site_hash, 0);
                 return done_url(
                     CoverageStatus::Assisted,
-                    format!("校验到 100%，已在做种（{why}）"),
+                    format!("校验到 100%，已在做种（{why}）{add_note_suffix}"),
                     detail_url.to_string(),
                 );
             }
@@ -1128,8 +1119,8 @@ fn push_tail(
     }
 }
 
-/// 转种臂（站内没有）：v1 草稿模式——只定位源种、生成待发清单，不上传。
-/// 上传涉及 148 站每家一套的表单适配，是 R4 阶段的事（方案第八节安全闸门）。
+/// 转种臂（站内没有）：定位源种 → 出转种草稿。
+/// 真正的上传由 `autopost`（白名单+日限额+门禁）或 `reseed --draft N --yes` 执行。
 #[allow(clippy::too_many_arguments)] // 内部管道：worker 需要的全部共享件
 fn reseed_arm(
     item: &WorkItem,
@@ -1304,10 +1295,13 @@ fn reseed_arm(
                 attempts.first().map(|a| a.note.clone()).unwrap_or_default()
             ),
         ),
-        ResolveOutcome::BudgetExhausted { .. } => done(
-            CoverageStatus::Miss,
-            "站内没有；源种定位预算用完，下次接着试".into(),
-        ),
+        // 预算耗尽不等于「站内没有」：落 Miss 会把辅种机会负缓存一个 TTL，
+        // 与检索侧语义对齐——本轮跳过，不写格子，下轮重试
+        ResolveOutcome::BudgetExhausted { .. } => Event::ItemSkipped {
+            site_id: site_id.to_string(),
+            key: item.key.clone(),
+            reason: "源种定位预算用完，本轮不落结论（下轮接着试）".into(),
+        },
     }
 }
 
