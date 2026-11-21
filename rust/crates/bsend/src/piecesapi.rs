@@ -166,6 +166,11 @@ impl PiecesApi {
         Some(ph)
     }
 
+    /// 只查缓存、不让下载器导出（批量预扫捎带非代表成员时用，零 qB 开销）
+    pub fn cached_pieces_hash(&self, hash: &str) -> Option<String> {
+        self.cache.pieces.get(&hash.to_lowercase()).cloned()
+    }
+
     /// 采集 passkey：扫下载器里所有种子当前的 tracker URL（host → passkey）。
     /// 只补缺失的 host，已有的不覆盖（避免被别的号串掉）。
     pub fn harvest_passkeys(&mut self, qb: &QBittorrent) -> usize {
@@ -181,6 +186,23 @@ impl PiecesApi {
             }
         }
         added
+    }
+
+    /// 从下载器 tracker 定向刷新一个 host 的 passkey（覆盖缓存）。
+    /// 缓存会过期：sbpt 实测旧 passkey 被 download.php 拒（account disabed or parked），
+    /// pieces API 却仍接受——只靠 API 成功发现不了。qB 里正在做种的 tracker URL
+    /// 才是当前权威值。与 harvest_passkeys 的「只补缺失」不同：单站定向刷新，不串号。
+    pub fn refresh_passkey(&mut self, qb: &QBittorrent, host: &str) -> bool {
+        let target = normalize_host(host);
+        for u in qb.all_tracker_urls().unwrap_or_default() {
+            if let Some((h, pk)) = parse_passkey(&u) {
+                if normalize_host(&h) == target && !pk.is_empty() {
+                    self.cache.passkeys.insert(target, pk);
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     /// 批量查询（≤100 个/批由调用方控制）。`base` 是站点根 URL。

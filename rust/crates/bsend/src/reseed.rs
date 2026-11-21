@@ -26,7 +26,9 @@ use crate::config::Config;
 use crate::coverage::now_unix;
 use crate::index::{ContentIndex, CoverageStatus, SiteCoverage};
 use crate::qbittorrent::QBittorrent;
-use crate::sites::nexusphp::{decode_entities, resolve_url, strip_tags, NexusPhp, TorrentPage};
+use crate::sites::nexusphp::{
+    decode_entities, decode_entities_once, resolve_url, strip_tags, NexusPhp, TorrentPage,
+};
 
 /// 从源站详情页解析出的发布要素（Swift `ReleaseInfo` 的通用子集）
 #[derive(Debug, Clone, Default)]
@@ -424,6 +426,7 @@ pub fn parse_release_page(html: &str, name_fallback: &str) -> ReleaseInfo {
             .or_else(|| detail_row_value(html, "簡介"))
             .unwrap_or_else(|| body_text(html));
     }
+    info.descr = unescape_descr(&info.descr);
     // MediaInfo：<pre>、引用框、code 块里含 Unique ID / DISC TITLE 特征的段
     info.mediainfo = normalize_mediainfo(&extract_mediainfo(html, &info.descr));
     // 条目链接
@@ -597,6 +600,25 @@ fn input_value(html: &str, name: &str) -> Option<String> {
 /// 但 `[中字]` 这类内容标签保留
 fn strip_promo_suffix(name: &str) -> String {
     let mut s = name.trim_end().to_string();
+    // 免费促销常带倒计时尾巴（luckpt 实测「[免费] 剩余时间：6天18时」）：
+    // 先剥倒计时，[免费] 才落到尾部能被方括号循环剥掉
+    for marker in ["剩余时间", "剩餘時間"] {
+        if let Some(p) = s.rfind(marker) {
+            let tail = s[p + marker.len()..].trim_start_matches(['：', ':', ' ']);
+            let is_countdown = !tail.is_empty()
+                && tail.chars().all(|c| {
+                    c.is_ascii_digit()
+                        || matches!(
+                            c,
+                            '天' | '时' | '時' | '小' | '分' | '钟' | '鐘' | '秒' | ' '
+                        )
+                });
+            if is_countdown {
+                s = s[..p].trim_end().to_string();
+            }
+            break;
+        }
+    }
     loop {
         let t = s.trim_end();
         let Some(open) = t.rfind('[') else { break };
@@ -612,7 +634,7 @@ fn strip_promo_suffix(name: &str) -> String {
             .chars()
             .all(|c| c.is_ascii_digit() || c == '%' || c == '.')
             || low == "free"
-            || matches!(low.as_str(), "免费" | "折扣" | "促销" | "半价")
+            || matches!(low.as_str(), "免费" | "免費" | "折扣" | "促销" | "半价")
             || (low.ends_with('x')
                 && low.len() <= 4
                 && low[..low.len() - 1].chars().all(|c| c.is_ascii_digit()));
@@ -622,6 +644,53 @@ fn strip_promo_suffix(name: &str) -> String {
         s = t[..open].trim_end().to_string();
     }
     s
+}
+
+/// 源站把简介 HTML 整体转义后存储（luckpt 实测 kdescr 里是 `&lt;fieldset&gt;…`，
+/// 站点只补了 nl2br 的裸 `<br />`）：转义标签 >= 3 且多于裸标签，并且含 >= 2 种
+/// 富文本标记（fieldset/img/span/font…）、或干脆没有任何裸标签（整块都是转义）时
+/// 解码一层还原。正常裸 HTML 简介、以及混在 nl2br 裸 `<br>` 里的 b/i/u 教程文本
+/// 都不会命中。
+fn unescape_descr(html: &str) -> String {
+    let count_tags = |s: &str, prefix: &str| {
+        let b = s.as_bytes();
+        let mut n = 0usize;
+        let mut from = 0usize;
+        while let Some(p) = s[from..].find(prefix) {
+            let at = from + p + prefix.len();
+            if at < b.len() && (b[at].is_ascii_alphabetic() || b[at] == b'/' || b[at] == b'!') {
+                n += 1;
+            }
+            from = from + p + prefix.len();
+        }
+        n
+    };
+    let escaped = count_tags(html, "&lt;");
+    let raw = count_tags(html, "<");
+    let lower = html.to_ascii_lowercase();
+    let rich = [
+        "&lt;fieldset",
+        "&lt;img",
+        "&lt;span",
+        "&lt;font",
+        "&lt;div",
+        "&lt;table",
+        "&lt;center",
+        "&lt;iframe",
+        "&lt;video",
+        "&lt;audio",
+        "&lt;blockquote",
+        "&lt;pre",
+        "&lt;code",
+    ]
+    .iter()
+    .filter(|m| lower.contains(*m))
+    .count();
+    if escaped >= 3 && escaped > raw && (rich >= 2 || raw == 0) {
+        decode_entities_once(html)
+    } else {
+        html.to_string()
+    }
 }
 
 /// `<body>` 内的纯文本（简介容器都找不到时的兜底；绝不返回标签源码）
@@ -3956,6 +4025,57 @@ Frame rate : 25</pre>
             strip_promo_suffix("Movie.2024 [中字] [50%]"),
             "Movie.2024 [中字]"
         );
+    }
+
+    #[test]
+    fn strips_free_promo_countdown_tail() {
+        // luckpt 实测 h1：[免费] 后面还挂着倒计时，角标不在尾部
+        assert_eq!(
+            strip_promo_suffix(
+                "Die Welle 2008 FRA BluRay 1080p x264 DTS-CMCT    [免费] 剩余时间：6天18时"
+            ),
+            "Die Welle 2008 FRA BluRay 1080p x264 DTS-CMCT"
+        );
+        assert_eq!(
+            strip_promo_suffix("Show.S01 1080p-LuckAni [免费] 剩余时间：23时37分钟"),
+            "Show.S01 1080p-LuckAni"
+        );
+        assert_eq!(
+            strip_promo_suffix("Movie.2024 [50%] 剩餘時間：2天3小時"),
+            "Movie.2024"
+        );
+        assert_eq!(strip_promo_suffix("Movie.2024 [免費]"), "Movie.2024");
+        // 正文里提到「剩余时间」但后面不是倒计时：不动
+        assert_eq!(
+            strip_promo_suffix("Movie.2024 剩余时间剧情解析"),
+            "Movie.2024 剩余时间剧情解析"
+        );
+    }
+
+    #[test]
+    fn escaped_descr_is_decoded_once() {
+        // luckpt 实测：kdescr 存的是转义一层的 HTML，站点只补 nl2br 的裸 <br />
+        let escaped = "&lt;fieldset&gt;&lt;legend&gt; 引用 &lt;/legend&gt;&lt;b&gt;官组作品&lt;/b&gt;&lt;/fieldset&gt;&lt;br /&gt;<br />\n&lt;img src=&quot;https://x/a.jpg&quot;&gt;<br />\n&lt;span style=&quot;color:blue&quot;&gt;谢谢&lt;/span&gt;<br />";
+        let out = unescape_descr(escaped);
+        assert!(
+            out.starts_with("<fieldset><legend> 引用 </legend>"),
+            "{out}"
+        );
+        assert!(out.contains("<img src=\"https://x/a.jpg\">"), "{out}");
+        // 双重转义的引号只解一层：&amp;quot; → &quot;（渲染成引号），不是裸引号
+        assert_eq!(
+            unescape_descr(
+                "&lt;b&gt;&amp;quot;名&amp;quot;&lt;/b&gt;&lt;i&gt;x&lt;/i&gt;&lt;u&gt;y&lt;/u&gt;"
+            ),
+            "<b>&quot;名&quot;</b><i>x</i><u>y</u>"
+        );
+        // 正常裸 HTML 简介：原样保留
+        let raw =
+            "<fieldset><legend> 引用 </legend>正文</fieldset><img src=\"https://x/a.jpg\"><br />";
+        assert_eq!(unescape_descr(raw), raw);
+        // 纯文本里引用少量 HTML 示例（裸标签只有 nl2br）：不解码
+        let text = "用 &lt;b&gt; 加粗，&lt;i&gt; 斜体，&lt;u&gt; 下划线<br /><br />就这样";
+        assert_eq!(unescape_descr(text), text);
     }
 
     #[test]

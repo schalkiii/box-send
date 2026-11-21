@@ -621,10 +621,21 @@ fn cmd_formcheck(cfg: &Config, sites: Option<Vec<String>>) -> Result<()> {
         .parent()
         .map(|p| p.join("formcheck.json"))
         .unwrap_or_else(|| PathBuf::from("formcheck.json"));
+    // 按站点合并历史结论：单站/小批实测只覆盖本次跑到的站，
+    // 其余站保留最近一次结论（sites 总账按站点取最近，整体覆盖会把历史抹成「未测」）
+    let mut old_results: Vec<serde_json::Value> = Vec::new();
+    if let Ok(text) = std::fs::read_to_string(&path) {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+            if let Some(arr) = v.get("results").and_then(|r| r.as_array()) {
+                old_results = arr.clone();
+            }
+        }
+    }
+    let merged = merge_formcheck_results(&old_results, facts);
     let payload = serde_json::json!({
         "at": bsend::coverage::now_unix(),
         "sample": info.name,
-        "results": facts,
+        "results": merged,
     });
     match std::fs::write(&path, serde_json::to_string_pretty(&payload)?) {
         Ok(_) => println!("实测结论已落盘：{}", path.display()),
@@ -632,6 +643,28 @@ fn cmd_formcheck(cfg: &Config, sites: Option<Vec<String>>) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// formcheck 结论按站点合并：未重跑站保留旧结论，重跑站以本次为准
+fn merge_formcheck_results(
+    old: &[serde_json::Value],
+    facts: Vec<serde_json::Value>,
+) -> Vec<serde_json::Value> {
+    let rerun: HashSet<&str> = facts
+        .iter()
+        .filter_map(|f| f.get("site").and_then(|s| s.as_str()))
+        .collect();
+    let mut merged: Vec<serde_json::Value> = old
+        .iter()
+        .filter(|o| {
+            o.get("site")
+                .and_then(|s| s.as_str())
+                .is_some_and(|id| !rerun.contains(id))
+        })
+        .cloned()
+        .collect();
+    merged.extend(facts);
+    merged
 }
 
 /// 落盘核对用的一条成员种子（hash + 下载器实时记账 + 文件清单）
@@ -1633,4 +1666,33 @@ fn cmd_gatecheck(cfg: &Config, sites: Option<Vec<String>>, as_json: bool) -> Res
         rows.iter().filter(|r| r.verdict == "error").count()
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn formcheck_merge_keeps_unrerun_sites() {
+        let old = vec![
+            serde_json::json!({"site": "a", "verdict": "ok"}),
+            serde_json::json!({"site": "b", "verdict": "fail", "error": "无权限"}),
+        ];
+        let facts = vec![serde_json::json!({"site": "b", "verdict": "ok"})];
+        let merged = merge_formcheck_results(&old, facts);
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged[0]["site"], "a");
+        assert_eq!(merged[1]["site"], "b");
+        assert_eq!(merged[1]["verdict"], "ok");
+        assert!(merged[1].get("error").is_none());
+    }
+
+    #[test]
+    fn formcheck_merge_empty_old_and_new_site() {
+        let merged = merge_formcheck_results(&[], vec![serde_json::json!({"site": "x"})]);
+        assert_eq!(merged.len(), 1);
+        let old = vec![serde_json::json!({"site": "a"})];
+        let merged = merge_formcheck_results(&old, vec![serde_json::json!({"site": "b"})]);
+        assert_eq!(merged.len(), 2);
+    }
 }

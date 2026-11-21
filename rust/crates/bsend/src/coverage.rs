@@ -578,10 +578,7 @@ fn resolve_source_by_pieces(
         let mut api = pieces.lock().unwrap();
         api.pieces_hash_for(qb, &item.rep_hash)?
     };
-    for a in adapters {
-        if a.site_id == target_site {
-            continue;
-        }
+    for a in source_adapters(adapters, target_site, &item.tracker_hosts) {
         // 能力表明确不支持的站不浪费请求；Unknown 允许试一次（站点会回 404/405）
         if let Some(api) = pieces.try_lock().ok().as_ref() {
             if api.capability(&a.site_id) == Capability::Unsupported {
@@ -650,47 +647,128 @@ fn prefetch_pieces(
     if api.capability(site_id) == Capability::Unsupported {
         return out;
     }
-    let mut keyed: Vec<(String, String)> = Vec::new();
-    for it in items.iter().take(100) {
-        if let Some(ph) = api.pieces_hash_for(qb, &it.rep_hash) {
-            keyed.push((it.key.clone(), ph));
+    let keyed = prefetch_keyed(items, |h, allow_export| {
+        if allow_export {
+            api.pieces_hash_for(qb, h)
+        } else {
+            api.cached_pieces_hash(h)
         }
-    }
+    });
     if keyed.is_empty() {
         return out;
     }
-    let hashes: Vec<String> = keyed.iter().map(|(_, p)| p.clone()).collect();
-    if !throttle.acquire(site_id, BudgetKind::Search) {
-        return out;
-    }
-    let mut outcome = api.query(site_id, adapter.base.as_str(), &hashes);
-    if outcome == QueryOutcome::Auth {
-        // 首次没有 passkey：从下载器 tracker 现采一次再试
-        if api.harvest_passkeys(qb) > 0 {
-            outcome = api.query(site_id, adapter.base.as_str(), &hashes);
+    let base = adapter.base.as_str().trim_end_matches('/').to_string();
+    let host = adapter
+        .base
+        .host_str()
+        .unwrap_or("")
+        .trim_start_matches("www.");
+    // API 每请求 ≤100 项；多成员入批后按块领号、逐块查
+    let mut refreshed = false;
+    for chunk in keyed.chunks(100) {
+        if !throttle.acquire(site_id, BudgetKind::Search) {
+            return out;
         }
-    }
-    if let QueryOutcome::Hit(list) = outcome {
-        let base = adapter.base.as_str().trim_end_matches('/').to_string();
-        let host = adapter
-            .base
-            .host_str()
-            .unwrap_or("")
-            .trim_start_matches("www.");
-        let pk = api.passkey(host).unwrap_or_default().to_string();
-        for (ph, id) in list {
-            if let Some((key, _)) = keyed.iter().find(|(_, p)| p == &ph) {
-                out.insert(
-                    key.clone(),
-                    (
-                        crate::piecesapi::download_url(&base, id, &pk),
-                        format!("{base}/details.php?id={id}"),
-                    ),
-                );
+        let hashes: Vec<String> = chunk.iter().map(|(_, p)| p.clone()).collect();
+        let mut outcome = api.query(site_id, adapter.base.as_str(), &hashes);
+        if outcome == QueryOutcome::Auth {
+            // 首次没有 passkey：从下载器 tracker 现采一次再试
+            if api.harvest_passkeys(qb) > 0 {
+                outcome = api.query(site_id, adapter.base.as_str(), &hashes);
+            }
+        }
+        if let QueryOutcome::Hit(list) = outcome {
+            // 缓存 passkey 可能过期（pieces API 仍接受、download.php 拒）：
+            // 命中后从 qB tracker 定向刷新一次，下载直链才用的是当前权威值
+            if !refreshed {
+                api.refresh_passkey(qb, host);
+                refreshed = true;
+            }
+            let pk = api.passkey(host).unwrap_or_default().to_string();
+            for (ph, id) in list {
+                if let Some((key, _)) = chunk.iter().find(|(_, p)| p == &ph) {
+                    out.insert(
+                        key.clone(),
+                        (
+                            crate::piecesapi::download_url(&base, id, &pk),
+                            format!("{base}/details.php?id={id}"),
+                        ),
+                    );
+                }
             }
         }
     }
     out
+}
+
+/// pieces 预扫候选收集：rep 的 ph（可让 qB 导出现算）+ 其余成员的**已缓存** ph
+/// （只查缓存，零 qB 开销）。目标站种子的封装可能与任意成员一致而不一定是 rep——
+/// sbpt 实测：rep 是 luckpt 重新打包，站内已有种与另一 CMCT 原始成员 pieces 一致，
+/// 只查 rep 会漏命中。按 ph 去重；至多 100 段内容。
+fn prefetch_keyed(
+    items: &[WorkItem],
+    mut ph_for: impl FnMut(&str, bool) -> Option<String>,
+) -> Vec<(String, String)> {
+    let mut keyed: Vec<(String, String)> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    for it in items.iter().take(100) {
+        if let Some(ph) = ph_for(&it.rep_hash, true) {
+            if seen.insert(ph.clone()) {
+                keyed.push((it.key.clone(), ph));
+            }
+        }
+        for h in &it.hashes {
+            if h.eq_ignore_ascii_case(&it.rep_hash) {
+                continue;
+            }
+            if let Some(ph) = ph_for(h, false) {
+                if seen.insert(ph.clone()) {
+                    keyed.push((it.key.clone(), ph));
+                }
+            }
+        }
+    }
+    keyed
+}
+
+/// qB tracker 与站点 base/announce host 的匹配（用于源站定向）。
+fn adapter_matches_tracker(a: &NexusPhp, tracker_hosts: &[String]) -> bool {
+    if tracker_hosts.is_empty() {
+        return true;
+    }
+    let mut hosts = a.announce_hosts.clone();
+    if let Some(h) = a.base.host_str() {
+        hosts.push(h.to_string());
+    }
+    tracker_hosts.iter().any(|t| {
+        let t = t.to_lowercase();
+        hosts.iter().any(|h| {
+            let h = h.to_lowercase();
+            t == h || t.ends_with(&format!(".{h}")) || h.ends_with(&format!(".{t}"))
+        })
+    })
+}
+
+/// 源站候选：先按 qB tracker 定向（本地种子的 tracker 就是来源站），避免 92 站全扫——
+/// 不可达的站每个要吃满超时，pieces 反查与名字检索两条路都必须用同一套定向。
+/// tracker 没映射到任何参与站时才回退全部源站。
+fn source_adapters<'a>(
+    adapters: &'a [Arc<NexusPhp>],
+    target_site: &str,
+    tracker_hosts: &[String],
+) -> Vec<&'a Arc<NexusPhp>> {
+    let mut picked: Vec<&Arc<NexusPhp>> = adapters
+        .iter()
+        .filter(|a| a.site_id != target_site)
+        .filter(|a| adapter_matches_tracker(a, tracker_hosts))
+        .collect();
+    if picked.is_empty() {
+        picked = adapters
+            .iter()
+            .filter(|a| a.site_id != target_site)
+            .collect();
+    }
+    picked
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1146,9 +1224,9 @@ fn reseed_arm(
     // 走源种定位：名字检索兜底。
     // 刚检索过的目标站要剔掉——同一套查询词再问一遍「源站」纯属白花请求
     // （站内没有就是没有，换目标站才是新信息）。实机一轮里这一条能省掉一半请求。
-    let sites: Vec<SourceSite<'_>> = adapters
-        .iter()
-        .filter(|a| a.site_id != *site_id)
+    // 源站候选与 pieces 反查同一套 tracker 定向（source_adapters）。
+    let sites: Vec<SourceSite<'_>> = source_adapters(adapters, site_id, &item.tracker_hosts)
+        .into_iter()
         .map(|a| SourceSite {
             client: a.as_ref(),
             announce_hosts: a.announce_hosts.clone(),
@@ -1321,4 +1399,127 @@ fn fingerprint_of(
     let fp = Arc::new(TorrentFingerprint::from_local_files(&files));
     cache.lock().unwrap().insert(hash.to_string(), fp.clone());
     Some(fp)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn adapter(id: &str, url: &str) -> Arc<NexusPhp> {
+        Arc::new(NexusPhp::new(id, id, url, None, None).unwrap())
+    }
+
+    #[test]
+    fn source_adapters_follow_tracker_and_exclude_target() {
+        let adapters = vec![
+            Arc::new(
+                NexusPhp::new("luckpt", "luckpt", "https://pt.luckpt.de/", None, None)
+                    .unwrap()
+                    .with_announce_hosts(vec!["tracker.luckpt.de".to_string()]),
+            ),
+            adapter("sbpt", "https://sbpt.link/"),
+            adapter("other", "https://other.example/"),
+        ];
+        // tracker 命中 luckpt（announce 别名也算）→ 只问 luckpt，目标站 sbpt 剔除
+        let hosts = vec!["tracker.luckpt.de".to_string()];
+        let picked = source_adapters(&adapters, "sbpt", &hosts);
+        assert_eq!(
+            picked
+                .iter()
+                .map(|a| a.site_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["luckpt"]
+        );
+        // 目标是 luckpt 时，tracker 指向 sbpt → 只问 sbpt
+        let hosts = vec!["sbpt.link".to_string()];
+        let picked = source_adapters(&adapters, "luckpt", &hosts);
+        assert_eq!(
+            picked
+                .iter()
+                .map(|a| a.site_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["sbpt"]
+        );
+        // tracker 为空 → 除目标外全问（老索引没有 tracker 信息时的兜底）
+        let picked = source_adapters(&adapters, "sbpt", &[]);
+        assert_eq!(picked.len(), 2);
+        // tracker 没映射到任何参与站 → 回退全部源站（不能静默丢源）
+        let hosts = vec!["foreign-tracker.example".to_string()];
+        let picked = source_adapters(&adapters, "sbpt", &hosts);
+        assert_eq!(picked.len(), 2);
+        // 子域双向匹配：tracker 是站点 host 的子域也认
+        let hosts = vec!["www.sbpt.link".to_string()];
+        let picked = source_adapters(&adapters, "luckpt", &hosts);
+        assert_eq!(
+            picked
+                .iter()
+                .map(|a| a.site_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["sbpt"]
+        );
+    }
+
+    fn work_item(key: &str, rep: &str, members: &[&str]) -> WorkItem {
+        WorkItem {
+            key: key.to_string(),
+            name: key.to_string(),
+            rep_hash: rep.to_string(),
+            save_path: String::new(),
+            category: None,
+            hashes: members.iter().map(|s| s.to_string()).collect(),
+            tracker_hosts: vec![],
+            source: None,
+            forbid_reseed: false,
+        }
+    }
+
+    #[test]
+    fn prefetch_keyed_includes_cached_member_pieces() {
+        // sbpt 实测场景：rep 是 luckpt 重新打包（ph-rep），站内已有种与另一成员
+        // （ph-orig，已缓存）pieces 一致——只查 rep 会漏，缓存成员必须入批
+        let cache: HashMap<String, String> = [
+            ("aaa".to_string(), "ph-orig".to_string()),
+            ("bbb".to_string(), "ph-rep".to_string()),
+        ]
+        .into_iter()
+        .collect();
+        let items = vec![work_item("m:1", "bbb", &["aaa", "BBB", "ccc"])];
+        let mut exported: Vec<String> = Vec::new();
+        let keyed = prefetch_keyed(&items, |h, allow_export| {
+            if allow_export {
+                exported.push(h.to_string());
+            }
+            cache.get(&h.to_lowercase()).cloned()
+        });
+        assert_eq!(
+            keyed,
+            vec![
+                ("m:1".to_string(), "ph-rep".to_string()),
+                ("m:1".to_string(), "ph-orig".to_string()),
+            ]
+        );
+        // 只有 rep 允许导出现算；未缓存成员（ccc）不触发 qB 导出
+        assert_eq!(exported, vec!["bbb".to_string()]);
+    }
+
+    #[test]
+    fn prefetch_keyed_dedups_and_caps_contents() {
+        let cache: HashMap<String, String> = [
+            ("a".to_string(), "ph-shared".to_string()),
+            ("b".to_string(), "ph-shared".to_string()),
+        ]
+        .into_iter()
+        .collect();
+        let items = vec![work_item("m:1", "a", &["a"]), work_item("m:2", "b", &["b"])];
+        let keyed = prefetch_keyed(&items, |h, _| cache.get(h).cloned());
+        assert_eq!(keyed.len(), 1, "同 ph 去重，不重复占批量名额");
+        let many: Vec<WorkItem> = (0..150)
+            .map(|i| {
+                let h = format!("h{i}");
+                work_item(&format!("m:{i}"), &h, &[h.as_str()])
+            })
+            .collect();
+        let keyed = prefetch_keyed(&many, |h, _| Some(format!("ph-{h}")));
+        assert_eq!(keyed.len(), 100, "至多 100 段内容");
+    }
 }

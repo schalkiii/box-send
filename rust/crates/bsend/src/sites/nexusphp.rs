@@ -378,6 +378,7 @@ impl NexusPhp {
     pub fn download_torrent(&self, page: &TorrentPage, referer: &str) -> Result<Vec<u8>> {
         let resp = self.get(&page.download_url, referer)?;
         let status = resp.status().as_u16();
+        let final_url = resp.url().clone();
         let data = resp.bytes().unwrap_or_default().to_vec();
         if status == 404 {
             // 401/403 已在 get 里按 cookie 失效拦下
@@ -394,6 +395,16 @@ impl NexusPhp {
             let text = String::from_utf8_lossy(&data).to_string();
             if let Some(notice) = block_notice(&text) {
                 return Err(anyhow!("站点限流（{notice}）：{}", page.download_url));
+            }
+            // 首次下载确认页：POST 确认表单一次（站点记会话标记），再重试原下载链接
+            if let Some((action, fields)) = parse_download_notice_form(&text, &final_url) {
+                if self.post_form(&action, &fields, final_url.as_str()).is_ok() {
+                    let retry = self.get(&page.download_url, referer)?;
+                    let retry_data = retry.bytes().unwrap_or_default().to_vec();
+                    if bencode::info_hash_v1(&retry_data).is_some() {
+                        return Ok(retry_data);
+                    }
+                }
             }
             let notice = download_notice(&text);
             let head: String = text.chars().take(80).collect();
@@ -422,8 +433,10 @@ pub fn error_is_rate_limited(e: &anyhow::Error) -> bool {
 /// NexusPHP 站的「限流 / 拦截」页：IRL 见 hdsky——HTTP 200、正文却是
 /// `<title>403</title>` +「请求过于频繁，限制访问间隔 60 秒/次」。
 /// 这种页绝不能当「站内没有」（会把整站记成 7/30 天负缓存），必须冒成错误并让该站退避。
+/// JS 人机挑战页（Cloudflare 等）同理：200 + 挑战脚本、没有任何结果锚点，
+/// 判重若当成 Miss 会放行重复上传（sbpt 实测靠 existed 兜底才拦住），一律冒错。
 pub fn block_notice(html: &str) -> Option<&'static str> {
-    const MARKERS: [&str; 8] = [
+    const MARKERS: &[&str] = &[
         "请求过于频繁",
         "限制访问间隔",
         "访问过于频繁",
@@ -432,6 +445,15 @@ pub fn block_notice(html: &str) -> Option<&'static str> {
         "Access Denied",
         "你已被禁止",
         "账号已被禁用",
+        // Cloudflare / 同类 WAF 的 JS 挑战页（正常 NexusPHP 页面不会出现这些串）
+        "<title>Just a moment",
+        "challenge-platform",
+        "cf-chl",
+        "cf-turnstile",
+        "Verify you are human",
+        "Checking your browser",
+        "DDoS-Guard",
+        "人机验证",
     ];
     for m in MARKERS {
         if html.contains(m) {
@@ -1038,6 +1060,62 @@ pub fn decode_entities(s: &str) -> String {
     replace_numeric_entities(&out)
 }
 
+/// 单趟实体解码：从左到右每个实体只解一次（`&amp;lt;` → `&lt;` 而不是 `<`）。
+/// 还原「被整体转义一层」的 HTML 简介用；`decode_entities` 的逐表 replace 会把
+/// `&amp;` 先解掉造成二次解码，不能用于这种场景。
+pub fn decode_entities_once(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(i) = rest.find('&') {
+        out.push_str(&rest[..i]);
+        let after = &rest[i..];
+        if let Some(e) = after.find(';').filter(|&e| e <= 12) {
+            let ent = &after[..=e];
+            if let Some(v) = named_entity(ent).or_else(|| numeric_entity(ent)) {
+                out.push_str(&v);
+                rest = &after[e + 1..];
+                continue;
+            }
+        }
+        out.push('&');
+        rest = &after[1..];
+    }
+    out.push_str(rest);
+    out
+}
+
+fn named_entity(ent: &str) -> Option<String> {
+    let v = match ent {
+        "&nbsp;" => " ",
+        "&amp;" => "&",
+        "&lt;" => "<",
+        "&gt;" => ">",
+        "&quot;" => "\"",
+        "&#039;" | "&#39;" | "&apos;" => "'",
+        "&mdash;" => "—",
+        "&ndash;" => "–",
+        "&hellip;" => "…",
+        "&laquo;" => "«",
+        "&raquo;" => "»",
+        "&rarr;" => "→",
+        "&larr;" => "←",
+        "&plusmn;" => "±",
+        "&times;" => "×",
+        _ => return None,
+    };
+    Some(v.to_string())
+}
+
+fn numeric_entity(ent: &str) -> Option<String> {
+    let body = ent.strip_prefix("&#")?.strip_suffix(';')?;
+    let code = if let Some(hex) = body.strip_prefix(['x', 'X']) {
+        u32::from_str_radix(hex, 16).ok()?
+    } else {
+        body.parse::<u32>().ok()?
+    };
+    char::from_u32(code).map(|c| c.to_string())
+}
+
 fn replace_numeric_entities(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut rest = s;
@@ -1057,6 +1135,46 @@ fn replace_numeric_entities(s: &str) -> String {
     }
     out.push_str(rest);
     out
+}
+
+/// NexusPHP 首次下载确认页（downloadnotice.php?type=firsttime）：提取确认表单。
+/// 标记是提交按钮 `id="continuedownload"`（NexusPHP 通用）；`action="?"` 表示
+/// POST 回当前页（final_url）。返回 (提交地址, 字段表)；checkbox/radio 只取 checked 的。
+/// POST 确认后站点记会话标记，再请求原下载链接即回种子。
+pub fn parse_download_notice_form(
+    html: &str,
+    final_url: &Url,
+) -> Option<(String, Vec<(String, String)>)> {
+    let doc = Html::parse_document(html);
+    let form_sel = Selector::parse("form").ok()?;
+    let input_sel = Selector::parse("input").ok()?;
+    for form in doc.select(&form_sel) {
+        if !form.inner_html().contains("continuedownload") {
+            continue;
+        }
+        let action = form.value().attr("action").unwrap_or("");
+        let target = if action.is_empty() || action == "?" {
+            final_url.clone()
+        } else {
+            final_url.join(action).ok()?
+        };
+        let mut fields = Vec::new();
+        for input in form.select(&input_sel) {
+            let Some(name) = input.value().attr("name") else {
+                continue;
+            };
+            let ty = input.value().attr("type").unwrap_or("text").to_lowercase();
+            if (ty == "checkbox" || ty == "radio") && input.value().attr("checked").is_none() {
+                continue;
+            }
+            fields.push((
+                name.to_string(),
+                input.value().attr("value").unwrap_or("").to_string(),
+            ));
+        }
+        return Some((target.to_string(), fields));
+    }
+    None
 }
 
 /// 下载 .torrent 却拿回 HTML 提示页时，提取页面正文里最像原因的一句话（待审核/未通过/请登录…）。
@@ -1146,6 +1264,31 @@ fn origin_of(url: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn entities_decode_single_pass() {
+        // 存储层整体转义一层的简介：一趟解码还原成裸 HTML
+        assert_eq!(
+            decode_entities_once(
+                "&lt;fieldset&gt;&lt;legend&gt;摘&lt;/legend&gt;x &amp; y&lt;/fieldset&gt;"
+            ),
+            "<fieldset><legend>摘</legend>x & y</fieldset>"
+        );
+        // 二次转义只解一层：&amp;quot; → &quot;，不得变成裸引号
+        assert_eq!(
+            decode_entities_once("&amp;quot;&amp;lt;br&amp;gt;"),
+            "&quot;&lt;br&gt;"
+        );
+        // 数字实体十进制/十六进制都认
+        assert_eq!(decode_entities_once("&#65;&#x42;&#x26;"), "AB&");
+        // 未知实体与孤立 & 原样保留
+        assert_eq!(
+            decode_entities_once("&unknownthing; a & b &#zz;"),
+            "&unknownthing; a & b &#zz;"
+        );
+        // 裸 HTML 不受影响
+        assert_eq!(decode_entities_once("<b>已发布</b>"), "<b>已发布</b>");
+    }
 
     #[test]
     fn normalize_and_fold() {
@@ -1255,6 +1398,12 @@ mod tests {
         assert!(block_notice("<html><title>403 Forbidden</title></html>").is_some());
         // 正常的结果页不能被误判成拦截页
         assert!(block_notice("<html><title>搜索结果</title><p>没有种子</p></html>").is_none());
+        // JS 人机挑战页（sbpt 实测判重曾把这类页当 Miss）：必须认成拦截
+        let cf = "<html><head><title>Just a moment...</title></head><body><script src=\"/cdn-cgi/challenge-platform/h/b/orchestrate/chl_page/v1\"></script></body></html>";
+        assert!(block_notice(cf).is_some());
+        assert!(block_notice("<div class=\"cf-turnstile\"></div>").is_some());
+        // 电影名撞「Just a moment」不算挑战页（只认 title 里的）
+        assert!(block_notice("<a href=\"details.php?id=1\">Just a Moment 2024</a>").is_none());
         // 限流页转成的错误要让调用方走退避
         let e = anyhow!("站点限流（请求过于频繁）：https://hdsky.me/torrents.php");
         assert!(error_is_rate_limited(&e));
@@ -1366,5 +1515,39 @@ mod tests {
         assert_eq!(url_encode("Black Lagoon"), "Black%20Lagoon");
         assert_eq!(url_encode("a.b-c_d~e"), "a.b-c_d~e");
         assert_eq!(url_encode("黑礁"), "%E9%BB%91%E7%A4%81");
+    }
+
+    #[test]
+    fn download_notice_form_parsed() {
+        // sbpt 实测：action="?" POST 回当前页；checked 的 hidenotice 入字段
+        let html = r#"<html><body><form action="?" method="post">
+            <input type="checkbox" name="hidenotice" id="hidenotice" value="1" checked="checked" />
+            <input type="hidden" name="id" value="21653" />
+            <input type="hidden" name="type" value="firsttime" />
+            <input type="checkbox" name="unchecked" value="9" />
+            <input type="submit" name="submit" id="continuedownload" value="下載種子檔案" />
+        </form></body></html>"#;
+        let url = Url::parse("https://sbpt.link/downloadnotice.php?torrentid=21653&type=firsttime")
+            .unwrap();
+        let (action, fields) = parse_download_notice_form(html, &url).unwrap();
+        assert_eq!(action, url.as_str());
+        assert!(fields.contains(&("hidenotice".to_string(), "1".to_string())));
+        assert!(fields.contains(&("id".to_string(), "21653".to_string())));
+        assert!(fields.contains(&("type".to_string(), "firsttime".to_string())));
+        assert!(fields.contains(&("submit".to_string(), "下載種子檔案".to_string())));
+        assert!(
+            !fields.iter().any(|(k, _)| k == "unchecked"),
+            "未勾选的 checkbox 不提交"
+        );
+        // 相对 action 按当前页解析
+        let html2 = html.replace("action=\"?\"", "action=\"confirm.php\"");
+        let (action2, _) = parse_download_notice_form(&html2, &url).unwrap();
+        assert_eq!(action2, "https://sbpt.link/confirm.php");
+        // 没有确认按钮的页面不当确认页
+        assert!(parse_download_notice_form(
+            "<form action=\"?\"><input name=\"id\" value=\"1\"></form>",
+            &url
+        )
+        .is_none());
     }
 }

@@ -4,6 +4,7 @@
 > 最近一次实测结论与原因 / pieces-hash 支持 / cookie 条目数 / 关站或人工备注」。
 >
 > **数据来源**（全部可复现）：
+>
 > - 配置：`boxsend.json`（`sourceSites[].enabled`、`assist.pausedSites`、`assist.reseedPausedSites`、`statusNote`）
 > - 实测：`dataDir/formcheck.json`（`bsend formcheck` 每次运行自动落盘）
 > - pieces：`dataDir/pieces-cache.json`（能力表，实测与运行时学习）
@@ -14,7 +15,7 @@
 > 本文件头部与统计为静态文字；表格永远以命令输出为准。
 >
 > 统计：147 站｜实测 齐 54 / 缺口 4 / 失败 46 / 未测 43；
-> pieces 支持 52 / 不支持 20 / 未测 75。
+> pieces 支持 53 / 不支持 20 / 未测 74。
 
 | 站点 | 名称 | 域名 | 框架 | 启用 | 全停 | 停转种 | 实测 | 实测原因 | pieces | cookie | 备注 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -121,7 +122,7 @@
 | xdy | 修道院 | xdypt.vip | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 1 |  |
 | xingtan | 杏坛 | xingtan.one | NexusPHP | 是 | — | — | ok | source_sel[16] 未选 | 未测 | 5 |  |
 | xingyunge | 星陨阁 | pt.xingyungept.org | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 1 |  |
-| ziran | 自然 | naturept.top | NexusPHP | 是 | — | — | ok | type 未选 | 未测 | 2 |  |
+| ziran | 自然 | naturept.top | NexusPHP | 是 | — | — | ok | type 未选 | ok | 2 |  |
 | aither | Aither | aither.cc | custom | — | — | — | 未测 |  | 未测 | 0 |  |
 | alpharatio | AlphaRatio | alpharatio.cc | Gazelle | — | — | — | 未测 |  | 未测 | 0 |  |
 | animez | AnimeZ | animez.to | Gazelle | — | — | — | 未测 |  | 未测 | 0 |  |
@@ -165,6 +166,7 @@
 | yinghua | 樱花 | pt.ying.us.kg | NexusPHP | — | 是 | — | 未测 |  | 未测 | 0 | 已关站（savept.icu 2026-09-20）：域名 pt.ying.us.kg 已无法解析 |
 | yzyy | YZYY | yzyy.org | Discuz | — | — | — | 未测 |  | 未测 | 0 |  |
 | zhuque | 朱雀 | zhuque.in | TNode | — | — | — | 未测 |  | 未测 | 1 |  |
+
 ## 门禁演练（只读，不上传种子）
 
 `bsend gatecheck` 逐站构造字段 + 官方预审（有该接口的站）+ G1–G5 门禁矩阵，
@@ -211,5 +213,6 @@
 | tokyo | error | — | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://www.tokyo-manga.top/upload.php |
 | xingwan | error | — | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://xingwan.cc/upload.php |
 | hdcity | block | 站点无预审 | 质量下拉有缺口：简介为空；MediaInfo 无处可落 |
+
 通过门禁 ≠ 可立即发种：`assist.publishEnabled` 默认 false，只有用户显式开启、站点在
 `autoReseedSites` 白名单内、且日限额未用完时才会真实上传。
