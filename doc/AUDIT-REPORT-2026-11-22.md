@@ -755,3 +755,12 @@ DOC-M3），**仍待修 15 条（高 0 / 中 5 / 低 10）**。已修条目在 �
   hdcity（JS 驱动上传表单，已加入 `reseedPausedSites`）、
   ptfans/musopia（站点无 HDTV 媒介选项或音乐站样本不适配）、
   muxuege（AAC 同名多选项，留空不猜）。
+
+### 8.4 收尾更正与清理待确认
+
+- `1.webp` **不是**无用资源：`scripts/make-app.sh` 用它生成 macOS 应用图标，
+  2026-11-21 报告中的「待确认删除」结论作废。
+- 清理候选（未动，等用户确认）：根 `README_副本.md`（49 KB）、
+  `%LOCALAPPDATA%\BoxSend\startup.log`（184 MB）、
+  `coverage.json.bak-*` 19 份（350.5 MB，建议只留最近 2 份）。
+- 明日真发交接见 `doc/NIGHT-SHIFT-2026-11-22.md`。
