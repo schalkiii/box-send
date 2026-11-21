@@ -90,6 +90,9 @@ pub struct CoverageSettings {
     pub verify_poll_sec: u64,
     /// 站内严格查重没命中时换宽松查询词再问一次
     pub relaxed_retry_search: bool,
+    /// 名字检索兜底：内容名没命中时，再试最大的成员种子名（合集/目录名与站点标题
+    /// 不一致的实机漏检，如 Coraline）。只多一次检索，仍受检索预算与站间隔约束。
+    pub member_name_fallback: bool,
     /// 暂停的站点：这轮不去敲它们的门
     pub paused_sites: Vec<String>,
     /// 暂不参与**转种/发种**的站点（仍参与辅种）：账号无发布权限、上传界面 v1 不支持的站。
@@ -143,6 +146,7 @@ impl Default for CoverageSettings {
             verify_wait_sec: 600,
             verify_poll_sec: 10,
             relaxed_retry_search: true,
+            member_name_fallback: true,
             paused_sites: Vec::new(),
             reseed_paused_sites: Vec::new(),
             media_info_dll: None,
@@ -325,6 +329,7 @@ impl Config {
             verify_poll_sec: v_i64(&assist, "verifyPollSec", d.verify_poll_sec as i64).max(0)
                 as u64,
             relaxed_retry_search: v_bool(&assist, "relaxedRetrySearch", d.relaxed_retry_search),
+            member_name_fallback: v_bool(&assist, "memberNameFallback", d.member_name_fallback),
             paused_sites: v_str_list(&assist, "pausedSites"),
             reseed_paused_sites: v_str_list(&assist, "reseedPausedSites"),
             media_info_dll: assist

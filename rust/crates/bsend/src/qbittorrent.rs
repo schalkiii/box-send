@@ -411,6 +411,44 @@ impl QBittorrent {
         Ok(out)
     }
 
+    /// 批量取成员种子的 (名字, 大小)：辅种名字兜底检索用（一次请求）。
+    /// 读不到返回空表——调用方按「没有兜底候选」处理，不影响主流程。
+    pub fn torrent_names(&self, hashes: &[String]) -> Vec<(String, i64)> {
+        if hashes.is_empty() {
+            return Vec::new();
+        }
+        let resp = self
+            .client
+            .get(format!(
+                "{}/api/v2/torrents/info?hashes={}",
+                self.base_url,
+                hashes.join("|")
+            ))
+            .headers(self.referer_headers())
+            .send()
+            .ok();
+        let Some(resp) = resp else { return Vec::new() };
+        if resp.status().as_u16() != 200 {
+            return Vec::new();
+        }
+        let Ok(text) = resp.text() else {
+            return Vec::new();
+        };
+        let Ok(list) = serde_json::from_str::<Value>(&text) else {
+            return Vec::new();
+        };
+        let Some(arr) = list.as_array() else {
+            return Vec::new();
+        };
+        arr.iter()
+            .filter_map(|t| {
+                let name = t.get("name")?.as_str()?.to_string();
+                let size = t.get("size").and_then(|v| v.as_i64()).unwrap_or(0);
+                Some((name, size))
+            })
+            .collect()
+    }
+
     /// 单条种子的落地路径（qB 的 content_path：多文件=内容根目录，单文件=文件全路径）
     pub fn torrent_content_path(&self, hash: &str) -> Option<String> {
         self.torrent_info(hash).and_then(|v| {

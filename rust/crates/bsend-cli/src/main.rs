@@ -1097,28 +1097,20 @@ fn cmd_sites(cfg: &Config, as_json: bool, as_md: bool) -> Result<()> {
             }
         }
     }
-    // cookie 条目数（按 host；cookies.json 与 boxsend.json 同目录）
+    // cookie 条目数：用 Config 里已合并（含 --cookiecloud）且未过期的视图，
+    // 不再直读 cookies.json——否则 --cookiecloud 场景下报表与真实运行态不一致
+    let now_ts = bsend::coverage::now_unix() as f64;
     let mut cookies: BTreeMap<String, usize> = BTreeMap::new();
-    let ck_path = cfg
-        .config_path
-        .parent()
-        .map(|p| p.join("cookies.json"))
-        .unwrap_or_else(|| PathBuf::from("cookies.json"));
-    if let Ok(text) = std::fs::read_to_string(&ck_path) {
-        if let Ok(v) = serde_json::from_str::<Value>(&text) {
-            let obj = v
-                .get("cookies")
-                .and_then(|c| c.as_object())
-                .or_else(|| v.as_object());
-            if let Some(obj) = obj {
-                for (k, val) in obj {
-                    cookies.insert(
-                        k.to_lowercase().trim_start_matches("www.").to_string(),
-                        val.as_array().map(|a| a.len()).unwrap_or(0),
-                    );
-                }
-            }
-        }
+    for (host, list) in &cfg.cookies {
+        let alive = list
+            .iter()
+            .filter(|c| !c.value.is_empty())
+            .filter(|c| !c.expiration_date.is_some_and(|e| e > 0.0 && e < now_ts))
+            .count();
+        cookies.insert(
+            host.to_lowercase().trim_start_matches("www.").to_string(),
+            alive,
+        );
     }
     let paused: HashSet<String> = cfg.coverage.paused_sites.iter().cloned().collect();
     let rpaused: HashSet<String> = cfg.coverage.reseed_paused_sites.iter().cloned().collect();
@@ -1140,14 +1132,9 @@ fn cmd_sites(cfg: &Config, as_json: bool, as_md: bool) -> Result<()> {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        let host = url
-            .split("://")
-            .nth(1)
-            .and_then(|s| s.split('/').next())
-            .unwrap_or("")
-            .to_lowercase()
-            .trim_start_matches("www.")
-            .to_string();
+        let host = bsend::url_host(&url)
+            .map(|h| h.trim_start_matches("www.").to_string())
+            .unwrap_or_default();
         let fw = e
             .get("framework")
             .and_then(|v| v.as_str())

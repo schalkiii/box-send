@@ -676,6 +676,7 @@
     "verifyWaitSec": 600,
     "verifyPollSec": 10,
     "relaxedRetrySearch": true,
+    "memberNameFallback": true,
     "pausedSites": [],
     "reseedPausedSites": [],
     "mediaInfoDll": "",

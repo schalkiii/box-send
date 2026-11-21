@@ -864,6 +864,27 @@ fn process_item(
             }
         }
     }
+    // 名字兜底：内容名常是合集/目录名，站点标题可能是某个成员种子的名字
+    // （Coraline 实机：内容名 "Coraline (2009) - BD50..."，站点标题是成员种名）。
+    // 只在多成员内容上补一次检索，且照常领号——预算/站间隔不变。
+    if found.is_none() && cov.member_name_fallback && item.hashes.len() > 1 {
+        let members = qb.torrent_names(&item.hashes);
+        if let Some(alt) = pick_member_fallback(&item.name, &members) {
+            match adapter.search(&alt, "", false, "", &mut gate) {
+                Ok(SearchOutcome::Hit(h)) => found = Some(h),
+                Ok(SearchOutcome::Miss) => {}
+                Ok(SearchOutcome::BudgetExhausted) => {
+                    return skipped("本轮检索预算用完（成员名兜底没跑），下次接着跑")
+                }
+                Err(e) => {
+                    if crate::sites::nexusphp::error_is_rate_limited(&e) {
+                        throttle.note_rate_limited(site_id);
+                    }
+                    return done(CoverageStatus::Failed, format!("成员名兜底检索失败：{e:#}"));
+                }
+            }
+        }
+    }
     let Some(hit) = found else {
         // ---- 转种臂（站内没有）----
         return reseed_arm(
@@ -923,6 +944,17 @@ fn process_item(
         done,
         done_url,
     )
+}
+
+/// 名字兜底候选：成员种子里与内容名不同、体积最大的那个。
+/// 内容名常是合集/目录名，站点标题却可能是某个成员种子的名字；只挑一个，
+/// 避免为不可控数量的成员名反复消耗检索预算。
+fn pick_member_fallback(content_name: &str, members: &[(String, i64)]) -> Option<String> {
+    members
+        .iter()
+        .filter(|(n, _)| !n.trim().is_empty() && n != content_name)
+        .max_by_key(|(_, size)| *size)
+        .map(|(n, _)| n.clone())
 }
 
 /// 判定 → 布局 → 推种（快速通道与名字检索共用同一条尾巴）
@@ -1409,6 +1441,25 @@ fn fingerprint_of(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn member_name_fallback_picks_largest_different_name() {
+        let members = vec![
+            ("合集名".to_string(), 10),
+            ("Coraline.2009.1080p...PIXELPOLICE".to_string(), 900),
+            ("花絮.mkv".to_string(), 5),
+        ];
+        assert_eq!(
+            pick_member_fallback("合集名", &members).as_deref(),
+            Some("Coraline.2009.1080p...PIXELPOLICE")
+        );
+        // 全部与内容名相同 / 空表 → 没有候选，不发多余检索
+        assert_eq!(
+            pick_member_fallback("合集名", &[("合集名".to_string(), 1)]),
+            None
+        );
+        assert_eq!(pick_member_fallback("x", &[]), None);
+    }
 
     fn adapter(id: &str, url: &str) -> Arc<NexusPhp> {
         Arc::new(NexusPhp::new(id, id, url, None, None).unwrap())

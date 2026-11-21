@@ -52,17 +52,26 @@ pub struct AutopostSummary {
     pub posted: usize,
 }
 
-/// 跑一遍自动发种。审计落在索引同目录 auto-audit.jsonl；posted 按 UTC 日计限额。
+/// 单草稿发布执行器。生产路径是 `reseed::run_reseed`；测试注入假实现即可
+/// 在不碰真实站点的前提下验证白名单/日限额/退避/审计等编排安全闸。
+pub type ReseedRunner<'a> = dyn FnMut(
+        &Config,
+        &reseed::ReseedRequest,
+        &mut ContentIndex,
+        &mut dyn FnMut(&str),
+        Option<&crate::throttle::SiteThrottle>,
+    ) -> Result<String>
+    + 'a;
+
+/// 跑一遍自动发种。审计落在索引同目录 auto-audit.jsonl；posted 按北京时间日计限额。
 pub fn run_autopost(
     cfg: &Config,
     opts: &AutopostOptions,
     emit: &mut impl FnMut(AutopostEvent),
 ) -> Result<AutopostSummary> {
-    let mut summary = AutopostSummary::default();
     if !opts.dry_run {
         crate::config::ensure_publish_enabled(cfg)?;
     }
-    let mut index = ContentIndex::load(&cfg.coverage_state_path());
     let qb = QBittorrent::new(
         &cfg.downloader.url,
         &cfg.downloader.username,
@@ -72,6 +81,22 @@ pub fn run_autopost(
         "连不上下载器（boxsend.json 的 downloader/assistDownloaderID 指的那台）"
     })?;
     emit(AutopostEvent::Log(hello));
+    run_autopost_with(cfg, opts, emit, &mut |cfg, req, index, log, throttle| {
+        reseed::run_reseed(cfg, &qb, req, index, log, throttle)
+    })
+}
+
+/// `run_autopost` 的编排主体（不含下载器连接与总闸）：调用方负责把 runner 接到
+/// 真实 `run_reseed` 或测试假实现上。公开给测试与 GUI 复用。
+#[doc(hidden)]
+pub fn run_autopost_with(
+    cfg: &Config,
+    opts: &AutopostOptions,
+    emit: &mut impl FnMut(AutopostEvent),
+    runner: &mut ReseedRunner<'_>,
+) -> Result<AutopostSummary> {
+    let mut summary = AutopostSummary::default();
+    let mut index = ContentIndex::load(&cfg.coverage_state_path());
     let report = CoverageReport::build(&index, &cfg.sites, 20, now_unix(), "");
     if report.drafts.is_empty() {
         emit(AutopostEvent::Log(
@@ -249,9 +274,8 @@ pub fn run_autopost(
             });
             continue;
         }
-        match reseed::run_reseed(
+        match runner(
             cfg,
-            &qb,
             &req,
             &mut index,
             &mut |l| {
@@ -459,5 +483,273 @@ mod tests {
         );
         let (n, _) = parse_audit(&text_before, before);
         assert_eq!(n.get("sbpt").copied().unwrap_or(0), 1);
+    }
+
+    // ---------------- 编排层安全闸（注入式，零网络） ----------------
+
+    fn temp_dir(name: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("bsend-autopost-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// 造一个带 N 条 sbpt 草稿的索引 + 对应配置；daily_limit 由调用方定
+    fn cfg_with_drafts(dir: &std::path::Path, daily_limit: u32, drafts: usize) -> Config {
+        let mut rules = std::collections::BTreeMap::new();
+        rules.insert(
+            "sbpt".to_string(),
+            crate::gates::SiteRules {
+                daily_limit: Some(daily_limit),
+                ..Default::default()
+            },
+        );
+        let cfg = Config {
+            config_path: dir.join("boxsend.json"),
+            data_dir: Some(dir.to_path_buf()),
+            downloader: crate::config::DownloaderSettings {
+                url: "http://127.0.0.1:1".into(),
+                username: "u".into(),
+                password: "p".into(),
+                save_path: None,
+                category: None,
+                default_up_limit: 0,
+                site_up_limits: std::collections::HashMap::new(),
+            },
+            sites: vec![crate::config::SiteConf {
+                id: "sbpt".into(),
+                name: "SBPT".into(),
+                url: "https://sbpt.link/".into(),
+                framework: crate::sites::Framework::NexusPHP,
+                search_url: None,
+                api_key: None,
+                announce_hosts: vec!["sbpt.link".into()],
+            }],
+            coverage: crate::config::CoverageSettings {
+                auto_reseed_sites: vec!["sbpt".into()],
+                reseed_publish_enabled: true,
+                reseed_rules: rules,
+                per_site_interval_sec: 0.0,
+                jitter_sec: 0.0,
+                ..Default::default()
+            },
+            user_agent: "bsend-test".into(),
+            cookies: std::collections::HashMap::new(),
+            cookie_cloud: None,
+        };
+        let mut index = crate::index::ContentIndex::load(&cfg.coverage_state_path());
+        for i in 0..drafts {
+            let key = format!("m:test{i:016x}");
+            index.contents.insert(
+                key,
+                crate::index::ContentEntry {
+                    name: format!("Draft {i}"),
+                    total_size: 1,
+                    file_count: 1,
+                    manifest_digest: "0".repeat(16),
+                    torrents: std::collections::BTreeMap::from([(
+                        "a".repeat(40),
+                        crate::index::TorrentMeta {
+                            save_path: "/data".into(),
+                            category: None,
+                            last_seen: 0,
+                            tracker_hosts: vec![],
+                            hash_v2: None,
+                            added_on: 0,
+                        },
+                    )]),
+                    tracker_hosts: vec![],
+                    first_seen: 0,
+                    gone_since: None,
+                    coverage: std::collections::BTreeMap::from([(
+                        "sbpt".to_string(),
+                        crate::index::SiteCoverage {
+                            status: crate::index::CoverageStatus::ReseedDraft,
+                            at: 0,
+                            url: None,
+                            note: None,
+                            verify_hash: None,
+                        },
+                    )]),
+                    source: Some(crate::index::SourceRecord {
+                        site_id: "luckpt".into(),
+                        detail_url: "https://pt.luckpt.de/details.php?id=1".into(),
+                        resolved_at: 0,
+                        miss_at: None,
+                    }),
+                    forbid_reseed: false,
+                },
+            );
+        }
+        index.save().unwrap();
+        cfg
+    }
+
+    fn collect_logs<'a>(logs: &'a mut Vec<String>) -> impl FnMut(AutopostEvent) + 'a {
+        move |e| {
+            if let AutopostEvent::Log(m) = e {
+                logs.push(m);
+            }
+        }
+    }
+
+    #[test]
+    fn autopost_skips_sites_outside_whitelist() {
+        let dir = temp_dir("whitelist");
+        let mut cfg = cfg_with_drafts(&dir, 2, 1);
+        cfg.coverage.auto_reseed_sites.clear();
+        let mut called = 0;
+        let mut runner = |_: &Config,
+                          _: &reseed::ReseedRequest,
+                          _: &mut ContentIndex,
+                          _: &mut dyn FnMut(&str),
+                          _: Option<&crate::throttle::SiteThrottle>| {
+            called += 1;
+            Ok("https://sbpt.link/details.php?id=1".to_string())
+        };
+        let mut logs = Vec::new();
+        let summary = run_autopost_with(
+            &cfg,
+            &AutopostOptions {
+                dry_run: false,
+                limit: None,
+                sites: None,
+            },
+            &mut collect_logs(&mut logs),
+            &mut runner,
+        )
+        .unwrap();
+        assert_eq!(called, 0, "空白名单不能调用发布器");
+        assert_eq!(summary.posted, 0);
+        assert!(logs.iter().any(|l| l.contains("不在自动发种白名单")));
+    }
+
+    #[test]
+    fn autopost_daily_limit_preskips_without_touching_site() {
+        let dir = temp_dir("daily");
+        let cfg = cfg_with_drafts(&dir, 1, 2);
+        // 今日已发 1 条（北京时间日界由 parse_audit 负责，这里直接写 now）
+        let audit = audit_path_of(&cfg);
+        std::fs::write(
+            &audit,
+            format!(
+                "{{\"at\":{},\"site\":\"sbpt\",\"key\":\"m:x\",\"result\":\"posted\"}}\n",
+                now_unix()
+            ),
+        )
+        .unwrap();
+        let mut called = 0;
+        let mut runner = |_: &Config,
+                          _: &reseed::ReseedRequest,
+                          _: &mut ContentIndex,
+                          _: &mut dyn FnMut(&str),
+                          _: Option<&crate::throttle::SiteThrottle>| {
+            called += 1;
+            Ok(String::new())
+        };
+        let mut logs = Vec::new();
+        let summary = run_autopost_with(
+            &cfg,
+            &AutopostOptions {
+                dry_run: false,
+                limit: None,
+                sites: None,
+            },
+            &mut collect_logs(&mut logs),
+            &mut runner,
+        )
+        .unwrap();
+        assert_eq!(called, 0, "日限额已满不能调用发布器");
+        assert_eq!(summary.posted, 0);
+        assert!(logs.iter().any(|l| l.contains("今日已自动发")));
+    }
+
+    #[test]
+    fn autopost_backoff_skips_recently_blocked_draft() {
+        let dir = temp_dir("backoff");
+        let cfg = cfg_with_drafts(&dir, 2, 1);
+        let key = "m:test0000000000000000";
+        let audit = audit_path_of(&cfg);
+        std::fs::write(
+            &audit,
+            format!(
+                "{{\"at\":{},\"site\":\"sbpt\",\"key\":\"{key}\",\"result\":\"blocked\"}}\n",
+                now_unix() - 3600
+            ),
+        )
+        .unwrap();
+        let mut called = 0;
+        let mut runner = |_: &Config,
+                          _: &reseed::ReseedRequest,
+                          _: &mut ContentIndex,
+                          _: &mut dyn FnMut(&str),
+                          _: Option<&crate::throttle::SiteThrottle>| {
+            called += 1;
+            Ok(String::new())
+        };
+        let mut logs = Vec::new();
+        let _ = run_autopost_with(
+            &cfg,
+            &AutopostOptions {
+                dry_run: false,
+                limit: None,
+                sites: None,
+            },
+            &mut collect_logs(&mut logs),
+            &mut runner,
+        )
+        .unwrap();
+        assert_eq!(called, 0, "退避期内不能调用发布器");
+        assert!(logs.iter().any(|l| l.contains("退避期")));
+    }
+
+    #[test]
+    fn autopost_site_filter_and_limit_stop_before_site_contact() {
+        let dir = temp_dir("filter");
+        let cfg = cfg_with_drafts(&dir, 2, 2);
+        let mut called = 0;
+        let mut runner = |_: &Config,
+                          _: &reseed::ReseedRequest,
+                          _: &mut ContentIndex,
+                          _: &mut dyn FnMut(&str),
+                          _: Option<&crate::throttle::SiteThrottle>| {
+            called += 1;
+            Ok(String::new())
+        };
+        // 站点过滤：只看 luckpt，草稿全是 sbpt
+        let _ = run_autopost_with(
+            &cfg,
+            &AutopostOptions {
+                dry_run: false,
+                limit: None,
+                sites: Some(vec!["luckpt".into()]),
+            },
+            &mut |_| {},
+            &mut runner,
+        )
+        .unwrap();
+        // limit 0：立即停
+        let _ = run_autopost_with(
+            &cfg,
+            &AutopostOptions {
+                dry_run: false,
+                limit: Some(0),
+                sites: None,
+            },
+            &mut |_| {},
+            &mut runner,
+        )
+        .unwrap();
+        assert_eq!(called, 0, "过滤/限额为零时不能碰站点");
+    }
+
+    #[test]
+    fn append_audit_fails_closed_on_unwritable_path() {
+        let dir = temp_dir("audit-fail");
+        let blocker = dir.join("blocker");
+        std::fs::write(&blocker, "x").unwrap();
+        // 父路径是文件 → 目录创建/打开必然失败，必须把错误 surface 出来
+        let path = blocker.join("auto-audit.jsonl");
+        assert!(append_audit(&path, serde_json::json!({"at": 1})).is_err());
     }
 }
