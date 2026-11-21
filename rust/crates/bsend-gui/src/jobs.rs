@@ -103,6 +103,9 @@ pub(crate) fn run_round_job(cfg: &Config, opts: RoundOptions, tx: &Sender<GuiEve
             missing.join("、")
         )));
     })?;
+    if let Some(n) = cfg.skipped_notice() {
+        let _ = tx.send(GuiEvent::Log(n));
+    }
 
     let mut index = ContentIndex::load(&cfg.coverage_state_path());
     let report = run_round(

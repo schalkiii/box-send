@@ -199,14 +199,8 @@ impl CoverageReport {
 
     /// JSON 导出（camelCase，原子写：先 tmp 再 rename）
     pub fn write_json(&self, path: &std::path::Path) -> anyhow::Result<()> {
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir).ok();
-        }
-        let tmp = path.with_extension("json.tmp");
         let body = serde_json::to_string_pretty(self)?;
-        std::fs::write(&tmp, body.as_bytes())?;
-        std::fs::rename(&tmp, path)?;
-        Ok(())
+        crate::atomic_write(path, body.as_bytes())
     }
 }
 

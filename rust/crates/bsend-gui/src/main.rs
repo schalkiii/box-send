@@ -898,7 +898,7 @@ impl BsendGui {
                 div()
                     .text_xs()
                     .text_color(dim)
-                    .child("把「跑一轮」产出的转种草稿批量发布到目标站：逐条跑门禁（G1–G5）与审阅，通过才上传；判重跳过不占限额，拦截/失败进退避（24h/6h），每站每日限额按 UTC 日计，全程落审计 auto-audit.jsonl。站点不选 = 全部有草稿的目标站。"),
+                    .child("把「跑一轮」产出的转种草稿批量发布到目标站：逐条跑门禁（G1–G5）与审阅，通过才上传；判重跳过不占限额，拦截/失败进退避（24h/6h），每站每日限额按北京时间日计，全程落审计 auto-audit.jsonl。站点不选 = 全部有草稿的目标站。"),
             )
             .child(
                 div()
@@ -1243,7 +1243,7 @@ impl BsendGui {
             posted_rows = posted_rows.child(
                 div()
                     .text_xs()
-                    .child(format!("{site}：今日已自动发 {count} 条（UTC 日界）")),
+                    .child(format!("{site}：今日已自动发 {count} 条（北京时间日界）")),
             );
         }
         if posted_today.is_empty() {

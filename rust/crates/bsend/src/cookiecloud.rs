@@ -72,7 +72,17 @@ impl CookieCloud {
             .client
             .get(&url)
             .send()
-            .with_context(|| format!("请求 CookieCloud 没通：{url}"))?;
+            // 不能把 URL 带进错误：`/get/{key}` 里的 KEY 是访问凭据（终端/日志会留存）
+            .map_err(|e| {
+                let why = if e.is_timeout() {
+                    "超时"
+                } else if e.is_connect() {
+                    "连接失败"
+                } else {
+                    "请求失败"
+                };
+                anyhow!("请求 CookieCloud 没通（host={base}，{why}；KEY 已隐去）")
+            })?;
         let status = resp.status().as_u16();
         let body = resp.text().unwrap_or_default();
         if !(200..300).contains(&status) {
@@ -80,7 +90,7 @@ impl CookieCloud {
             return Err(anyhow!("CookieCloud 回 HTTP {status}：{head}"));
         }
         let obj: Value = serde_json::from_str(&body)
-            .with_context(|| format!("CookieCloud 回包不是 JSON：{url}"))?;
+            .map_err(|e| anyhow!("CookieCloud 回包不是 JSON（host={base}）：{e}"))?;
         let encrypted = obj
             .get("encrypted")
             .and_then(|v| v.as_str())
@@ -335,5 +345,19 @@ mod tests {
     fn missing_cookie_data_is_an_error() {
         let plain: Value = serde_json::from_str(r#"{"local_storage_data":{}}"#).unwrap();
         assert!(parse_cookie_data(&plain).is_err());
+    }
+
+    #[test]
+    fn fetch_error_does_not_leak_key() {
+        // host 不可达：错误信息里不能出现 /get/{key} 的 KEY
+        let settings = CookieCloudSettings {
+            host: "http://127.0.0.1:1".into(),
+            key: "SECRET-KEY-XYZ".into(),
+            password: "p".into(),
+        };
+        let cc = CookieCloud::new(settings).unwrap();
+        let err = cc.fetch_envelope().unwrap_err();
+        let text = format!("{err:#}");
+        assert!(!text.contains("SECRET-KEY-XYZ"), "KEY 泄漏：{text}");
     }
 }

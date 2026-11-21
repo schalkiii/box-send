@@ -215,12 +215,17 @@ fn connect_qb(cfg: &Config) -> Result<Arc<QBittorrent>> {
 }
 
 fn build_adapters(cfg: &Config, filter: &Option<Vec<String>>) -> Result<Vec<Arc<NexusPhp>>> {
-    bsend::sites::build_adapters(cfg, filter.as_deref(), |missing| {
+    let out = bsend::sites::build_adapters(cfg, filter.as_deref(), |missing| {
         eprintln!(
             "注意：这些站没有 cookie，本轮到它们只会得到 failed：{}（可用 --cookiecloud 或 bsend cookies --from cookiecloud --write 补）",
             missing.join("、")
         );
-    })
+    })?;
+    // 被框架/缺 url/白名单/暂停排除的启用站也要点名，否则用户以为它们参与了
+    if let Some(n) = cfg.skipped_notice() {
+        eprintln!("{n}");
+    }
+    Ok(out)
 }
 
 fn cmd_scan(cfg: &Config) -> Result<()> {

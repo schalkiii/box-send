@@ -72,6 +72,19 @@ pub fn run_autopost(
     if !opts.dry_run {
         crate::config::ensure_publish_enabled(cfg)?;
     }
+    // 跨进程互斥：CLI 计划任务 + 开着的 GUI 各自读同一份审计/账本会突破日限额
+    let data_dir = cfg
+        .coverage_state_path()
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_default();
+    let _lock = crate::lock::RunLock::acquire(&data_dir, "state")?;
+    if opts.dry_run {
+        // 演练只跑审阅+门禁，不碰下载器：下载器停机/换机时也要能做门禁演练
+        return run_autopost_with(cfg, opts, emit, &mut |_, _, _, _, _| {
+            anyhow::bail!("dry-run 不应调用发布器（内部错误）")
+        });
+    }
     let qb = QBittorrent::new(
         &cfg.downloader.url,
         &cfg.downloader.username,
@@ -356,7 +369,7 @@ pub fn audit_path_of(cfg: &Config) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("auto-audit.jsonl"))
 }
 
-/// 各站今日 posted 计数（UTC 日界）
+/// 各站今日 posted 计数（北京时间日界，UTC+8）
 pub type PostedToday = HashMap<String, u32>;
 /// (内容, 站点) → (最近一次拦截/失败时间, 是否门禁拦截)，退避判定用
 pub type LastBad = HashMap<(String, String), (i64, bool)>;
@@ -545,6 +558,7 @@ mod tests {
             user_agent: "bsend-test".into(),
             cookies: std::collections::HashMap::new(),
             cookie_cloud: None,
+            skipped_sites: Vec::new(),
         };
         let mut index = crate::index::ContentIndex::load(&cfg.coverage_state_path());
         for i in 0..drafts {
@@ -814,5 +828,25 @@ mod tests {
             reseed::ReseedOutcome::Posted("u".into()).audit_result(),
             "posted"
         );
+    }
+
+    #[test]
+    fn dry_run_does_not_require_downloader() {
+        // 无草稿时演练应立即返回：下载器 URL 指向不可达端口，若仍去连接会 Err
+        let dir = temp_dir("dry-no-qb");
+        let cfg = cfg_with_drafts(&dir, 2, 0);
+        let mut logs = Vec::new();
+        let summary = run_autopost(
+            &cfg,
+            &AutopostOptions {
+                dry_run: true,
+                limit: None,
+                sites: None,
+            },
+            &mut collect_logs(&mut logs),
+        )
+        .unwrap();
+        assert_eq!(summary.posted, 0);
+        assert!(logs.iter().any(|l| l.contains("没有转种草稿")));
     }
 }

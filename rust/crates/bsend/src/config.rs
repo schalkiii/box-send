@@ -217,6 +217,24 @@ pub struct Config {
     pub cookies: HashMap<String, Vec<CookieEntry>>,
     /// boxsend.json 的 cookieCloud 段（没配就是 None）
     pub cookie_cloud: Option<CookieCloudSettings>,
+    /// 启用但被引擎排除的站点（id + 原因）：框架不支持/缺 url/白名单外/暂停。
+    /// CLI/GUI 用它点名，避免用户以为所有启用站都参与了。
+    pub skipped_sites: Vec<(String, String)>,
+}
+
+impl Config {
+    /// 一行「被排除站点」提示；没有则 None。
+    pub fn skipped_notice(&self) -> Option<String> {
+        if self.skipped_sites.is_empty() {
+            return None;
+        }
+        let list: Vec<String> = self
+            .skipped_sites
+            .iter()
+            .map(|(id, why)| format!("{id}（{why}）"))
+            .collect();
+        Some(format!("这些启用站被排除，未参与本轮：{}", list.join("、")))
+    }
 }
 
 // boxsend.json 的键是驼峰（GUI 版 Swift Codable 默认）。这里用 serde_json::Value 动态取：
@@ -399,6 +417,7 @@ impl Config {
             Some(coverage.site_ids.iter().cloned().collect())
         };
         let mut sites = Vec::new();
+        let mut skipped_sites: Vec<(String, String)> = Vec::new();
         for s in &raw_sites {
             if !v_bool(s, "enabled", false) {
                 continue;
@@ -406,15 +425,21 @@ impl Config {
             let Some(id) = v_str(s, "id") else { continue };
             if let Some(w) = &whitelist {
                 if !w.contains(&id) {
+                    skipped_sites.push((id, "不在 assist.siteIDs 白名单".into()));
                     continue;
                 }
             }
             if coverage.paused_sites.iter().any(|p| p == &id) {
+                skipped_sites.push((id, "assist.pausedSites 暂停".into()));
                 continue;
             }
-            let Some(url) = v_str(s, "url") else { continue };
+            let Some(url) = v_str(s, "url") else {
+                skipped_sites.push((id, "缺 url".into()));
+                continue;
+            };
             let framework = Framework::parse(&v_str(s, "framework").unwrap_or_default());
             if !framework.search_capable() {
+                skipped_sites.push((id, format!("框架 {framework:?} 不支持检索")));
                 continue;
             }
             let search_url = s
@@ -471,6 +496,7 @@ impl Config {
             user_agent,
             cookies,
             cookie_cloud,
+            skipped_sites,
         })
     }
 
@@ -574,11 +600,8 @@ impl Config {
         if path.exists() {
             let _ = std::fs::copy(&path, path.with_extension("json.bak"));
         }
-        let tmp = path.with_extension("json.tmp");
         let body = serde_json::to_string_pretty(&self.cookies).context("cookie 序列化失败")?;
-        std::fs::write(&tmp, body.as_bytes())
-            .with_context(|| format!("写不进 {}", tmp.display()))?;
-        std::fs::rename(&tmp, &path).with_context(|| format!("落盘 {} 失败", path.display()))?;
+        crate::atomic_write(&path, body.as_bytes())?;
         Ok(path)
     }
 
@@ -644,6 +667,7 @@ mod tests {
             user_agent: "x".into(),
             cookies: std::collections::HashMap::new(),
             cookie_cloud: None,
+            skipped_sites: Vec::new(),
         };
         assert!(!cfg.coverage.reseed_publish_enabled);
     }
@@ -859,5 +883,33 @@ mod tests {
         let cfg = Config::load(&p).unwrap();
         assert_eq!(cfg.coverage.verify_wait_sec, 0);
         assert_eq!(cfg.coverage.verify_poll_sec, 0);
+    }
+
+    #[test]
+    fn skipped_sites_are_reported_with_reason() {
+        // 启用但被框架/字段排除的站必须点名，不能让用户以为它们参与了
+        let p = write_temp_isolated(
+            "skipped",
+            "boxsend.json",
+            r#"{
+          "sourceSites": [
+            {"id": "u3", "name": "U3", "url": "https://u3.example/", "framework": "Unit3D", "enabled": true},
+            {"id": "nourl", "name": "NoUrl", "framework": "NexusPHP", "enabled": true},
+            {"id": "nx", "name": "NX", "url": "https://nx.example/", "framework": "NexusPHP", "enabled": true}
+          ],
+          "downloader": {"url": "http://x"}
+        }"#,
+        );
+        let cfg = Config::load(&p).unwrap();
+        assert_eq!(cfg.sites.len(), 1, "只有 nx 可用");
+        let notice = cfg.skipped_notice().expect("应有排除提示");
+        assert!(
+            notice.contains("u3") && notice.contains("Unit3D"),
+            "{notice}"
+        );
+        assert!(
+            notice.contains("nourl") && notice.contains("缺 url"),
+            "{notice}"
+        );
     }
 }

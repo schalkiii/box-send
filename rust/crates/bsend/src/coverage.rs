@@ -155,6 +155,13 @@ pub fn run_round(
     mut emit: impl FnMut(Event),
     opts: RoundOptions,
 ) -> Result<RoundReport> {
+    // 跨进程互斥：GUI 与 CLI 同时跑轮会互相覆盖 coverage.json（后写覆盖先写）
+    let data_dir = cfg
+        .coverage_state_path()
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_default();
+    let _lock = crate::lock::RunLock::acquire(&data_dir, "state")?;
     let mut report = RoundReport::default();
     let t0 = now();
 

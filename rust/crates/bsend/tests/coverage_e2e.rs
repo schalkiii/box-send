@@ -297,6 +297,14 @@ fn qb_server_409(torrent_hash: String, captured: CapturedRequests) -> MockServer
                 .push((path.to_string(), body.to_vec()));
             return (200, "text/plain", Vec::new());
         }
+        // addTags 同样会被 `/add` 前缀命中；排在前面并记为成功
+        if path.starts_with("/api/v2/torrents/addTags") {
+            captured
+                .lock()
+                .unwrap()
+                .push((path.to_string(), body.to_vec()));
+            return (200, "text/plain", Vec::new());
+        }
         if path.starts_with("/api/v2/torrents/add") {
             return (409, "text/plain", Vec::new()); // qB 5.2+：已在下载器
         }
@@ -417,6 +425,7 @@ fn test_config(qb_port: u16, pter_port: u16, hdsky_port: u16, dir: &std::path::P
         user_agent: "bsend-e2e-test".into(),
         cookies: HashMap::new(),
         cookie_cloud: None,
+        skipped_sites: Vec::new(),
     }
 }
 
@@ -787,9 +796,18 @@ fn e2e_already_exists_attaches_tracker() {
     assert!(note.contains("补挂"), "note = {note}");
     // 补挂请求真发出去了，带的正是本站 announce（tracker.example）
     let adds = captured.lock().unwrap();
-    assert_eq!(adds.len(), 1, "只补挂一次");
-    let body = String::from_utf8_lossy(&adds[0].1).to_string();
+    let tracker_reqs: Vec<_> = adds
+        .iter()
+        .filter(|(p, _)| p.contains("addTrackers"))
+        .collect();
+    let tag_reqs: Vec<_> = adds.iter().filter(|(p, _)| p.contains("addTags")).collect();
+    assert_eq!(tracker_reqs.len(), 1, "只补挂一次");
+    let body = String::from_utf8_lossy(&tracker_reqs[0].1).to_string();
     assert!(body.contains("tracker.example"), "body = {body}");
+    // 接管旧种同时补 Boxsend 标签（append 语义，不覆盖原标签）
+    assert_eq!(tag_reqs.len(), 1, "接管路径必须补标签");
+    let tag_body = String::from_utf8_lossy(&tag_reqs[0].1).to_string();
+    assert!(tag_body.contains("Boxsend"), "tags body = {tag_body}");
     drop(adds);
     // 已存在路径不动启停：那条种子本来就在跑
     assert_eq!(

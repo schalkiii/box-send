@@ -250,19 +250,12 @@ impl ContentIndex {
 
     /// 原子落盘（先写 tmp 再 rename）
     pub fn save(&self) -> Result<()> {
-        if let Some(dir) = self.path.parent() {
-            std::fs::create_dir_all(dir).ok();
-        }
-        let tmp = self.path.with_extension("json.tmp");
         let body = serde_json::to_string_pretty(&IndexFileRef {
             contents: &self.contents,
         })
         .context("索引序列化失败")?;
-        std::fs::write(&tmp, body.as_bytes())
-            .with_context(|| format!("写不进 {}", tmp.display()))?;
-        std::fs::rename(&tmp, &self.path)
-            .with_context(|| format!("落盘 {} 失败", self.path.display()))?;
-        Ok(())
+        // 统一走 lib::atomic_write（tmp + rename），与报告/配置/缓存同一套实现
+        crate::atomic_write(&self.path, body.as_bytes())
     }
 
     /// v1/v2 hash → contentKey 的映射（检索命中后反查内容用）
