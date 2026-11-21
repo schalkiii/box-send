@@ -30,6 +30,8 @@ pub enum CoverageStatus {
     Verifying,
     /// 站内检索命中但清单对不上（C 级），待人工确认
     ReviewPending,
+    /// 目标站已有同片其他版本（pieces 不一致），程序化判定，不再人工确认
+    OtherVersion,
     /// 人工否决（不是同一内容）
     Rejected,
     /// 站内没有（负缓存，missTTL 天内不再重搜）
@@ -50,6 +52,7 @@ impl CoverageStatus {
             CoverageStatus::Reseeded => "已转种",
             CoverageStatus::Verifying => "校验中",
             CoverageStatus::ReviewPending => "待人工确认",
+            CoverageStatus::OtherVersion => "其他版本",
             CoverageStatus::Rejected => "人工否决",
             CoverageStatus::Miss => "站内没有",
             CoverageStatus::WaitSource => "待找源",

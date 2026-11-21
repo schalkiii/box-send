@@ -88,3 +88,34 @@
 - 新增标题清洗：中文前缀 + 英文正式名时，上传标题去掉中文前缀；纯中文标题不变。
   可消除 LuckAudit “主标题包含中文字符”一类拦截。
 - 剩余真实测试：6 条 hdfans 候选最终因图片数量不足/预审标签被拦，未硬发。
+
+## 9. 源站适配器与截图（15:20-16:20）
+
+- 修正 `run --sites`：目标站过滤不再连带过滤源站适配器；qB tracker 指向的源站现在都参与
+  source resolver，修正 `wait_source` 的调用层根因。
+- 图片不足：已实现本地视频抽帧 → Imgur → `screenshot-overrides.json` → 发布时注入简介；
+  Imgur 注入图不参与死图探测，源页图片仍逐张探测。
+- 新增上传回包 `existed=1` 硬处理：即使带详情链接也一律 ReviewPending，不记 Rese​eded、不加 qB。
+- 鹿鼎记2 的 6419 是无效 existed 页，索引已标 ReviewPending；未加入 qB。
+- 156 单测 + 17 e2e；fmt/clippy 零告警。
+
+## 10. 源站/截图/真实新增（16:00-16:30）
+
+- 修正 `run --sites`：目标站过滤不连带源站；tracker 指向的源站现在参与 resolver。
+- 图片不足：本地视频抽帧（ffmpeg）→ Imgur → `screenshot-overrides.json` → 发布注入；
+  已实测「武状元苏乞儿」预审 100/100。
+- 真实新增：The Man From Earth（luckpt 61319，qB `65f1d7a22c33` 100%）。
+- Wave 61305 已由用户手动加入 qB，站点 hash/pieces 与 qB `c4e9a59d9a94` 一致。
+- 上传回包 `existed=1` 或详情标题不符一律 ReviewPending，不记 Reseeded。
+- 新增标题清洗、精确 checkbox 匹配（HDR10 不再误勾 HDR10+）。
+- 157 单测 + 17 e2e；fmt/clippy 零告警。
+
+## 11. 最终状态（16:30）
+
+- 新增 `other_version` 账本状态：目标站已有其他版本、pieces 不一致 → 程序化终态，不再进人工确认。
+- 已迁移既有“其他版本”记录到 `other_version`。
+- 真实新增：The Man From Earth（luckpt 61319，qB `65f1d7a22c33` 100%）。
+- 截图链路：本地 ffmpeg 抽帧 → Imgur → `screenshot-overrides.json` → 发布注入；
+  武状元苏乞儿预审 100/100，但目标站已有同片。
+- 源站适配器修正：`run --sites` 只过滤目标站，tracker 源站仍全部参与。
+- 157 单测 + 17 e2e；fmt/clippy 零告警。

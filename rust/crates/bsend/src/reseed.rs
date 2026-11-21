@@ -1702,6 +1702,7 @@ fn floor_char_boundary(s: &str, i: usize) -> usize {
 /// checkbox 文案匹配：`<input type=checkbox …>` 后面 60 个字符里含关键词就算选中
 fn match_checkboxes(page: &str, keyword: &str) -> Vec<Field> {
     let mut out = Vec::new();
+    let mut exact: Vec<Field> = Vec::new();
     let lower = page.to_ascii_lowercase();
     let kw = keyword.to_lowercase();
     let mut i = 0;
@@ -1722,7 +1723,12 @@ fn match_checkboxes(page: &str, keyword: &str) -> Vec<Field> {
                 .find("<input")
                 .unwrap_or(after.len());
             let label = strip_tags(&after[..next]).to_lowercase();
-            if label.contains(&kw) {
+            if label.trim() == kw {
+                if let Some(name) = attr(tag, "name") {
+                    let value = attr(tag, "value").unwrap_or_else(|| "yes".into());
+                    exact.push((name, value));
+                }
+            } else if label.contains(&kw) {
                 if let Some(name) = attr(tag, "name") {
                     let value = attr(tag, "value").unwrap_or_else(|| "yes".into());
                     out.push((name, value));
@@ -1731,7 +1737,12 @@ fn match_checkboxes(page: &str, keyword: &str) -> Vec<Field> {
         }
         i = end;
     }
-    out
+    // 文案全等优先：避免「HDR10」把「HDR10+」也勾上（互斥冲突）。
+    if !exact.is_empty() {
+        exact
+    } else {
+        out
+    }
 }
 
 // ---------------- 上传提交 ----------------
@@ -3406,7 +3417,7 @@ pub fn run_reseed(
             )
         } else {
             (
-                CoverageStatus::ReviewPending,
+                CoverageStatus::OtherVersion,
                 format!("目标站已有其他版本「{title}」；pieces 不一致，未上传"),
             )
         };
@@ -3497,6 +3508,24 @@ pub fn run_reseed(
     let up = submit_upload(&tgt, &prep, &torrent_data, &filename)?;
     log(&format!("上传结果：{}", up.message));
 
+    // 站点回包带 duplicate 标志时，即使给了链接也可能是无效 existed 跳转，
+    // 不能当新种 Reseeded；统一落 ReviewPending，避免假成功。
+    if up.duplicate {
+        let detail = up.detail_url.unwrap_or_default();
+        write_cell(
+            index,
+            &req.content_key,
+            &req.target_site,
+            CoverageStatus::ReviewPending,
+            (!detail.is_empty()).then_some(detail),
+            &format!(
+                "上传回包标记 existed（{}），详情页不可信，未加入下载器",
+                up.message
+            ),
+        );
+        index.save()?;
+        return Ok(String::new());
+    }
     let detail_url = match up.detail_url {
         Some(u) => u,
         None => {
@@ -3529,7 +3558,31 @@ pub fn run_reseed(
     // ---- 发后自检：回读新种页核对标题/MediaInfo/链接（只警告不推翻）----
     // 站点回包给的详情页可能是中转/错误 id；先按标题校正，再做自检与回推
     let detail_url = match tgt.fetch_torrent_page(&detail_url) {
-        Ok(_) => detail_url,
+        Ok(p)
+            if !p.name.trim().is_empty()
+                && norm_post_title(&p.name) == norm_post_title(&info.name) =>
+        {
+            detail_url
+        }
+        Ok(p) => {
+            log(&format!(
+                "回包详情页标题不符（页面「{}」），按 IMDb/标题校正…",
+                p.name
+            ));
+            match target_has_imdb(&tgt, info.imdb.as_deref(), log) {
+                Ok(Some((u, title))) => {
+                    log(&format!("发后 IMDb 校正：{title} → {u}"));
+                    u
+                }
+                _ => match relocate_posted_detail(&tgt, &info.name, log) {
+                    Some(u) => {
+                        log(&format!("发后标题校正：{u}"));
+                        u
+                    }
+                    None => detail_url,
+                },
+            }
+        }
         Err(e) => {
             log(&format!(
                 "回包详情页打不开（{e:#}），按 IMDb 区/标题检索校正真实详情页…"
@@ -4311,6 +4364,13 @@ Language : English"
         };
         let (fs, _p, notes) = build_upload_fields(&info, form, &[]);
         assert_eq!(field_lookup(&fs, "medium_sel"), Some("2"), "{notes:?}");
+    }
+
+    #[test]
+    fn checkbox_exact_label_beats_prefix_match() {
+        let form = r#"<input type="checkbox" name="tags[4][]" value="1" />HDR10<input type="checkbox" name="tags[4][]" value="2" />HDR10+"#;
+        let got = match_checkboxes(form, "HDR10");
+        assert_eq!(got, vec![("tags[4][]".to_string(), "1".to_string())]);
     }
 
     #[test]
