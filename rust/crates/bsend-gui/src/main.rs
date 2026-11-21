@@ -10,6 +10,7 @@
 //! - 诊断：下载器连通、CookieCloud 拉取、各站 cookie 在位、发种台账与退避；
 //! - 后台任务：扫描 / 基线 / 跑一轮 / 转种 / 自动发种，事件走 mpsc，GPUI 定时器轮询后更新视图。
 
+mod config_io;
 mod jobs;
 mod types;
 
@@ -123,26 +124,7 @@ impl BsendGui {
             cx.notify();
             return;
         }
-        let result: Result<()> = (|| {
-            let text = std::fs::read_to_string(&self.config_path).context("读配置失败")?;
-            let mut root: serde_json::Value =
-                serde_json::from_str(&text).context("配置不是合法 JSON")?;
-            mutate(&mut root);
-            let file_name = self
-                .config_path
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned();
-            let backup = self
-                .config_path
-                .with_file_name(format!("{file_name}.bak-gui"));
-            std::fs::write(&backup, &text).context("写备份失败")?;
-            let tmp = self.config_path.with_extension("json.tmp-gui");
-            std::fs::write(&tmp, serde_json::to_string_pretty(&root)?).context("写临时配置失败")?;
-            std::fs::rename(&tmp, &self.config_path).context("替换配置失败")?;
-            Ok(())
-        })();
+        let result: Result<()> = config_io::save_config_with_backup(&self.config_path, mutate);
         match result {
             Ok(()) => {
                 self.reload_config();
