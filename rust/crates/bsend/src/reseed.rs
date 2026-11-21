@@ -3371,7 +3371,8 @@ pub fn run_reseed(
         category.as_deref(),
         cfg.coverage.skip_hash_check,
         limit,
-        true,
+        // 跳过校验时必须直接开始，paused=true 再恢复会让 qB 重新进入校验
+        !cfg.coverage.skip_hash_check,
         layout.content_layout(),
     )?;
     if !add.note.is_empty() {
