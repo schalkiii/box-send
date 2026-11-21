@@ -478,8 +478,14 @@ impl QBittorrent {
         let mut form = reqwest::blocking::multipart::Form::new()
             .text("savepath", save_path.to_string())
             .text("category", category.unwrap_or("").to_string())
+            // qB 5.3 / WebAPI 2.16 已移除 skip_checking，改用 seedMode：
+            // 只做种、不先校验/下载。两个参数都发，兼容 4.x 与 5.x。
             .text(
                 "skip_checking",
+                if skip_checking { "true" } else { "false" }.to_string(),
+            )
+            .text(
+                "seedMode",
                 if skip_checking { "true" } else { "false" }.to_string(),
             )
             .text("upLimit", up_limit.to_string())
