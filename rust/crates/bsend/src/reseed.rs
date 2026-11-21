@@ -299,11 +299,21 @@ fn wanted_tags(info: &ReleaseInfo) -> Vec<&'static str> {
     if info.has_cantonese_audio() {
         out.push("粤语");
     }
-    if info.has_english_audio() && !info.has_chinese_audio() && !info.has_cantonese_audio() {
+    let title_hay = format!("{} {}", info.name, info.subtitle);
+    let has_cjk = title_hay
+        .chars()
+        .any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c));
+    if info.has_english_audio()
+        && !info.has_chinese_audio()
+        && !info.has_cantonese_audio()
+        && !has_cjk
+        && !info.has_chinese_subs()
+    {
         out.push("英语");
     }
-    let hdr_hay = format!("{} {} {}", info.name, info.subtitle, info.mediainfo).to_lowercase();
-    if hdr_hay.contains("hdr10") || hdr_hay.contains("hdr 10") {
+    let hdr_hay = title_hay.to_lowercase();
+    let is_uhd = ["2160p", "4k", "uhd"].iter().any(|x| hdr_hay.contains(x));
+    if is_uhd && (hdr_hay.contains("hdr10") || hdr_hay.contains("hdr")) {
         out.push("HDR10");
     }
     out
@@ -4204,15 +4214,19 @@ Language : English"
     }
 
     #[test]
-    fn hdr10_tag_detected_from_mediainfo() {
+    fn hdr10_tag_detected_from_uhd_title() {
         let info = ReleaseInfo {
-            name: "Movie.2014.1080p.BluRay.x265-GRP".into(),
-            mediainfo: "Video
-HDR format : SMPTE ST 2086, HDR10 compatible"
-                .into(),
+            name: "Movie.2024.2160p.UHD.BluRay.HDR10.x265-GRP".into(),
             ..Default::default()
         };
         assert!(wanted_tags(&info).contains(&"HDR10"));
+
+        let sdr = ReleaseInfo {
+            name: "Movie.2018.1080p.BluRay.x265-GRP".into(),
+            mediainfo: "Video\nHDR format : HDR10".into(),
+            ..Default::default()
+        };
+        assert!(!wanted_tags(&sdr).contains(&"HDR10"));
     }
 
     #[test]
