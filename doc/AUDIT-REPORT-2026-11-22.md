@@ -707,3 +707,51 @@ DOC-M3），**仍待修 15 条（高 0 / 中 5 / 低 10）**。已修条目在 �
 5. 全程不真发种：用 `--dry-run`、`formcheck`、`gatecheck`、mock e2e；不打印任何凭据值。
 6. 收尾时同步 `rust/README.md` / `doc/DATA-FILES.md` / `CHANGELOG.md`，并做一次
    `markdownlint`（结构类规则）检查。
+
+## 8. 夜间执行记录（2026-11-22 01:00–）
+
+> 本节由执行 Agent 追加，记录本报告的销号情况；未列出的条目仍未处理。
+
+### 8.1 已修复（含验证）
+
+| 条目 | 修复要点 | 验证 |
+| --- | --- | --- |
+| SEC-1 | 审阅 `render`/`dump_fields` 按字段名脱敏（passkey/token/auth/cookie/secure/uid/secret/password） | 单测 `review_render_masks_secret_field_values` |
+| SEC-2 | CookieCloud 错误只报 host + 失败类型，不拼 `/get/{key}` | 单测 `fetch_error_does_not_leak_key` |
+| BUG-M8（半） | `review_reseed` 接 `SiteThrottle`：源页/上传页/官方预审都领号 | 编译 + 全量测试 |
+| BUG-M9 | `ReseedOutcome` 结构化；审计区分 posted/skipped_duplicate/other_version/existed_pending/failed | 单测 `duplicate_outcomes_map_to_distinct_audit_results` |
+| BUG-M10 | `bsend::lock::RunLock`（create_new + 2h 陈旧接管）；`run_round`/`run_autopost` 共用 `bsend-state.lock` | 单测 `second_acquire_fails_until_drop` / `different_names_do_not_collide` |
+| BUG-M11 | 审计 `at` 取写入时刻 | 单测 `append_audit_stamps_write_time_not_stale_now` |
+| BUG-M12 | `preflight` 接受 `SiteRules`，requireLinks/requireMediaInfo 放宽降为警告 | 单测 `preflight_relaxes_mediainfo_when_rules_allow` |
+| BUG-M13 | `note_ok` 只清退避倍数，不清限流地板 | 单测 `rate_limit_floor_survives_a_success` |
+| GAP-3 | `Config.skipped_sites` + `skipped_notice()`，CLI/GUI 点名被排除的启用站 | 单测 `skipped_sites_are_reported_with_reason` |
+| DOC-M3 | DATA-FILES 的 dataDir 缺省/写入者修正（plan 不写账本） | 人工核对 |
+| DOC-3 | 日界文案统一北京时间（代码注释 + GUI 两处） | grep |
+| DOC-M4 | README 增加 `Boxsend` 标签说明 | 人工核对 |
+| TEST-M1 | GUI 配置写回抽 `config_io::save_config_with_backup` | 单测：保留未知键/备份/坏 JSON 不落盘 |
+| ARC-3 | `otherVersion` 纳入终态 | 单测 `other_version_is_terminal` |
+| ARC-4 | index/report/config 统一复用 `lib::atomic_write` | 全量测试 |
+| BUG-L10 | `autopost --dry-run` 不再要求下载器在线 | 单测 `dry_run_does_not_require_downloader` |
+| TEST-L3 | e2e mock 补 `addTags` 分支；409 接管断言补挂 tracker + 补 Boxsend 标签 | `e2e_already_exists_attaches_tracker` |
+| ENG-L3 | 新增根 `LICENSE`（MIT）与 `CHANGELOG.md` | markdownlint |
+
+### 8.2 仍未处理
+
+- **S-03 的 BUG-M7**：审阅产物直传发布（门禁字段与提交字段一致性）。节流半已修；
+  字段复用需要把 `Released`（含 `NexusPhp`/`TorrentPage`）贯穿到 `run_reseed`，
+  改动面大，留到下一轮串行做。
+- **BUG-L11**：多候选择优（需要 `search` 返回候选列表并逐个下载判定）。
+- **TEST-L4**：posted/blocked 记账分支的注入式 e2e（需要在 `run_autopost_with` 再注入审阅）。
+- **S-16** 其余项：mock 级 posted/blocked 断言。
+
+### 8.3 验证基线
+
+- `cargo fmt` 通过；`cargo clippy --workspace --all-targets -D warnings` 零告警；
+  `cargo test --workspace`：**186 单测 + 19 e2e + 2 CLI + 2 GUI** 全绿。
+- 实机只读演练：`bsend autopost --dry-run --sites sbpt --limit 20`
+  → 20 条门禁通过、5 条拦截、1 条目标站上传页瞬断（50x/10054，可重试）、
+  1 条退避跳过；未真实发种。
+- `formcheck` 覆盖 101 个启用站（104 条历史结论）；4 条 gap 均为**站点限制或样本不适配**：
+  hdcity（JS 驱动上传表单，已加入 `reseedPausedSites`）、
+  ptfans/musopia（站点无 HDTV 媒介选项或音乐站样本不适配）、
+  muxuege（AAC 同名多选项，留空不猜）。
