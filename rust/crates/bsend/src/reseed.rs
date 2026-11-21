@@ -1775,7 +1775,10 @@ pub fn prune_dead_images_with(html: &str, probe: &mut dyn FnMut(&str) -> bool) -
             .unwrap_or(html.len());
         let tag = &html[start..end];
         let src = attr(tag, "src").unwrap_or_default();
-        let keep = src.starts_with("http") && probe(&src);
+        // 本机截帧上传的 Imgur 图是发布时注入的可信资产，不参与死图探测；
+        // 源页原有图片仍逐张探测。
+        let trusted = src.contains("i.imgur.com/");
+        let keep = src.starts_with("http") && (trusted || probe(&src));
         if keep {
             out.push_str(tag);
         } else {
@@ -3251,6 +3254,18 @@ fn join_path(dir: &str, name: &str) -> String {
     format!("{}/{}", dir.trim_end_matches(['/', '\\']), name)
 }
 
+/// 读取 dataDir/screenshot-overrides.json：contentKey → 公网截图 URL 列表。
+/// 截图由独立工具从本地视频抽帧并上传图床后写入，不在发布时临时下载/伪造。
+fn extra_images_for(cfg: &Config, content_key: &str) -> Option<Vec<String>> {
+    let path = cfg
+        .coverage_state_path()
+        .parent()?
+        .join("screenshot-overrides.json");
+    let text = std::fs::read_to_string(path).ok()?;
+    let map: std::collections::BTreeMap<String, Vec<String>> = serde_json::from_str(&text).ok()?;
+    map.get(content_key).cloned().filter(|v| !v.is_empty())
+}
+
 fn prepare_released(
     cfg: &Config,
     req: &ReseedRequest,
@@ -3266,6 +3281,16 @@ fn prepare_released(
     let mut info = parse_release_page(&html, &page.name);
     if info.name.is_empty() {
         info.name = req.name.clone();
+    }
+    // 源页图片不足时，读取程序化截图清单（key → 公网图片 URL），注入简介。
+    if let Some(urls) = extra_images_for(cfg, &req.content_key) {
+        let mut add = String::new();
+        let n = urls.len();
+        for u in urls {
+            add.push_str(&format!("<br/><img src=\"{u}\" />"));
+        }
+        info.descr.push_str(&add);
+        log(&format!("注入本机视频截图 {n} 张"));
     }
     log(&format!(
         "发布要素：标题「{}」｜副标题「{}」｜MediaInfo {} 字节｜IMDb {:?}｜豆瓣 {:?}",

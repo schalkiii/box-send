@@ -297,10 +297,13 @@ fn cmd_round(
     persist: bool,
 ) -> Result<()> {
     let qb = connect_qb(cfg)?;
-    let adapters = build_adapters(cfg, &sites)?;
+    // 目标站过滤不能连带过滤源站：qB tracker 指向的源站必须在 adapters 里，
+    // 否则 resolver 只能查 --sites 内的一两个源站（wait_source 的根因之一）。
+    let adapters = build_adapters(cfg, &None)?;
     println!(
-        "参与站点（{}）：{}",
+        "参与站点（{}，目标过滤后 {}）：{}",
         adapters.len(),
+        sites.as_ref().map(|v| v.len()).unwrap_or(adapters.len()),
         adapters
             .iter()
             .map(|a| a.site_id.clone())
