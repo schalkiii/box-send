@@ -353,6 +353,50 @@ pub fn preflight(info: &mut ReleaseInfo, tags: &[String]) -> Preflight {
 
 // ---------------- 源站详情页解析 ----------------
 
+/// 上传标题清洗：站点 LuckAudit 不允许中文主标题，但很多源页标题是
+/// 「中文名.英文名.年份...」。只有在前缀含中文且后面存在 >=2 个连续 ASCII
+/// 字母的正式英文段时才去掉中文前缀；纯中文标题原样保留。
+fn normalize_release_title(name: &str) -> String {
+    if !name.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c)) {
+        return name.to_string();
+    }
+    let chars: Vec<char> = name.chars().collect();
+    let mut start = None;
+    let mut i = 0;
+    while i + 1 < chars.len() {
+        // 从首个 ASCII 词起，且后面 6 个字符内存在连续字母；这样 I.Am... 的
+        // 单字母 I 不会被误当噪声，而 1080p 末尾的孤立 p 也不会触发。
+        if chars[i].is_ascii_alphabetic()
+            && chars[i..chars.len().min(i + 6)]
+                .windows(2)
+                .any(|w| w[0].is_ascii_alphabetic() && w[1].is_ascii_alphabetic())
+        {
+            start = Some(i);
+            break;
+        }
+        i += 1;
+    }
+    let Some(i) = start else {
+        return name.to_string();
+    };
+    let prefix: String = chars[..i].iter().collect();
+    if !prefix
+        .chars()
+        .any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c))
+    {
+        return name.to_string();
+    }
+    let suffix: String = chars[i..].iter().collect();
+    let suffix = suffix.trim_start_matches(['.', '-', '_', '[', ']', ' ']);
+    if suffix.chars().filter(|c| c.is_ascii_alphanumeric()).count() >= 8
+        && suffix.chars().any(|c| c.is_ascii_digit())
+    {
+        suffix.to_string()
+    } else {
+        name.to_string()
+    }
+}
+
 /// 详情页解析：发布名/副标题/简介/MediaInfo/条目链接（Swift `parse` 的通用子集）
 pub fn parse_release_page(html: &str, name_fallback: &str) -> ReleaseInfo {
     let raw_name = first_tag_text(html, "h1").unwrap_or_else(|| name_fallback.to_string());
@@ -360,6 +404,7 @@ pub fn parse_release_page(html: &str, name_fallback: &str) -> ReleaseInfo {
         name: strip_promo_suffix(&raw_name),
         ..Default::default()
     };
+    info.name = normalize_release_title(&info.name);
     // 副标题：行内「副标题」表行，或 small_descr 输入框
     info.subtitle = detail_row_value(html, "副标题")
         .or_else(|| detail_row_value(html, "副標題"))
@@ -3313,18 +3358,48 @@ pub fn run_reseed(
         }
     };
     if let Some((detail_url, title)) = dup {
+        // 判重命中不直接假定“其他版本”：下载目标种比较 pieces。
+        // 同分片 = 站点已有同一内容（标 Assisted）；不同分片 = 其他版本（ReviewPending）。
+        let same_content = rel
+            .tgt
+            .fetch_torrent_page(&detail_url)
+            .and_then(|page| rel.tgt.download_torrent(&page, &detail_url))
+            .ok()
+            .and_then(|data| {
+                index.contents.get(&req.content_key).and_then(|entry| {
+                    matching_local_member(qb, entry, &data)
+                        .ok()
+                        .flatten()
+                        .map(|_| true)
+                })
+            })
+            .unwrap_or(false);
+        let (status, why) = if same_content {
+            (
+                CoverageStatus::Assisted,
+                format!("目标站已有同内容同分片「{title}」，未重复上传"),
+            )
+        } else {
+            (
+                CoverageStatus::ReviewPending,
+                format!("目标站已有其他版本「{title}」；pieces 不一致，未上传"),
+            )
+        };
         log(&format!(
-            "目标站已有同条目（{title} → {detail_url}）；站点会判重为 existed，跳过上传"
+            "目标站判重命中：{title} → {detail_url}；{}",
+            if same_content {
+                "同分片，已覆盖"
+            } else {
+                "不同版本，跳过"
+            }
         ));
         write_cell(
             index,
             &req.content_key,
             &req.target_site,
-            CoverageStatus::ReviewPending,
+            status,
             Some(detail_url),
-            &format!(
-                "目标站已有条目「{title}」（可能不同版本；文件不同则不跨种），未上传避免 existed 假成功"
-            ),
+            &why,
         );
         index.save()?;
         return Ok(String::new());
@@ -4211,6 +4286,22 @@ Language : English"
         };
         let (fs, _p, notes) = build_upload_fields(&info, form, &[]);
         assert_eq!(field_lookup(&fs, "medium_sel"), Some("2"), "{notes:?}");
+    }
+
+    #[test]
+    fn chinese_prefix_title_is_trimmed_only_when_english_exists() {
+        assert_eq!(
+            normalize_release_title("[雄狮少年].I.Am.What.I.Am.2021.CHN.BluRay.1080p-GRP"),
+            "I.Am.What.I.Am.2021.CHN.BluRay.1080p-GRP"
+        );
+        assert_eq!(
+            normalize_release_title("武状元苏乞儿.King.of.Beggars.1992.BluRay.1080p-GRP"),
+            "King.of.Beggars.1992.BluRay.1080p-GRP"
+        );
+        assert_eq!(
+            normalize_release_title("纯中文标题.2018.1080p"),
+            "纯中文标题.2018.1080p"
+        );
     }
 
     #[test]
