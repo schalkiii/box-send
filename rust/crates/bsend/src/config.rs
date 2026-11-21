@@ -105,6 +105,10 @@ pub struct CoverageSettings {
     pub auto_reseed_sites: Vec<String>,
     /// 真实发种总开关（缺省 false；所有 run_reseed 路径都过这道闸，演练不受影响）
     pub reseed_publish_enabled: bool,
+    /// 发布后不做自检（默认 false）：跳过标题/MediaInfo/链接回读核对
+    pub skip_post_check: bool,
+    /// 加入下载器时 skip_checking=true（默认 false）：跳过哈希校验
+    pub skip_hash_check: bool,
     /// 索引归档：下载器里消失超过这么多天的内容从索引里清掉
     pub archive_days: i64,
     /// 并行站 worker 数（Swift 版全局串行；Rust 版按站并行，默认 4）
@@ -146,6 +150,8 @@ impl Default for CoverageSettings {
             reseed_rules: std::collections::BTreeMap::new(),
             auto_reseed_sites: Vec::new(),
             reseed_publish_enabled: false,
+            skip_post_check: false,
+            skip_hash_check: false,
             archive_days: 30,
             max_concurrent_sites: 4,
             rate_limit_floor_sec: 60,
@@ -342,6 +348,8 @@ impl Config {
                 .unwrap_or_default(),
             auto_reseed_sites: v_str_list(&assist, "autoReseedSites"),
             reseed_publish_enabled: v_bool(&assist, "publishEnabled", d.reseed_publish_enabled),
+            skip_post_check: v_bool(&assist, "skipPostCheck", d.skip_post_check),
+            skip_hash_check: v_bool(&assist, "skipHashCheck", d.skip_hash_check),
             archive_days: d.archive_days,
             max_concurrent_sites: (v_i64(
                 &assist,

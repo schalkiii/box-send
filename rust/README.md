@@ -157,6 +157,7 @@ GUI「转种草稿」页的「审阅」按钮与之等价（字段清单打进�
 | `autoReseedSites` | `[]` | 自动发种白名单（当前演练用 luckpt/hdfans/ptba） |
 | `reseedRules` | `{}` | 逐站发种规范（标题长度/链接/MediaInfo/禁发词/日限额/`selectPicks` 显式选档） |
 | `publishEnabled` | `false` | **真实发种总闸**：三处入口都从此过；默认关闭，演练不受影响 |
+| `skipPostCheck` / `skipHashCheck` | `false` | 发后跳过标题自检 / qB 添加时跳过哈希校验（测试阶段按需开启） |
 
 ### Cookie 来源
 

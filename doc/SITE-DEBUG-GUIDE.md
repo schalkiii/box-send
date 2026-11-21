@@ -83,6 +83,12 @@
 - **MediaInfo 生成**：MediaInfo GUI 版 `MediaInfo.exe` 无法无头运行（带参数会挂起），必须走
   `MediaInfo.dll` 的 C 接口（`MediaInfo_New/Open/Option/Inform`）；`Language=en` 输出标准
   英文标签文本；内容目录取最大视频作代表（剧集包取单集）。
+- **existed 的真实语义**：目标站按 IMDb/片名判重，同片不同版本（1080p vs 2160p）也会
+  返回 existed；info hash 不同、qB 没有该站 tracker 不代表辅种漏了——文件清单不同时
+  辅种臂会正确拒绝跨种。上传前用 `search_area=4` 按 IMDb 区判重，命中即落 ReviewPending，
+  不 POST、不把 existed 当成功。
+- **源页 MediaInfo 的坑**：NBSP 对齐会被 LuckAudit 判为缺字段，提交前归一化 NBSP；
+  源页 MediaInfo 缺 General/Duration 或 Video/Width/Height 时改用本地 MediaInfo.dll 生成。
 - **同名重复的急救方式**：通用规则不猜（muxuege 两个 AAC 留空）；确属站点表单重复项时，
   用逐站 `assist.reseedRules.<site>.selectPicks` 指定**实测 value**（ptfans 媒介两个 Encode
   value 7/8，取 8；写入前校验该 value 在表单中真实存在，防旧规则失效）。

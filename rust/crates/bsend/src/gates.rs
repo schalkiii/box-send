@@ -49,6 +49,8 @@ pub struct SiteRules {
     /// 逐站显式选档覆盖：字段前缀 → 选项 value（实测取证后配置，消歧用）
     #[serde(default)]
     pub select_picks: std::collections::BTreeMap<String, String>,
+    /// 提交前剪掉简介里无法访问的图片（站点官方预审会逐图校验）
+    pub prune_dead_images: Option<bool>,
     /// 每日自动发种上限（缺省 2）
     pub daily_limit: Option<u32>,
     /// 规则来源备注

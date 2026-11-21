@@ -875,7 +875,7 @@ fn push_tail(
         &filename,
         &save_path,
         category,
-        false,
+        cov.skip_hash_check,
         limit,
         true,
         layout.content_layout(),

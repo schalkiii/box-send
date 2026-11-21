@@ -168,3 +168,7 @@ qB /torrents/export?hash=…（或 BT_backup 目录）
   「同名不同标签 → 不猜」（muxuege 两个 AAC 留空）。
 - **真发解冻步骤**：编辑 `boxsend.json` 的 `assist.publishEnabled=true`，
   同时确认 `autoReseedSites` 白名单；未显式改前任何 `--yes`/autopost 都会在请求前退出。
+- **2026-11-21 · 真实发种测试（仅 luckpt）**：真实草稿迭代修复 HDTV 条件回退、
+  DDP/声道词边界、NBSP MediaInfo、本地 MediaInfo 回填、死图剪除、IMDb 区上传前判重。
+  经查 existed 是站点按条目判重（同片 2160p 已存在），qB 未辅种该版本是文件清单不同
+  （1080p vs 2160p），非辅种故障；命中判重会在 POST 前停住。

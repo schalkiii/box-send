@@ -70,7 +70,30 @@ impl ReleaseInfo {
             self.subtitle.to_lowercase(),
             self.descr.to_lowercase()
         );
-        MARKERS.iter().any(|m| hay.contains(m))
+        if MARKERS.iter().any(|m| hay.contains(m)) {
+            return true;
+        }
+        // MediaInfo 的 Text 段 Language=Chinese / Title 带简繁，也是中字的实证
+        let mut section = String::new();
+        for line in self.mediainfo.lines() {
+            let l = line.trim();
+            let low = l.to_ascii_lowercase();
+            if ["text", "audio", "video", "general", "menu", "chapters"]
+                .iter()
+                .any(|p| low.starts_with(p))
+            {
+                section = low.split('#').next().unwrap_or("").to_string();
+            }
+            if section.starts_with("text")
+                && ((low.starts_with("language") && low.contains("chinese"))
+                    || l.contains("简体")
+                    || l.contains("繁体")
+                    || l.contains("中字"))
+            {
+                return true;
+            }
+        }
+        false
     }
 
     /// 完结剧集特征：完结 / 全集 / Complete（拉丁词边界）
@@ -275,7 +298,7 @@ pub fn parse_release_page(html: &str, name_fallback: &str) -> ReleaseInfo {
             .unwrap_or_else(|| body_text(html));
     }
     // MediaInfo：<pre>、引用框、code 块里含 Unique ID / DISC TITLE 特征的段
-    info.mediainfo = extract_mediainfo(html, &info.descr);
+    info.mediainfo = normalize_mediainfo(&extract_mediainfo(html, &info.descr));
     // 条目链接
     let hay = format!("{}\n{}", info.descr, html);
     info.imdb = find_tt(&hay);
@@ -856,7 +879,10 @@ fn find_keywords(hay: &str, keywords: &[&str]) -> Vec<String> {
             let at = from + p;
             let end = at + k.len();
             let pre_ok = at == 0 || !h.as_bytes()[at - 1].is_ascii_alphanumeric();
-            let post_ok = end >= h.len() || !h.as_bytes()[end].is_ascii_alphanumeric();
+            let post_ok = end >= h.len()
+                || !h.as_bytes()[end].is_ascii_alphanumeric()
+                // 音频码常紧跟声道：DDP5.1 / DTS5.1 / AAC2.0
+                || h.as_bytes()[end].is_ascii_digit();
             if pre_ok && post_ok {
                 hits.push((at, kw));
                 from = end;
@@ -1314,12 +1340,11 @@ fn fill_selects(fields: &mut Vec<Field>, page: &str, info: &ReleaseInfo) -> Vec<
         ("processing_sel", PROCESSING_KEYWORDS),
     ];
     let codec_tokens = find_keywords(&hay, CODEC_KEYWORDS);
-    let reencoded = codec_tokens.iter().any(|t| {
-        matches!(
-            t.to_ascii_lowercase().as_str(),
-            "x264" | "x265" | "h264" | "h265" | "avc" | "hevc"
-        )
-    });
+    // 只有 x264/x265 明确是重编码；AVC/HEVC 也可能是原盘（Bitter Moon 实测：
+    // Blu-ray AVC DTS-HD MA 标 Encode 被预审判「媒介与标题不匹配」）。
+    let reencoded = codec_tokens
+        .iter()
+        .any(|t| matches!(t.to_ascii_lowercase().as_str(), "x264" | "x265"));
     for (prefix, kws) in cats {
         let names = select_field_names(fields, prefix);
         if names.is_empty() {
@@ -1594,9 +1619,71 @@ pub struct PreparedUpload {
     pub form_html: String,
 }
 
+/// 剪掉简介里不可访问的 `<img>`（预审逐图校验；只处理绝对 URL）。
+/// `probe` 返回 true 表示图片可访问，便于单测注入。
+pub fn prune_dead_images_with(html: &str, probe: &mut dyn FnMut(&str) -> bool) -> (String, usize) {
+    let mut out = String::with_capacity(html.len());
+    let mut i = 0usize;
+    let mut removed = 0usize;
+    let lower = html.to_ascii_lowercase();
+    while let Some(p) = lower[i..].find("<img") {
+        let start = i + p;
+        out.push_str(&html[i..start]);
+        let end = html[start..]
+            .find('>')
+            .map(|j| start + j + 1)
+            .unwrap_or(html.len());
+        let tag = &html[start..end];
+        let src = attr(tag, "src").unwrap_or_default();
+        let keep = src.starts_with("http") && probe(&src);
+        if keep {
+            out.push_str(tag);
+        } else {
+            removed += 1;
+        }
+        i = end;
+    }
+    out.push_str(&html[i..]);
+    (out, removed)
+}
+
+fn prune_dead_images(html: &str) -> (String, usize) {
+    let Ok(client) = reqwest::blocking::Client::builder()
+        .user_agent(crate::sites::nexusphp::DEFAULT_UA)
+        .no_proxy()
+        .timeout(std::time::Duration::from_secs(8))
+        .build()
+    else {
+        return (html.to_string(), 0);
+    };
+    prune_dead_images_with(html, &mut |url| {
+        client
+            .get(url)
+            .send()
+            .map(|r| r.status().is_success())
+            .unwrap_or(false)
+    })
+}
+
 /// 应用逐站显式选档覆盖（`reseedRules.<site>.selectPicks`）：只在字段当前为空/0 时写入，
 /// 且 value 必须是该站表单真实存在的选项（防旧规则在新版表单上写无效值）。
 pub fn apply_site_rules(prep: &mut PreparedUpload, rules: &crate::gates::SiteRules) {
+    if rules.prune_dead_images.unwrap_or(false) {
+        if let Some(field) = ["descr", "release_desc", "description", "content"]
+            .iter()
+            .find(|f| field_lookup(&prep.fields, f).is_some())
+            .copied()
+        {
+            let cur = field_lookup(&prep.fields, field).unwrap_or("").to_string();
+            let (next, removed) = prune_dead_images(&cur);
+            if removed > 0 {
+                set_field(&mut prep.fields, field, next);
+                prep.select_notes.push(format!(
+                    "简介剪掉 {removed} 张不可访问图片（pruneDeadImages）"
+                ));
+            }
+        }
+    }
     for (prefix, want) in &rules.select_picks {
         for name in select_field_names(&prep.fields, prefix) {
             let cur = field_lookup(&prep.fields, &name).unwrap_or("").to_string();
@@ -1962,6 +2049,67 @@ fn norm_post_title(s: &str) -> String {
         .filter(|x| !x.is_empty())
         .collect::<Vec<_>>()
         .join(".")
+}
+
+/// 目标站 IMDb 区判重：很多站按条目判重（同片不同版本也算 existed）。
+/// 返回 (详情页链接, 页面标题)；无 IMDb/无命中返回 None。
+fn target_has_imdb(
+    target: &NexusPhp,
+    imdb: Option<&str>,
+    log: &mut dyn FnMut(&str),
+) -> Option<(String, String)> {
+    let tt = imdb?;
+    if !tt.starts_with("tt") {
+        return None;
+    }
+    let url = format!(
+        "{}/torrents.php?search={}&search_area=4&notnewword=1",
+        target.base.as_str().trim_end_matches('/'),
+        tt
+    );
+    let html = match target.fetch_html(&url, target.base.as_str()) {
+        Ok(h) => h,
+        Err(e) => {
+            log(&format!("IMDb 区判重失败：{e:#}"));
+            return None;
+        }
+    };
+    // 只认搜索结果锚点：<a title="..." href="details.php?id=N...">。
+    // 侧栏/用户信息里也有 details.php?id=，不能当判重结果（曾误抓 id=10230）。
+    let lower = html.to_ascii_lowercase();
+    let mut from = 0usize;
+    while let Some(p) = lower[from..].find("<a") {
+        let start = from + p;
+        let end = html[start..]
+            .find('>')
+            .map(|j| start + j + 1)
+            .unwrap_or(html.len());
+        let tag = &html[start..end];
+        if let Some(href) = attr(tag, "href") {
+            let path = href.split(['?', '#']).next().unwrap_or("");
+            let last_seg = path.rsplit('/').next().unwrap_or("");
+            if last_seg == "details.php" {
+                let Some(pos) = href.find("details.php?id=") else {
+                    from = end;
+                    continue;
+                };
+                let after = &href[pos + "details.php?id=".len()..];
+                let digits: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
+                if !digits.is_empty() {
+                    let detail = format!(
+                        "{}/details.php?id={digits}",
+                        target.base.as_str().trim_end_matches('/')
+                    );
+                    let title = attr(tag, "title").unwrap_or_default().to_string();
+                    if !title.is_empty() {
+                        return Some((detail, title));
+                    }
+                }
+            }
+        }
+        from = end;
+    }
+    None
 }
 
 /// 发后校正：上传回包给的详情页可能是中转/错误 id（luckpt 实测回包 id=10230，
@@ -2845,6 +2993,41 @@ struct Released {
     preflight: Preflight,
 }
 
+/// 站点预审只认普通空格：源页 MediaInfo 常用 NBSP 对齐，先归一化
+fn normalize_mediainfo(text: &str) -> String {
+    text.replace(['\u{a0}', '\u{3000}'], " ")
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
+}
+
+/// MediaInfo 是否满足站点预审的最低结构：General 有 Duration、Video 有 Width/Height。
+fn mediainfo_is_complete(text: &str) -> bool {
+    let mut section = String::new();
+    let mut has_duration = false;
+    let mut has_width = false;
+    let mut has_height = false;
+    for line in text.lines() {
+        let l = line.trim();
+        let low = l.to_ascii_lowercase();
+        if ["general", "video", "audio", "text", "menu", "chapters"]
+            .iter()
+            .any(|p| low.starts_with(p))
+        {
+            section = low.split('#').next().unwrap_or("").to_string();
+        }
+        if section == "general" && low.starts_with("duration") {
+            has_duration = true;
+        }
+        if section == "video" && low.starts_with("width") {
+            has_width = true;
+        }
+        if section == "video" && low.starts_with("height") {
+            has_height = true;
+        }
+    }
+    has_duration && has_width && has_height
+}
+
 /// 源站详情页没有 MediaInfo 块时，从本地文件生成：内容 → 成员种子 → 落地路径 → 代表视频。
 /// 失败只记提示（预检会如实报「MediaInfo 为空」），不阻断审阅。
 fn disk_mediainfo(
@@ -2921,7 +3104,7 @@ fn prepare_released(
     ));
 
     // ---- 1.5 源站没有 MediaInfo 时，从本地文件生成（luckpt 等站发种硬性要求）----
-    if info.mediainfo.trim().is_empty() {
+    if info.mediainfo.trim().is_empty() || !mediainfo_is_complete(&info.mediainfo) {
         if let Ok(Some(mi)) = disk_mediainfo(cfg, req, log) {
             info.mediainfo = mi;
             log(&format!(
@@ -2973,6 +3156,43 @@ pub fn run_reseed(
         }
         bail!("预检未通过（{}）：补齐后重试", rel.preflight.summary());
     }
+    // ---- 2.5 目标站判重：站点按 IMDb/片名判重，命中可能是「同片不同版本」。
+    // qB 没有该站 tracker 并不一定是辅种漏了：文件清单不同（1080p vs 2160p）时
+    // 辅种臂会正确拒绝跨种。这里不上传，落 ReviewPending 交人工确认。
+    let imdb_for_search = rel.info.imdb.as_deref();
+    let dup = target_has_imdb(&rel.tgt, imdb_for_search, log).or_else(|| {
+        match rel.tgt.search(
+            &rel.info.name,
+            &rel.info.subtitle,
+            false,
+            imdb_for_search.unwrap_or(""),
+            &mut || true,
+        ) {
+            Ok(crate::sites::nexusphp::SearchOutcome::Hit(hit)) => {
+                Some((hit.detail_url, hit.title))
+            }
+            _ => None,
+        }
+    });
+    if let Some((detail_url, title)) = dup {
+        log(&format!(
+            "目标站已有同条目（{title} → {detail_url}）；站点会判重为 existed，跳过上传"
+        ));
+        write_cell(
+            index,
+            &req.content_key,
+            &req.target_site,
+            CoverageStatus::ReviewPending,
+            Some(detail_url),
+            &format!(
+                "目标站已有条目「{title}」（可能不同版本；文件不同则不跨种），未上传避免 existed 假成功"
+            ),
+        );
+        index.save()?;
+        return Ok(String::new());
+    }
+    log("目标站未找到同条目，继续上传");
+
     let Released {
         src,
         tgt,
@@ -3060,8 +3280,12 @@ pub fn run_reseed(
             }
         }
     };
-    for w in verify_posted(&tgt, &detail_url, &info) {
-        log(&format!("发后自检·{w}"));
+    if cfg.coverage.skip_post_check {
+        log("按配置跳过发后自检（skipPostCheck=true）");
+    } else {
+        for w in verify_posted(&tgt, &detail_url, &info) {
+            log(&format!("发后自检·{w}"));
+        }
     }
 
     // ---- 4 回推下载器并校验 ----
@@ -3115,7 +3339,7 @@ pub fn run_reseed(
         &fname,
         &save_path,
         category.as_deref(),
-        false,
+        cfg.coverage.skip_hash_check,
         limit,
         true,
         layout.content_layout(),
@@ -3773,6 +3997,70 @@ Height : 1080</pre></div>"#;
             norm_post_title("Dark City 1998"),
             norm_post_title("Dark City 1999")
         );
+    }
+
+    #[test]
+    fn mediainfo_nbsp_is_normalized() {
+        let s = normalize_mediainfo("Duration\u{a0}\u{a0}: 2 h\r\nWidth\u{a0}: 1920");
+        assert!(s.contains("Duration  : 2 h") && !s.contains('\u{a0}') && !s.contains('\r'));
+    }
+
+    #[test]
+    fn mediainfo_completeness_requires_duration_and_dimensions() {
+        assert!(mediainfo_is_complete(
+            "General
+Duration : 47 min
+Video
+Width : 1920 pixels
+Height : 1080 pixels"
+        ));
+        assert!(!mediainfo_is_complete(
+            "General
+Format : MPEG-4
+Video
+Format : AVC"
+        ));
+    }
+
+    #[test]
+    fn chinese_text_track_counts_as_subs() {
+        let info = ReleaseInfo {
+            mediainfo: "Text #1
+Language : Chinese
+Title : 简体中文"
+                .into(),
+            ..Default::default()
+        };
+        assert!(info.has_chinese_subs());
+        let only_english = ReleaseInfo {
+            mediainfo: "Text #1
+Language : English"
+                .into(),
+            ..Default::default()
+        };
+        assert!(!only_english.has_chinese_subs());
+    }
+
+    #[test]
+    fn prune_dead_images_keeps_reachable_only() {
+        let html = r#"正文<img src="http://ok/1.jpg"><img src="http://dead/2.jpg">尾"#;
+        let (out, n) = prune_dead_images_with(html, &mut |u| u.contains("ok"));
+        assert_eq!(n, 1);
+        assert!(
+            out.contains("ok/1.jpg") && !out.contains("dead/2.jpg"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn bluray_avc_is_not_reencode() {
+        let form = r#"<select name="medium_sel[4]"><option value="0">请选择</option><option value="1">Blu-ray</option><option value="2">Encode</option></select>"#;
+        let info = ReleaseInfo {
+            name: "Bitter Moon 1992 1080p Blu-ray AVC DTS-HD MA 2.0".into(),
+            ..Default::default()
+        };
+        let (fs, _p, _n) = build_upload_fields(&info, form, &[]);
+        assert_eq!(field_lookup(&fs, "medium_sel"), Some("1"));
     }
 
     #[test]
