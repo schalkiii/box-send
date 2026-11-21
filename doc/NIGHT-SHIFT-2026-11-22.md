@@ -44,6 +44,8 @@ Get-Content "C:\Users\Schal\AppData\Local\BoxSend\auto-audit.jsonl" -Tail 20
 ## 3. 昨晚 dry-run 结论（sbpt，limit 20）
 
 - 通过门禁、可发：**20 条**。
+- 收尾时用 release 版复验 `--dry-run --sites sbpt --limit 1`：只审 1 条、门禁通过，
+  证明演练限额已生效（此前 `--limit` 在演练下不生效，会跑完全部草稿）。
 - 拦截 5 项，原因均为**素材缺口**（非代码缺陷），需人工补：
 
 | 条目 | 拦截原因 | 处理建议 |
