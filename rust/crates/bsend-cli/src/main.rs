@@ -135,6 +135,9 @@ enum Cmd {
         /// 本次最多发布多少条
         #[arg(long)]
         limit: Option<usize>,
+        /// 只处理这些目标站的草稿（逗号分隔站点 id）
+        #[arg(long, value_delimiter = ',')]
+        sites: Option<Vec<String>>,
     },
 
     /// 站点档案汇总：配置开关 + 最近一次实测结论 + pieces 支持 + cookie 概况
@@ -183,7 +186,11 @@ fn main() -> Result<()> {
         Cmd::Layoutcheck { limit, only } => cmd_layoutcheck(&cfg, limit, only),
         Cmd::Sites { json, md } => cmd_sites(&cfg, json, md),
         Cmd::Gatecheck { sites, json } => cmd_gatecheck(&cfg, sites, json),
-        Cmd::Autopost { dry_run, limit } => cmd_autopost(&cfg, dry_run, limit),
+        Cmd::Autopost {
+            dry_run,
+            limit,
+            sites,
+        } => cmd_autopost(&cfg, dry_run, limit, sites),
     }
 }
 
@@ -301,14 +308,12 @@ fn cmd_round(
     // 否则 resolver 只能查 --sites 内的一两个源站（wait_source 的根因之一）。
     let adapters = build_adapters(cfg, &None)?;
     println!(
-        "参与站点（{}，目标过滤后 {}）：{}",
+        "参与站点：源站适配器 {} 个（全量保留供源定位）；本轮目标：{}",
         adapters.len(),
-        sites.as_ref().map(|v| v.len()).unwrap_or(adapters.len()),
-        adapters
-            .iter()
-            .map(|a| a.site_id.clone())
-            .collect::<Vec<_>>()
-            .join("、")
+        sites
+            .as_ref()
+            .map(|v| v.join("、"))
+            .unwrap_or_else(|| "全部启用站".to_string())
     );
     let mut index = ContentIndex::load(&cfg.coverage_state_path());
     let opts = RoundOptions {
@@ -643,6 +648,15 @@ fn cmd_formcheck(cfg: &Config, sites: Option<Vec<String>>) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// 自动发种退避：门禁拦截 24h 内不重试（规则一天内通常不变），
+/// 失败/审阅失败 6h 内不重试（网络抖动恢复快，死源也别每轮白跑）
+fn autopost_in_backoff(last: Option<(i64, bool)>, now: i64) -> bool {
+    match last {
+        Some((at, is_block)) => now - at < if is_block { 86400 } else { 21600 },
+        None => false,
+    }
 }
 
 /// formcheck 结论按站点合并：未重跑站保留旧结论，重跑站以本次为准
@@ -1297,7 +1311,12 @@ fn yn(v: &serde_json::Value, k: &str) -> &'static str {
 
 /// 自动发种：按草稿逐条走「审阅 → 门禁 → 发布」，白名单 + 日限额 + 审计留痕。
 /// `--dry-run` 只打印门禁矩阵（等价 gatecheck），不碰站点写接口。
-fn cmd_autopost(cfg: &Config, dry_run: bool, limit: Option<usize>) -> Result<()> {
+fn cmd_autopost(
+    cfg: &Config,
+    dry_run: bool,
+    limit: Option<usize>,
+    sites: Option<Vec<String>>,
+) -> Result<()> {
     if !dry_run {
         bsend::config::ensure_publish_enabled(cfg)?;
     }
@@ -1322,14 +1341,29 @@ fn cmd_autopost(cfg: &Config, dry_run: bool, limit: Option<usize>) -> Result<()>
     let now = bsend::coverage::now_unix();
     let today_start = now - now % 86400;
     let mut posted_today: HashMap<String, u32> = HashMap::new();
+    // (内容, 站点) → (最近一次拦截/失败时间, 是否门禁拦截)，用于退避
+    let mut last_bad: HashMap<(String, String), (i64, bool)> = HashMap::new();
     if let Ok(text) = std::fs::read_to_string(&audit_path) {
         for line in text.lines() {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
-                if v.get("result").and_then(|r| r.as_str()) == Some("posted")
-                    && v.get("at").and_then(|a| a.as_i64()).unwrap_or(0) >= today_start
-                {
+                let result = v.get("result").and_then(|r| r.as_str()).unwrap_or("");
+                let at = v.get("at").and_then(|a| a.as_i64()).unwrap_or(0);
+                if result == "posted" && at >= today_start {
                     if let Some(s) = v.get("site").and_then(|s| s.as_str()) {
                         *posted_today.entry(s.to_string()).or_insert(0) += 1;
+                    }
+                }
+                if matches!(result, "blocked" | "failed" | "review_failed") {
+                    if let (Some(k), Some(s)) = (
+                        v.get("key").and_then(|s| s.as_str()),
+                        v.get("site").and_then(|s| s.as_str()),
+                    ) {
+                        let slot = last_bad
+                            .entry((k.to_string(), s.to_string()))
+                            .or_insert((0, false));
+                        if at > slot.0 {
+                            *slot = (at, result == "blocked");
+                        }
                     }
                 }
             }
@@ -1355,8 +1389,25 @@ fn cmd_autopost(cfg: &Config, dry_run: bool, limit: Option<usize>) -> Result<()>
             }
         }
         let site = &d.target_site;
+        if let Some(ss) = &sites {
+            if !ss.iter().any(|s| s.eq_ignore_ascii_case(site)) {
+                continue;
+            }
+        }
         if !allow.contains(site) {
             println!("跳过 {}：不在自动发种白名单", site);
+            continue;
+        }
+        if autopost_in_backoff(
+            last_bad
+                .get(&(d.content_key.clone(), site.clone()))
+                .copied(),
+            now,
+        ) {
+            println!(
+                "跳过 {}：上次拦截/失败还在退避期内（门禁 24h / 失败 6h）",
+                d.name
+            );
             continue;
         }
         let rules = cfg
@@ -1694,5 +1745,17 @@ mod tests {
         let old = vec![serde_json::json!({"site": "a"})];
         let merged = merge_formcheck_results(&old, vec![serde_json::json!({"site": "b"})]);
         assert_eq!(merged.len(), 2);
+    }
+
+    #[test]
+    fn autopost_backoff_windows() {
+        let now = 1_800_000_000i64;
+        assert!(!autopost_in_backoff(None, now));
+        // 门禁拦截：23h 内退避，25h 后放行
+        assert!(autopost_in_backoff(Some((now - 23 * 3600, true)), now));
+        assert!(!autopost_in_backoff(Some((now - 25 * 3600, true)), now));
+        // 失败：5h 内退避，7h 后放行
+        assert!(autopost_in_backoff(Some((now - 5 * 3600, false)), now));
+        assert!(!autopost_in_backoff(Some((now - 7 * 3600, false)), now));
     }
 }

@@ -814,12 +814,23 @@ fn process_item(
         reason: reason.to_string(),
     };
 
-    // 本地指纹（本轮缓存；拿不到就没法逐文件比对）
-    let Some(fp) = fingerprint_of(qb, fp_cache, &item.rep_hash) else {
-        return done(
-            CoverageStatus::Failed,
-            "读不到本地种子的文件清单，没法逐文件比对".into(),
-        );
+    // 本地指纹（本轮缓存）：rep 拿不到再试其他成员——rep 可能已被移出 qB。
+    // 全都拿不到多为瞬态（扫描期 qB WebAPI 争用）：不落 Failed（那会把辅种机会
+    // 负缓存一个 TTL），本轮跳过下轮重试；成员真删光时扫描会归档内容，不会永久占队列。
+    let mut fp = fingerprint_of(qb, fp_cache, &item.rep_hash);
+    if fp.is_none() {
+        for h in &item.hashes {
+            if h.eq_ignore_ascii_case(&item.rep_hash) {
+                continue;
+            }
+            fp = fingerprint_of(qb, fp_cache, h);
+            if fp.is_some() {
+                break;
+            }
+        }
+    }
+    let Some(fp) = fp else {
+        return skipped("读不到本地种子的文件清单（qB 瞬态或成员已删），本轮跳过下轮重试");
     };
 
     // ---- pieces-hash 快速通道：预扫已给出精确 torrent id，跳过名字检索 ----

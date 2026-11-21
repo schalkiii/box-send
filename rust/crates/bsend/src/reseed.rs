@@ -3617,8 +3617,34 @@ pub fn run_reseed(
                     log(&format!("回包无链接，IMDb 区找到新种：{title} → {u}"));
                     u
                 }
-                Ok(None) => bail!("上传成功但没拿到详情页链接（IMDb 区也没找到），请手动确认"),
-                Err(e) => bail!("上传成功但没拿到详情页链接（IMDb 区判重失败：{e:#}），请手动确认"),
+                // 上传可能已成功：格子必须离开草稿态，否则下轮 autopost 会重传造成重复发布。
+                // ReviewPending 非终态，missTTL 后 run 会重查——若真发成功了辅种臂会自然命中。
+                Ok(None) => {
+                    write_cell(
+                        index,
+                        &req.content_key,
+                        &req.target_site,
+                        CoverageStatus::ReviewPending,
+                        None,
+                        "上传可能已成功：回包无详情页链接且 IMDb 区未找到，待人工确认（不自动重传）",
+                    );
+                    index.save()?;
+                    bail!("上传成功但没拿到详情页链接（IMDb 区也没找到），格子已记待人工确认")
+                }
+                Err(e) => {
+                    write_cell(
+                        index,
+                        &req.content_key,
+                        &req.target_site,
+                        CoverageStatus::ReviewPending,
+                        None,
+                        "上传可能已成功：回包无详情页链接且 IMDb 区判重失败，待人工确认（不自动重传）",
+                    );
+                    index.save()?;
+                    bail!(
+                        "上传成功但没拿到详情页链接（IMDb 区判重失败：{e:#}），格子已记待人工确认"
+                    )
+                }
             }
         }
     };

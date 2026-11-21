@@ -87,6 +87,7 @@ bsend layoutcheck --limit 20           # 落盘核对：抽 20 段内容看推�
 bsend sites [--md|--json]              # 站点总账：启用/暂停/实测/pieces/cookie 一处看全
 bsend gatecheck [--sites a,b|--json]  # 全站门禁演练：字段 + 官方预审，不上传种子
 bsend autopost --dry-run               # 草稿审阅 + 门禁矩阵（不发布）
+bsend autopost --sites sbpt            # 只自动发布 sbpt 草稿（白名单 + 日限额 + 审计）
 ```
 
 GUI「转种草稿」页的「审阅」按钮与之等价（字段清单打进任务日志），「确认转种」= 人工
@@ -163,7 +164,7 @@ nl2br 的裸 `<br />`），按「转义标签占绝对多数 + 富文本标记/�
 | `reseedPausedSites` | `[]` | 只停转种/发种的站：无发布权限、上传界面 v1 不支持；辅种照常 |
 | `mediaInfoDll` | 自动 | MediaInfo.dll 路径（源站没有 MediaInfo 时从本地文件生成用）；缺省按常见安装路径找 |
 | `piecesHash` | `auto` | pieces-hash 批量通道（站点支持就走，失败回退名字检索；`off` 关闭） |
-| `autoReseedSites` | `[]` | 自动发种白名单（当前演练用 luckpt/hdfans/ptba） |
+| `autoReseedSites` | `[]` | 自动发种白名单：`autopost` 只发布列出的站；空 = 只做门禁演练 |
 | `reseedRules` | `{}` | 逐站发种规范（标题长度/链接/MediaInfo/禁发词/日限额/`selectPicks` 显式选档） |
 | `publishEnabled` | `false` | **真实发种总闸**：三处入口都从此过；默认关闭，演练不受影响 |
 | `skipPostCheck` / `skipHashCheck` | `false` | 发后跳过标题自检 / qB 添加时跳过哈希校验（测试阶段按需开启） |
