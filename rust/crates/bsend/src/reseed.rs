@@ -2136,10 +2136,12 @@ fn target_has_imdb(
     target: &NexusPhp,
     imdb: Option<&str>,
     log: &mut dyn FnMut(&str),
-) -> Option<(String, String)> {
-    let tt = imdb?;
+) -> Result<Option<(String, String)>> {
+    let Some(tt) = imdb else {
+        return Ok(None);
+    };
     if !tt.starts_with("tt") {
-        return None;
+        return Ok(None);
     }
     let url = format!(
         "{}/torrents.php?search={}&search_area=4&notnewword=1",
@@ -2150,7 +2152,7 @@ fn target_has_imdb(
         Ok(h) => h,
         Err(e) => {
             log(&format!("IMDb 区判重失败：{e:#}"));
-            return None;
+            return Err(e);
         }
     };
     // 只认搜索结果锚点：<a title="..." href="details.php?id=N...">。
@@ -2181,14 +2183,14 @@ fn target_has_imdb(
                     );
                     let title = attr(tag, "title").unwrap_or_default().to_string();
                     if !title.is_empty() {
-                        return Some((detail, title));
+                        return Ok(Some((detail, title)));
                     }
                 }
             }
         }
         from = end;
     }
-    None
+    Ok(None)
 }
 
 /// 发后校正：上传回包给的详情页可能是中转/错误 id（luckpt 实测回包 id=10230，
@@ -3239,8 +3241,9 @@ pub fn run_reseed(
     // qB 没有该站 tracker 并不一定是辅种漏了：文件清单不同（1080p vs 2160p）时
     // 辅种臂会正确拒绝跨种。这里不上传，落 ReviewPending 交人工确认。
     let imdb_for_search = rel.info.imdb.as_deref();
-    let dup = target_has_imdb(&rel.tgt, imdb_for_search, log).or_else(|| {
-        match rel.tgt.search(
+    let dup = match target_has_imdb(&rel.tgt, imdb_for_search, log) {
+        Ok(Some(hit)) => Some(hit),
+        Ok(None) => match rel.tgt.search(
             &rel.info.name,
             &rel.info.subtitle,
             false,
@@ -3250,9 +3253,18 @@ pub fn run_reseed(
             Ok(crate::sites::nexusphp::SearchOutcome::Hit(hit)) => {
                 Some((hit.detail_url, hit.title))
             }
-            _ => None,
+            Ok(crate::sites::nexusphp::SearchOutcome::Miss) => None,
+            Ok(crate::sites::nexusphp::SearchOutcome::BudgetExhausted) => {
+                bail!("目标站判重预算耗尽，拒绝在未确认重复情况的上传");
+            }
+            Err(e) => {
+                bail!("目标站判重检索失败（{e:#}），拒绝在未确认重复情况的上传");
+            }
+        },
+        Err(e) => {
+            bail!("目标站 IMDb 判重失败（{e:#}），拒绝在未确认重复情况的上传");
         }
-    });
+    };
     if let Some((detail_url, title)) = dup {
         log(&format!(
             "目标站已有同条目（{title} → {detail_url}）；站点会判重为 existed，跳过上传"
@@ -3356,11 +3368,12 @@ pub fn run_reseed(
             }
             // 站点「发布成功」但回包没给链接：用 IMDb 区检索找回真实详情页。
             match target_has_imdb(&tgt, info.imdb.as_deref(), log) {
-                Some((u, title)) => {
+                Ok(Some((u, title))) => {
                     log(&format!("回包无链接，IMDb 区找到新种：{title} → {u}"));
                     u
                 }
-                None => bail!("上传成功但没拿到详情页链接（IMDb 区也没找到），请手动确认"),
+                Ok(None) => bail!("上传成功但没拿到详情页链接（IMDb 区也没找到），请手动确认"),
+                Err(e) => bail!("上传成功但没拿到详情页链接（IMDb 区判重失败：{e:#}），请手动确认"),
             }
         }
     };
@@ -3375,11 +3388,11 @@ pub fn run_reseed(
                 "回包详情页打不开（{e:#}），按 IMDb 区/标题检索校正真实详情页…"
             ));
             match target_has_imdb(&tgt, info.imdb.as_deref(), log) {
-                Some((u, title)) => {
+                Ok(Some((u, title))) => {
                     log(&format!("发后 IMDb 校正：{title} → {u}"));
                     u
                 }
-                None => match relocate_posted_detail(&tgt, &info.name, log) {
+                _ => match relocate_posted_detail(&tgt, &info.name, log) {
                     Some(u) => {
                         log(&format!("发后标题校正：{u}"));
                         u
