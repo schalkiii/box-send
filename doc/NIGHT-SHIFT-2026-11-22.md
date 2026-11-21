@@ -76,7 +76,7 @@ Get-Content "C:\Users\Schal\AppData\Local\BoxSend\auto-audit.jsonl" -Tail 20
 | `9d1a581` | 夜间审计执行记录 + MIT LICENSE + CHANGELOG |
 
 验证基线：`cargo fmt` 通过；`clippy --workspace --all-targets -D warnings` 零告警；
-`cargo test --workspace` = **190 单测 + 19 e2e + 2 CLI + 2 GUI** 全绿。
+`cargo test --workspace` = **191 单测 + 19 e2e + 2 CLI + 2 GUI** 全绿。
 
 ## 6. 今晚「不真发」的保障
 

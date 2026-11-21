@@ -86,7 +86,7 @@ bsend formcheck --sites luckpt,hdsky   # 只演练指定站
 bsend layoutcheck --limit 20           # 落盘核对：抽 20 段内容看推种会用哪个 savepath（只读）
 bsend sites [--md|--json]              # 站点总账：启用/暂停/实测/pieces/cookie 一处看全
 bsend gatecheck [--sites a,b|--json]  # 全站门禁演练：字段 + 官方预审，不上传种子
-bsend autopost --dry-run               # 草稿审阅 + 门禁矩阵（不发布）
+bsend autopost --dry-run               # 草稿审阅 + 门禁矩阵（不发布；--limit N 限制审阅条数）
 bsend autopost --sites sbpt            # 只自动发布 sbpt 草稿（白名单 + 日限额 + 审计）
 ```
 

@@ -735,7 +735,7 @@ DOC-M3），**仍待修 15 条（高 0 / 中 5 / 低 10）**。已修条目在 �
 | TEST-L3 | e2e mock 补 `addTags` 分支；409 接管断言补挂 tracker + 补 Boxsend 标签 | `e2e_already_exists_attaches_tracker` |
 | BUG-L11 | 多候选择优：`search_name_in_results` 按「精确 > 候选含发布名 > 发布名含候选 > 词元容忍」打分，同档比覆盖比例 | 单测 `search_prefers_closest_candidate_among_matches` |
 | TEST-L4 | 编排层注入 reviewer：posted/blocked 记账分支可零网络验证 | 单测 `autopost_writes_posted_and_blocked_audit` |
-| GAP-4 | `autopost --dry-run` 空白名单时逐条门禁演练（此前直接全跳过，与提示文案不符） | 单测 `dry_run_with_empty_whitelist_drills_all_drafts` / `dry_run_with_configured_whitelist_skips_unlisted_site` |
+| GAP-4 | `autopost --dry-run` 空白名单时逐条门禁演练（此前直接全跳过，与提示文案不符）；演练下 `--limit` 改为限制审阅条数 | 单测 `dry_run_with_empty_whitelist_drills_all_drafts` / `dry_run_with_configured_whitelist_skips_unlisted_site` / `dry_run_limit_caps_reviewed_drafts` |
 | ENG-L3 | 新增根 `LICENSE`（MIT）与 `CHANGELOG.md` | markdownlint |
 
 ### 8.2 仍未处理
@@ -749,7 +749,7 @@ DOC-M3），**仍待修 15 条（高 0 / 中 5 / 低 10）**。已修条目在 �
 ### 8.3 验证基线
 
 - `cargo fmt` 通过；`cargo clippy --workspace --all-targets -D warnings` 零告警；
-  `cargo test --workspace`：**190 单测 + 19 e2e + 2 CLI + 2 GUI** 全绿。
+  `cargo test --workspace`：**191 单测 + 19 e2e + 2 CLI + 2 GUI** 全绿。
 - 实机只读演练：`bsend autopost --dry-run --sites sbpt --limit 20`
   → 20 条门禁通过、5 条拦截、1 条目标站上传页瞬断（50x/10054，可重试）、
   1 条退避跳过；未真实发种。

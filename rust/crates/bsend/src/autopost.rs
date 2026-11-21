@@ -164,6 +164,9 @@ pub fn run_autopost_with(
     )));
     // 一次自动发种共用一个节流器：上传预算/站间隔跨草稿累计，超量即停
     let throttle = crate::throttle::SiteThrottle::from_coverage(&cfg.coverage);
+    // 演练模式不会 posted，`limit` 改为限制「实际审阅的草稿条数」，
+    // 否则 --dry-run --limit N 会审完全部草稿，既慢又白耗站点请求。
+    let mut drilled = 0usize;
     for d in &report.drafts {
         // 长任务跨午夜时，退避/日限额要按当前时刻算，不能用本轮开跑时的时间
         let now = now_unix();
@@ -215,6 +218,14 @@ pub fn run_autopost_with(
                 rules.daily_limit()
             )));
             continue;
+        }
+        if opts.dry_run {
+            if let Some(l) = opts.limit {
+                if drilled >= l {
+                    break;
+                }
+            }
+            drilled += 1;
         }
         let site_name = cfg
             .sites
@@ -999,6 +1010,41 @@ mod tests {
         .unwrap();
         assert_eq!(reviewed, 0);
         assert!(logs.iter().any(|l| l.contains("不在自动发种白名单")));
+    }
+
+    #[test]
+    fn dry_run_limit_caps_reviewed_drafts() {
+        // 演练不会 posted，limit 必须限制「实际审阅条数」，否则会把全部草稿都跑一遍
+        let dir = temp_dir("dry-limit");
+        let cfg = cfg_with_drafts(&dir, 2, 3);
+        let mut reviewed = 0;
+        let mut no_runner =
+            |_: &Config,
+             _: &reseed::ReseedRequest,
+             _: &mut ContentIndex,
+             _: &mut dyn FnMut(&str),
+             _: Option<&crate::throttle::SiteThrottle>| {
+                Ok(reseed::ReseedOutcome::Posted("u".into()))
+            };
+        let _ = run_autopost_with(
+            &cfg,
+            &AutopostOptions {
+                dry_run: true,
+                limit: Some(1),
+                sites: None,
+            },
+            &mut |_| {},
+            &mut |_: &Config,
+                  req: &reseed::ReseedRequest,
+                  _: &mut dyn FnMut(&str),
+                  _: Option<&crate::throttle::SiteThrottle>| {
+                reviewed += 1;
+                Ok(passing_review(&req.name))
+            },
+            &mut no_runner,
+        )
+        .unwrap();
+        assert_eq!(reviewed, 1, "演练 limit 必须限制审阅条数");
     }
 
     #[test]
