@@ -1030,7 +1030,9 @@ fn token_aliases(token: &str) -> &'static [&'static str] {
         "dtshd" => &["DTS-HD", "DTS"],
         "webdl" => &["WEB-DL", "WEB"],
         "webrip" => &["WEBRip", "WEB"],
-        "bluray" | "blurayremux" => &["BluRay", "Blu-ray"],
+        "bluray" => &["BluRay", "Blu-ray"],
+        // 原盘 REMUX：站点有 Remux 选项时归 Remux，不归 Blu-ray
+        "blurayremux" | "remux" => &["Remux", "REMUX"],
         _ => &[],
     }
 }
@@ -3233,6 +3235,21 @@ pub fn run_reseed(
 
     // ---- 4 下载源种 + 上传目标站 ----
     let torrent_data = src.download_torrent(&page, &req.source_url)?;
+    // 源种 info hash 必须属于当前本地内容：人工草稿/源站搜错版本时拦下，
+    // 避免「站点有 1080p、本地 2160p」这类版本错配（实测绿里奇迹）。
+    if let Some(src_hash) = bencode::info_hash_v1(&torrent_data) {
+        let belongs = index
+            .contents
+            .get(&req.content_key)
+            .map(|e| e.torrents.contains_key(&src_hash))
+            .unwrap_or(false);
+        if !belongs {
+            bail!(
+                "源种 hash {src_hash} 不属于本地内容「{}」（源页版本与本地文件不一致），拒绝上传",
+                req.name
+            );
+        }
+    }
     log(&format!(
         "源种已下载（{} bytes），提交到 {} 上传页…",
         torrent_data.len(),
@@ -3258,7 +3275,14 @@ pub fn run_reseed(
                 index.save()?;
                 return Ok(String::new());
             }
-            bail!("上传成功但没拿到详情页链接，请手动到目标站确认后把链接补进格子");
+            // 站点「发布成功」但回包没给链接：用 IMDb 区检索找回真实详情页。
+            match target_has_imdb(&tgt, info.imdb.as_deref(), log) {
+                Some((u, title)) => {
+                    log(&format!("回包无链接，IMDb 区找到新种：{title} → {u}"));
+                    u
+                }
+                None => bail!("上传成功但没拿到详情页链接（IMDb 区也没找到），请手动确认"),
+            }
         }
     };
     log(&format!("新种详情页：{detail_url}"));
@@ -3269,14 +3293,20 @@ pub fn run_reseed(
         Ok(_) => detail_url,
         Err(e) => {
             log(&format!(
-                "回包详情页打不开（{e:#}），按标题检索校正真实详情页…"
+                "回包详情页打不开（{e:#}），按 IMDb 区/标题检索校正真实详情页…"
             ));
-            match relocate_posted_detail(&tgt, &info.name, log) {
-                Some(u) => {
-                    log(&format!("发后校正：{u}"));
+            match target_has_imdb(&tgt, info.imdb.as_deref(), log) {
+                Some((u, title)) => {
+                    log(&format!("发后 IMDb 校正：{title} → {u}"));
                     u
                 }
-                None => detail_url,
+                None => match relocate_posted_detail(&tgt, &info.name, log) {
+                    Some(u) => {
+                        log(&format!("发后标题校正：{u}"));
+                        u
+                    }
+                    None => detail_url,
+                },
             }
         }
     };
@@ -4039,6 +4069,17 @@ Language : English"
             ..Default::default()
         };
         assert!(!only_english.has_chinese_subs());
+    }
+
+    #[test]
+    fn bluray_remux_maps_to_remux_option() {
+        let form = r#"<select name="medium_sel[4]"><option value="0">请选择</option><option value="1">Blu-ray</option><option value="2">Remux</option><option value="3">Encode</option></select>"#;
+        let info = ReleaseInfo {
+            name: "A Touch of Zen 1971 Blu-ray REMUX 1080p AVC LPCM".into(),
+            ..Default::default()
+        };
+        let (fs, _p, notes) = build_upload_fields(&info, form, &[]);
+        assert_eq!(field_lookup(&fs, "medium_sel"), Some("2"), "{notes:?}");
     }
 
     #[test]
