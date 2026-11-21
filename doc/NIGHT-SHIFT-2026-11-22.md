@@ -76,7 +76,7 @@ Get-Content "C:\Users\Schal\AppData\Local\BoxSend\auto-audit.jsonl" -Tail 20
 | `9d1a581` | 夜间审计执行记录 + MIT LICENSE + CHANGELOG |
 
 验证基线：`cargo fmt` 通过；`clippy --workspace --all-targets -D warnings` 零告警；
-`cargo test --workspace` = **186 单测 + 19 e2e + 2 CLI + 2 GUI** 全绿。
+`cargo test --workspace` = **190 单测 + 19 e2e + 2 CLI + 2 GUI** 全绿。
 
 ## 6. 今晚「不真发」的保障
 
@@ -89,9 +89,10 @@ Get-Content "C:\Users\Schal\AppData\Local\BoxSend\auto-audit.jsonl" -Tail 20
 
 - **BUG-M7**：审阅产物直传发布（复用审阅表单字段，避免门禁字段与提交字段二次漂移）。
   改动面较大，建议白天串行做。
-- **BUG-L11**：多候选择优（目前取首个命中；候选多时可能不是最佳）。
-- **TEST-L4**：posted/blocked 记账分支的注入式 e2e。
-- **S-16 余项**：mock 级 posted/blocked 断言补全。
+- **S-16 余项**：站点写接口级的 posted/blocked mock 断言（编排层记账已由 TEST-L4 覆盖，
+  真实上传路径留给明早真发时验证）。
+- 已补完：BUG-L11（多候选择优）、TEST-L4（posted/blocked 注入式 e2e）、
+  GAP-4（`--dry-run` 空白名单逐条演练）。
 
 ## 8. 等你确认的清理候选（未删除）
 

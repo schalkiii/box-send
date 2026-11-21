@@ -766,8 +766,35 @@ fn all_anchors(doc: &Html) -> Vec<(String, String)> {
         .collect()
 }
 
+/// 候选匹配打分（越高越优先）：精确相等 3 > 候选包含发布名 2 > 发布名包含候选 1 >
+/// 词元容忍 0。同档按覆盖比例（更接近发布名者优先）。None = 不匹配。
+/// 多候选择优：同一查询常同时命中同一部片的不同版本/合集，优先取名称最贴近的。
+fn candidate_score(candidate: &str, release_name: &str, relaxed: bool) -> Option<(u8, f64)> {
+    let c = normalize_search_name(candidate);
+    let t = normalize_search_name(release_name);
+    if c.chars().count() < 8 || t.chars().count() < 8 {
+        return None;
+    }
+    let c_len = c.chars().count() as f64;
+    let t_len = t.chars().count() as f64;
+    if c == t {
+        return Some((3, 1.0));
+    }
+    if c.contains(&t) {
+        return Some((2, t_len / c_len));
+    }
+    if t.chars().count() >= 15 && t.contains(&c) {
+        return Some((1, c_len / t_len));
+    }
+    if relaxed && name_tokens_contained(release_name, candidate) {
+        return Some((0, 0.0));
+    }
+    None
+}
+
 /// 搜索结果页里按名称匹配已存在种子：先按归一化互含，`relaxed` 时再按词元包含放宽。
 /// 结果行的 title 属性也参与判定（站内常截断锚文本，完整名只在 title 里）。
+/// 多个候选都命中时取 `candidate_score` 最高者，而不是文档序第一个。
 pub fn search_name_in_results(
     html: &str,
     release_names: &[String],
@@ -795,23 +822,22 @@ pub fn search_name_in_results(
             }
         }
     }
-    let hit = candidates
-        .iter()
-        .find(|(_, text)| {
-            release_names
-                .iter()
-                .any(|n| search_names_match(text, n, false))
-        })
-        .or_else(|| {
-            if !relaxed {
-                return None;
+    let mut best: Option<(u8, f64, &(String, String))> = None;
+    for cand in &candidates {
+        for name in release_names {
+            let Some((rank, ratio)) = candidate_score(&cand.1, name, relaxed) else {
+                continue;
+            };
+            let better = match best {
+                None => true,
+                Some((br, brt, _)) => rank > br || (rank == br && ratio > brt),
+            };
+            if better {
+                best = Some((rank, ratio, cand));
             }
-            candidates.iter().find(|(_, text)| {
-                release_names
-                    .iter()
-                    .any(|n| search_names_match(text, n, true))
-            })
-        })?;
+        }
+    }
+    let hit = best.map(|(_, _, c)| c)?;
     Some(SearchHit {
         detail_url: resolve_url(&hit.0, base),
         title: hit.1.clone(),
@@ -1473,6 +1499,24 @@ mod tests {
             false
         )
         .is_none());
+    }
+
+    #[test]
+    fn search_prefers_closest_candidate_among_matches() {
+        let base = Url::parse("https://hdsky.me/torrents.php?search=x").unwrap();
+        let names = vec!["Black.Lagoon.S01.1080p.Blu-ray.DTS-HD.MA.5.1-GROUP".to_string()];
+        // 两个候选都能命中（一个多 "Extended"、一个精确），精确者优先
+        let html = r#"
+        <a href="details.php?id=2001">Black.Lagoon.S01.1080p.Blu-ray.DTS-HD.MA.5.1.Extended-GROUP</a>
+        <a href="details.php?id=2002">Black.Lagoon.S01.1080p.Blu-ray.DTS-HD.MA.5.1-GROUP</a>"#;
+        let hit = search_name_in_results(html, &names, &base, false).unwrap();
+        assert_eq!(hit.detail_url, "https://hdsky.me/details.php?id=2002");
+        // 同档按覆盖比例：越接近发布名越优先（顺序反过来也取 2002）
+        let html2 = r#"
+        <a href="details.php?id=2002">Black.Lagoon.S01.1080p.Blu-ray.DTS-HD.MA.5.1-GROUP</a>
+        <a href="details.php?id=2001">Black.Lagoon.S01.1080p.Blu-ray.DTS-HD.MA.5.1.Extended-GROUP</a>"#;
+        let hit2 = search_name_in_results(html2, &names, &base, false).unwrap();
+        assert_eq!(hit2.detail_url, "https://hdsky.me/details.php?id=2002");
     }
 
     #[test]

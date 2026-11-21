@@ -13,6 +13,7 @@
 - GUI（GPUI）：概览 / 转种草稿 / 自动发种 / 配置 / 诊断 / 帮助。
 - 引擎加入下载器的种子统一带 `Boxsend` 标签（已有种子走 `addTags` 追加）。
 - Rust release 工作流（`v*` tag 触发，CLI + GUI + SHA256SUMS）。
+- 搜索结果多候选择优：同片多版本时优先取名称最接近发布名的条目。
 
 ### Changed
 
@@ -29,6 +30,7 @@
 - CookieCloud 错误信息不再包含访问 KEY。
 - GUI 跑一轮/基线结论落盘（`persist=true`）。
 - 跨进程运行锁（`bsend-state.lock`），防 GUI + CLI 并发突破日限额/覆盖账本。
+- `autopost --dry-run` 在空白名单时逐条跑门禁演练（此前直接全部跳过，与提示文案不符）。
 
 ## [0.1.0] - 2026-11-22
 

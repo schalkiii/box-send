@@ -63,6 +63,16 @@ pub type ReseedRunner<'a> = dyn FnMut(
     ) -> Result<reseed::ReseedOutcome>
     + 'a;
 
+/// 单草稿审阅执行器。生产路径是 `reseed::review_reseed`；测试注入假实现即可
+/// 在不碰真实站点的前提下验证门禁放行/拦截与 posted/blocked 记账。
+pub type ReviewRunner<'a> = dyn FnMut(
+        &Config,
+        &reseed::ReseedRequest,
+        &mut dyn FnMut(&str),
+        Option<&crate::throttle::SiteThrottle>,
+    ) -> Result<reseed::ReviewReport>
+    + 'a;
+
 /// 跑一遍自动发种。审计落在索引同目录 auto-audit.jsonl；posted 按北京时间日计限额。
 pub fn run_autopost(
     cfg: &Config,
@@ -81,9 +91,13 @@ pub fn run_autopost(
     let _lock = crate::lock::RunLock::acquire(&data_dir, "state")?;
     if opts.dry_run {
         // 演练只跑审阅+门禁，不碰下载器：下载器停机/换机时也要能做门禁演练
-        return run_autopost_with(cfg, opts, emit, &mut |_, _, _, _, _| {
-            anyhow::bail!("dry-run 不应调用发布器（内部错误）")
-        });
+        return run_autopost_with(
+            cfg,
+            opts,
+            emit,
+            &mut |cfg, req, log, throttle| reseed::review_reseed(cfg, req, log, throttle),
+            &mut |_, _, _, _, _| anyhow::bail!("dry-run 不应调用发布器（内部错误）"),
+        );
     }
     let qb = QBittorrent::new(
         &cfg.downloader.url,
@@ -94,18 +108,25 @@ pub fn run_autopost(
         "连不上下载器（boxsend.json 的 downloader/assistDownloaderID 指的那台）"
     })?;
     emit(AutopostEvent::Log(hello));
-    run_autopost_with(cfg, opts, emit, &mut |cfg, req, index, log, throttle| {
-        reseed::run_reseed(cfg, &qb, req, index, log, throttle)
-    })
+    run_autopost_with(
+        cfg,
+        opts,
+        emit,
+        &mut |cfg, req, log, throttle| reseed::review_reseed(cfg, req, log, throttle),
+        &mut |cfg, req, index, log, throttle| {
+            reseed::run_reseed(cfg, &qb, req, index, log, throttle)
+        },
+    )
 }
 
-/// `run_autopost` 的编排主体（不含下载器连接与总闸）：调用方负责把 runner 接到
-/// 真实 `run_reseed` 或测试假实现上。公开给测试与 GUI 复用。
+/// `run_autopost` 的编排主体（不含下载器连接与总闸）：调用方负责把 reviewer/runner
+/// 接到真实 `review_reseed`/`run_reseed` 或测试假实现上。公开给测试与 GUI 复用。
 #[doc(hidden)]
 pub fn run_autopost_with(
     cfg: &Config,
     opts: &AutopostOptions,
     emit: &mut impl FnMut(AutopostEvent),
+    reviewer: &mut ReviewRunner<'_>,
     runner: &mut ReseedRunner<'_>,
 ) -> Result<AutopostSummary> {
     let mut summary = AutopostSummary::default();
@@ -157,7 +178,10 @@ pub fn run_autopost_with(
                 continue;
             }
         }
-        if !allow.contains(site) {
+        // 白名单：真实发布永远要求；演练时空白名单 = 全站门禁演练，
+        // 已配白名单则只演练「会真实发布的那部分」，与真发预览一致。
+        let whitelisted = allow.contains(site);
+        if !whitelisted && (!opts.dry_run || !allow.is_empty()) {
             emit(AutopostEvent::Log(format!(
                 "跳过 {}：不在自动发种白名单",
                 site
@@ -216,7 +240,7 @@ pub fn run_autopost_with(
                 emit(AutopostEvent::Log(format!("   {line}")));
             }
         };
-        let rep = match reseed::review_reseed(cfg, &req, &mut log, Some(&throttle)) {
+        let rep = match reviewer(cfg, &req, &mut log, Some(&throttle)) {
             Ok(r) => r,
             Err(e) => {
                 append_audit(
@@ -616,6 +640,16 @@ mod tests {
         }
     }
 
+    /// 这些用例在审阅前就被安全闸拦下：走到审阅即说明门禁顺序错了
+    fn no_review(
+        _: &Config,
+        _: &reseed::ReseedRequest,
+        _: &mut dyn FnMut(&str),
+        _: Option<&crate::throttle::SiteThrottle>,
+    ) -> Result<reseed::ReviewReport> {
+        panic!("该用例不应走到审阅")
+    }
+
     #[test]
     fn autopost_skips_sites_outside_whitelist() {
         let dir = temp_dir("whitelist");
@@ -641,6 +675,7 @@ mod tests {
                 sites: None,
             },
             &mut collect_logs(&mut logs),
+            &mut no_review,
             &mut runner,
         )
         .unwrap();
@@ -685,6 +720,7 @@ mod tests {
                 sites: None,
             },
             &mut collect_logs(&mut logs),
+            &mut no_review,
             &mut runner,
         )
         .unwrap();
@@ -729,6 +765,7 @@ mod tests {
                 sites: None,
             },
             &mut collect_logs(&mut logs),
+            &mut no_review,
             &mut runner,
         )
         .unwrap();
@@ -762,6 +799,7 @@ mod tests {
                 sites: Some(vec!["luckpt".into()]),
             },
             &mut |_| {},
+            &mut no_review,
             &mut runner,
         )
         .unwrap();
@@ -774,6 +812,7 @@ mod tests {
                 sites: None,
             },
             &mut |_| {},
+            &mut no_review,
             &mut runner,
         )
         .unwrap();
@@ -848,5 +887,184 @@ mod tests {
         .unwrap();
         assert_eq!(summary.posted, 0);
         assert!(logs.iter().any(|l| l.contains("没有转种草稿")));
+    }
+
+    /// 造一份能过全部门禁的审阅产物：与真实上传字段同一套命名约定，
+    /// 表单里没有下拉 = 无核心缺口。
+    fn passing_review(name: &str) -> reseed::ReviewReport {
+        let info = reseed::ReleaseInfo {
+            name: name.to_string(),
+            descr: "简介 https://www.imdb.com/title/tt1234567/".into(),
+            mediainfo: "General\nFormat : Matroska".into(),
+            imdb: Some("tt1234567".into()),
+            ..Default::default()
+        };
+        reseed::ReviewReport {
+            prepared: reseed::PreparedUpload {
+                action: "https://sbpt.link/upload.php".into(),
+                form_url: "https://sbpt.link/upload.php".into(),
+                fields: vec![
+                    ("name".into(), info.name.clone()),
+                    ("descr".into(), info.descr.clone()),
+                    ("media_info".into(), info.mediainfo.clone()),
+                    ("imdb_url".into(), info.descr.clone()),
+                ],
+                picked_tags: Vec::new(),
+                tag_warn: None,
+                select_notes: Vec::new(),
+                form_html: "<html><body><form></form></body></html>".into(),
+            },
+            info,
+            preflight: Default::default(),
+            audit: None,
+            audit_note: None,
+        }
+    }
+
+    #[test]
+    fn dry_run_with_empty_whitelist_drills_all_drafts() {
+        // 空白名单 + 演练：应逐条跑门禁（不发布），而不是直接全跳过
+        let dir = temp_dir("dry-all");
+        let mut cfg = cfg_with_drafts(&dir, 2, 1);
+        cfg.coverage.auto_reseed_sites.clear();
+        let mut reviewed = 0;
+        let mut runner_called = 0;
+        let mut no_runner =
+            |_: &Config,
+             _: &reseed::ReseedRequest,
+             _: &mut ContentIndex,
+             _: &mut dyn FnMut(&str),
+             _: Option<&crate::throttle::SiteThrottle>| {
+                runner_called += 1;
+                Ok(reseed::ReseedOutcome::Posted("u".into()))
+            };
+        let mut logs = Vec::new();
+        let summary = run_autopost_with(
+            &cfg,
+            &AutopostOptions {
+                dry_run: true,
+                limit: None,
+                sites: None,
+            },
+            &mut collect_logs(&mut logs),
+            &mut |_: &Config,
+                  req: &reseed::ReseedRequest,
+                  _: &mut dyn FnMut(&str),
+                  _: Option<&crate::throttle::SiteThrottle>| {
+                reviewed += 1;
+                Ok(passing_review(&req.name))
+            },
+            &mut no_runner,
+        )
+        .unwrap();
+        assert_eq!(reviewed, 1, "空白名单演练必须逐条审阅");
+        assert_eq!(runner_called, 0, "演练不能调用发布器");
+        assert_eq!(summary.posted, 0);
+        assert!(logs.iter().any(|l| l.contains("门禁通过")));
+    }
+
+    #[test]
+    fn dry_run_with_configured_whitelist_skips_unlisted_site() {
+        // 已配白名单时，演练只覆盖会真实发布的站点（预览与真发一致）
+        let dir = temp_dir("dry-whitelist");
+        let mut cfg = cfg_with_drafts(&dir, 2, 1);
+        cfg.coverage.auto_reseed_sites = vec!["luckpt".into()];
+        let mut reviewed = 0;
+        let mut no_runner =
+            |_: &Config,
+             _: &reseed::ReseedRequest,
+             _: &mut ContentIndex,
+             _: &mut dyn FnMut(&str),
+             _: Option<&crate::throttle::SiteThrottle>| {
+                Ok(reseed::ReseedOutcome::Posted("u".into()))
+            };
+        let mut logs = Vec::new();
+        let _ = run_autopost_with(
+            &cfg,
+            &AutopostOptions {
+                dry_run: true,
+                limit: None,
+                sites: None,
+            },
+            &mut collect_logs(&mut logs),
+            &mut |_: &Config,
+                  _: &reseed::ReseedRequest,
+                  _: &mut dyn FnMut(&str),
+                  _: Option<&crate::throttle::SiteThrottle>| {
+                reviewed += 1;
+                anyhow::bail!("白名单外的站不该被审阅")
+            },
+            &mut no_runner,
+        )
+        .unwrap();
+        assert_eq!(reviewed, 0);
+        assert!(logs.iter().any(|l| l.contains("不在自动发种白名单")));
+    }
+
+    #[test]
+    fn autopost_writes_posted_and_blocked_audit() {
+        // TEST-L4：门禁通过 → 发布并记 posted；门禁拦截 → 记 blocked（都不触发发布器）
+        let dir = temp_dir("audit-branches");
+        let cfg = cfg_with_drafts(&dir, 2, 2);
+        let mut reviewed = 0usize;
+        let mut posted_runner_called = 0;
+        let mut runner = |_: &Config,
+                          _: &reseed::ReseedRequest,
+                          _: &mut ContentIndex,
+                          _: &mut dyn FnMut(&str),
+                          _: Option<&crate::throttle::SiteThrottle>| {
+            posted_runner_called += 1;
+            Ok(reseed::ReseedOutcome::Posted(
+                "https://sbpt.link/details.php?id=9".into(),
+            ))
+        };
+        let mut logs = Vec::new();
+        let summary = run_autopost_with(
+            &cfg,
+            &AutopostOptions {
+                dry_run: false,
+                limit: None,
+                sites: None,
+            },
+            &mut collect_logs(&mut logs),
+            &mut |_: &Config,
+                  req: &reseed::ReseedRequest,
+                  _: &mut dyn FnMut(&str),
+                  _: Option<&crate::throttle::SiteThrottle>| {
+                reviewed += 1;
+                let mut rep = passing_review(&req.name);
+                if reviewed == 1 {
+                    Ok(rep)
+                } else {
+                    // 第二条缺简介/MediaInfo：G2/G3 必拦
+                    rep.info.descr.clear();
+                    rep.info.mediainfo.clear();
+                    rep.prepared
+                        .fields
+                        .retain(|(n, _)| n != "descr" && n != "media_info" && n != "imdb_url");
+                    Ok(rep)
+                }
+            },
+            &mut runner,
+        )
+        .unwrap();
+        assert_eq!(reviewed, 2, "两条草稿都要审阅");
+        assert_eq!(posted_runner_called, 1, "只有门禁通过的那条能发布");
+        assert_eq!(summary.posted, 1);
+
+        let audit = std::fs::read_to_string(audit_path_of(&cfg)).unwrap();
+        let posted = audit
+            .lines()
+            .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+            .find(|v| v["result"] == "posted")
+            .expect("要有 posted 记录");
+        assert_eq!(posted["url"], "https://sbpt.link/details.php?id=9");
+        assert!(posted["gates"].is_array(), "posted 记录要带门禁明细");
+        let blocked = audit
+            .lines()
+            .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+            .find(|v| v["result"] == "blocked")
+            .expect("要有 blocked 记录");
+        assert!(blocked["gates"].is_array(), "blocked 记录要带门禁明细");
     }
 }

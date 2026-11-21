@@ -733,6 +733,9 @@ DOC-M3），**仍待修 15 条（高 0 / 中 5 / 低 10）**。已修条目在 �
 | ARC-4 | index/report/config 统一复用 `lib::atomic_write` | 全量测试 |
 | BUG-L10 | `autopost --dry-run` 不再要求下载器在线 | 单测 `dry_run_does_not_require_downloader` |
 | TEST-L3 | e2e mock 补 `addTags` 分支；409 接管断言补挂 tracker + 补 Boxsend 标签 | `e2e_already_exists_attaches_tracker` |
+| BUG-L11 | 多候选择优：`search_name_in_results` 按「精确 > 候选含发布名 > 发布名含候选 > 词元容忍」打分，同档比覆盖比例 | 单测 `search_prefers_closest_candidate_among_matches` |
+| TEST-L4 | 编排层注入 reviewer：posted/blocked 记账分支可零网络验证 | 单测 `autopost_writes_posted_and_blocked_audit` |
+| GAP-4 | `autopost --dry-run` 空白名单时逐条门禁演练（此前直接全跳过，与提示文案不符） | 单测 `dry_run_with_empty_whitelist_drills_all_drafts` / `dry_run_with_configured_whitelist_skips_unlisted_site` |
 | ENG-L3 | 新增根 `LICENSE`（MIT）与 `CHANGELOG.md` | markdownlint |
 
 ### 8.2 仍未处理
@@ -740,14 +743,13 @@ DOC-M3），**仍待修 15 条（高 0 / 中 5 / 低 10）**。已修条目在 �
 - **S-03 的 BUG-M7**：审阅产物直传发布（门禁字段与提交字段一致性）。节流半已修；
   字段复用需要把 `Released`（含 `NexusPhp`/`TorrentPage`）贯穿到 `run_reseed`，
   改动面大，留到下一轮串行做。
-- **BUG-L11**：多候选择优（需要 `search` 返回候选列表并逐个下载判定）。
-- **TEST-L4**：posted/blocked 记账分支的注入式 e2e（需要在 `run_autopost_with` 再注入审阅）。
-- **S-16** 其余项：mock 级 posted/blocked 断言。
+- **S-16** 其余项：mock 级 HTTP 的 posted/blocked 断言（编排层已由 TEST-L4 覆盖，
+  站点写接口级仍留给真实发种前验证）。
 
 ### 8.3 验证基线
 
 - `cargo fmt` 通过；`cargo clippy --workspace --all-targets -D warnings` 零告警；
-  `cargo test --workspace`：**186 单测 + 19 e2e + 2 CLI + 2 GUI** 全绿。
+  `cargo test --workspace`：**190 单测 + 19 e2e + 2 CLI + 2 GUI** 全绿。
 - 实机只读演练：`bsend autopost --dry-run --sites sbpt --limit 20`
   → 20 条门禁通过、5 条拦截、1 条目标站上传页瞬断（50x/10054，可重试）、
   1 条退避跳过；未真实发种。
