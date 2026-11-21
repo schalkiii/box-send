@@ -70,6 +70,13 @@ impl ReleaseInfo {
             self.subtitle.to_lowercase(),
             self.descr.to_lowercase()
         );
+        // 常见「中英字幕/简繁字幕」不等于连续「中字」
+        if ["中英字幕", "中文字幕", "简繁字幕", "中英双字", "简繁中字"]
+            .iter()
+            .any(|m| hay.contains(m))
+        {
+            return true;
+        }
         if MARKERS.iter().any(|m| hay.contains(m)) {
             return true;
         }
@@ -85,7 +92,11 @@ impl ReleaseInfo {
                 section = low.split('#').next().unwrap_or("").to_string();
             }
             if section.starts_with("text")
-                && ((low.starts_with("language") && low.contains("chinese"))
+                && ((low.starts_with("language")
+                    && (low.contains("chinese")
+                        || low.contains("zh")
+                        || low.contains("chi")
+                        || low.contains("zho")))
                     || l.contains("简体")
                     || l.contains("繁体")
                     || l.contains("中字"))
@@ -127,6 +138,36 @@ impl ReleaseInfo {
     }
 
     /// MediaInfo 里是否有中文音轨（Audio 段的 Language=Chinese 或 国语/普通话/国配/Mandarin）
+    /// 粤语音轨：MediaInfo 的 Audio Title/Language 出现 Cantonese/粤语
+    pub fn has_cantonese_audio(&self) -> bool {
+        let hay = format!("{} {} {}", self.name, self.subtitle, self.descr).to_lowercase();
+        if hay.contains("cantonese")
+            || hay.contains("粤语")
+            || hay.contains("粵語")
+            || hay.contains("国粤")
+            || hay.contains("國粵")
+        {
+            return true;
+        }
+        let mut section = String::new();
+        for line in self.mediainfo.lines() {
+            let l = line.trim();
+            let low = l.to_ascii_lowercase();
+            if ["audio", "video", "text", "general", "menu"]
+                .iter()
+                .any(|p| low.starts_with(p))
+            {
+                section = low.split('#').next().unwrap_or("").to_string();
+            }
+            if section.starts_with("audio")
+                && (low.contains("cantonese") || l.contains("粤语") || l.contains("粵語"))
+            {
+                return true;
+            }
+        }
+        false
+    }
+
     pub fn has_chinese_audio(&self) -> bool {
         let mut section = String::new();
         for line in self.mediainfo.lines() {
@@ -233,6 +274,9 @@ fn wanted_tags(info: &ReleaseInfo) -> Vec<&'static str> {
     }
     if info.has_chinese_audio() {
         out.push("国语");
+    }
+    if info.has_cantonese_audio() {
+        out.push("粤语");
     }
     out
 }
@@ -824,8 +868,8 @@ const MEDIUM_KEYWORDS: &[&str] = &[
 ];
 
 const CODEC_KEYWORDS: &[&str] = &[
-    "H.265", "H.264", "x265", "x264", "HEVC", "AVC", "XviD", "DivX", "AV1", "VC-1", "VC1",
-    "MPEG-2", "MPEG2", "MPEG4", "VP9",
+    "H.265", "H.264", "H265", "H264", "x265", "x264", "HEVC", "AVC", "XviD", "DivX", "AV1", "VC-1",
+    "VC1", "MPEG-2", "MPEG2", "MPEG4", "VP9",
 ];
 
 const AUDIO_KEYWORDS: &[&str] = &[
@@ -1026,6 +1070,8 @@ fn token_aliases(token: &str) -> &'static [&'static str] {
         // aling/ptcafe 实测媒介选项写「TV」，繁体站写「電視」
         "hdtv" => &["TV", "TVRip", "HDTVRip", "Television", "电视", "電視"],
         "eac3" | "ddp" | "dd+" => &["DD+", "E-AC-3", "EAC3", "DDP"],
+        // AC3 不能靠子串：会同时命中 DD/AC3 与 DDP/E-AC3
+        "ac3" => &["DD/AC3", "DD/AC-3", "AC3"],
         "dtshdma" => &["DTS-HD MA", "DTS-HD", "DTS"],
         "dtshd" => &["DTS-HD", "DTS"],
         "webdl" => &["WEB-DL", "WEB"],
@@ -4105,6 +4151,40 @@ Language : English"
         };
         let (fs, _p, notes) = build_upload_fields(&info, form, &[]);
         assert_eq!(field_lookup(&fs, "medium_sel"), Some("2"), "{notes:?}");
+    }
+
+    #[test]
+    fn h265_without_dot_maps_to_hevc_option() {
+        let form = r#"<select name="codec_sel[4]"><option value="0">请选择</option><option value="1">H.264/AVC</option><option value="6">H.265/HEVC</option></select>"#;
+        let info = ReleaseInfo {
+            name: "Show.2018.WEB-DL.4k.H265.60fps.10bit.AAC-GRP".into(),
+            ..Default::default()
+        };
+        let (fs, _p, notes) = build_upload_fields(&info, form, &[]);
+        assert_eq!(field_lookup(&fs, "codec_sel"), Some("6"), "{notes:?}");
+    }
+
+    #[test]
+    fn ac3_prefers_dd_ac3_not_eac3() {
+        let form = r#"<select name="audiocodec_sel[4]"><option value="0">请选择</option><option value="8">DD/AC3</option><option value="12">DDP/E-AC3</option><option value="3">DTS</option></select>"#;
+        let info = ReleaseInfo {
+            name: "Movie.2023.1080p.BluRay.x264.AC3-GRP".into(),
+            ..Default::default()
+        };
+        let (fs, _p, notes) = build_upload_fields(&info, form, &[]);
+        assert_eq!(field_lookup(&fs, "audiocodec_sel"), Some("8"), "{notes:?}");
+    }
+
+    #[test]
+    fn cantonese_audio_tag() {
+        let info = ReleaseInfo {
+            mediainfo: "Audio #1
+Title : 粤语
+Language : Chinese"
+                .into(),
+            ..Default::default()
+        };
+        assert!(info.has_cantonese_audio());
     }
 
     #[test]

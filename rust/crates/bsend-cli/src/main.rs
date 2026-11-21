@@ -1415,9 +1415,19 @@ fn cmd_autopost(cfg: &Config, dry_run: bool, limit: Option<usize>) -> Result<()>
             println!("   → 门禁拦截，转人工\n");
             continue;
         }
-        done += 1;
         match bsend::reseed::run_reseed(cfg, &qb, &req, &mut index, &mut |l| println!("   {l}")) {
+            Ok(url) if url.is_empty() => {
+                // 目标站已有同条目：索引已落 ReviewPending，不算发布成功，也不占日限额。
+                index.save()?;
+                append_audit(
+                    &audit_path,
+                    serde_json::json!({"at": now, "site": site, "key": d.content_key,
+                        "result": "skipped_duplicate", "gates": gate_json}),
+                );
+                println!("   → 已跳过：目标站已有同条目，未上传\n");
+            }
             Ok(url) => {
+                done += 1;
                 index.save()?;
                 *posted_today.entry(site.clone()).or_insert(0) += 1;
                 append_audit(
