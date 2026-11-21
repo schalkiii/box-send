@@ -39,6 +39,44 @@ pub struct AddTorrentResult {
     pub note: String,
 }
 
+/// `torrents/add` 的表单字段；单独抽出以便单测 qB 5.3 的 seedMode 语义。
+fn add_form_fields(
+    save_path: &str,
+    category: Option<&str>,
+    skip_checking: bool,
+    up_limit: i64,
+    paused: bool,
+    content_layout: Option<&str>,
+) -> Vec<(&'static str, String)> {
+    let mut f = vec![
+        ("savepath", save_path.to_string()),
+        ("category", category.unwrap_or("").to_string()),
+        // qB 5.3 / WebAPI 2.16 已移除 skip_checking，改用 seedMode：
+        // 只做种、不先校验/下载。两个参数都发，兼容 4.x 与 5.x。
+        (
+            "skip_checking",
+            if skip_checking { "true" } else { "false" }.to_string(),
+        ),
+        (
+            "seedMode",
+            if skip_checking { "true" } else { "false" }.to_string(),
+        ),
+        ("upLimit", up_limit.to_string()),
+        // 校验期间 1 B/s 下载兜底：内容对不上时不会开始狂下（通过后由 setDownloadLimit 解除）
+        ("dlLimit", "1".to_string()),
+        // 启停三套参数名都发：5.x 认 stopped，4.3+/4.4+ 认 started / paused
+        ("started", if paused { "false" } else { "true" }.to_string()),
+        ("stopped", if paused { "true" } else { "false" }.to_string()),
+    ];
+    if let Some(layout) = content_layout {
+        f.push(("contentLayout", layout.to_string()));
+    }
+    if paused {
+        f.push(("paused", "true".to_string()));
+    }
+    f
+}
+
 impl QBittorrent {
     pub fn new(base_url: &str, username: &str, password: &str) -> Result<Self> {
         let client = Client::builder()
@@ -475,31 +513,17 @@ impl QBittorrent {
     ) -> Result<AddTorrentResult> {
         self.login()?;
 
-        let mut form = reqwest::blocking::multipart::Form::new()
-            .text("savepath", save_path.to_string())
-            .text("category", category.unwrap_or("").to_string())
-            // qB 5.3 / WebAPI 2.16 已移除 skip_checking，改用 seedMode：
-            // 只做种、不先校验/下载。两个参数都发，兼容 4.x 与 5.x。
-            .text(
-                "skip_checking",
-                if skip_checking { "true" } else { "false" }.to_string(),
-            )
-            .text(
-                "seedMode",
-                if skip_checking { "true" } else { "false" }.to_string(),
-            )
-            .text("upLimit", up_limit.to_string())
-            // 校验期间 1 B/s 下载兜底：内容对不上时不会开始狂下（通过后由 setDownloadLimit 解除）
-            .text("dlLimit", "1")
-            // 启停三套参数名都发：5.x 认 stopped，4.3+/4.4+ 认 started / paused
-            .text("started", if paused { "false" } else { "true" }.to_string())
-            .text("stopped", if paused { "true" } else { "false" }.to_string());
-        // 根目录名不同的跨站种子：NoSubfolder 让文件直接映射进既有内容目录（qB 4.4+）
-        if let Some(layout) = content_layout {
-            form = form.text("contentLayout", layout.to_string());
-        }
-        if paused {
-            form = form.text("paused", "true".to_string());
+        let fields = add_form_fields(
+            save_path,
+            category,
+            skip_checking,
+            up_limit,
+            paused,
+            content_layout,
+        );
+        let mut form = reqwest::blocking::multipart::Form::new();
+        for (k, v) in fields {
+            form = form.text(k, v);
         }
         let file_part = reqwest::blocking::multipart::Part::bytes(data.to_vec())
             .file_name(filename.to_string())
@@ -811,6 +835,17 @@ pub fn parse_torrent(t: &Value) -> Option<LocalTorrent> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn add_form_uses_seed_mode_for_skip_checking() {
+        let f = add_form_fields(r"I:\Download", None, true, 0, false, Some("Original"));
+        let get = |k: &str| f.iter().find(|(n, _)| *n == k).map(|(_, v)| v.as_str());
+        assert_eq!(get("skip_checking"), Some("true"));
+        assert_eq!(get("seedMode"), Some("true"));
+        assert_eq!(get("started"), Some("true"));
+        assert_eq!(get("stopped"), Some("false"));
+        assert_eq!(get("contentLayout"), Some("Original"));
+    }
 
     #[test]
     fn single_tracker_field_is_used_as_host() {

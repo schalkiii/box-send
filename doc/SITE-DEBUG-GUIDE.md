@@ -84,7 +84,8 @@
   `MediaInfo.dll` 的 C 接口（`MediaInfo_New/Open/Option/Inform`）；`Language=en` 输出标准
   英文标签文本；内容目录取最大视频作代表（剧集包取单集）。
 - **发种后立刻辅种**：上传成功拿到目标种后立即下载并 `torrents/add`；
-  `skip_checking=true` 时必须同时以 `paused=false` 添加，qB 才会真正跳过校验。
+  `skip_checking=true` 时必须同时以 `paused=false` 添加；qB 5.3/WebAPI 2.16 已移除
+  `skip_checking`，实际必须发 `seedMode=true`（只做种、不校验）。
   若源版本与本地文件不一致，宁可标记 ReviewPending，也不能先加进 qB 造成假辅种。
 - **existed 的真实语义**：目标站按 IMDb/片名判重，同片不同版本（1080p vs 2160p）也会
   返回 existed；info hash 不同、qB 没有该站 tracker 不代表辅种漏了——文件清单不同时

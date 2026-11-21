@@ -1094,7 +1094,7 @@ fn token_aliases(token: &str) -> &'static [&'static str] {
         "480p" => &["480p", "480"],
         // aling/ptcafe 实测媒介选项写「TV」，繁体站写「電視」
         "hdtv" => &["TV", "TVRip", "HDTVRip", "Television", "电视", "電視"],
-        "eac3" | "ddp" | "dd+" => &["DD+", "E-AC-3", "EAC3", "DDP", "DDP/E-AC3"],
+        "eac3" | "ddp" | "dd+" | "dd" => &["DD+", "E-AC-3", "EAC3", "DDP", "DDP/E-AC3"],
         // AC3 不能靠子串：会同时命中 DD/AC3 与 DDP/E-AC3
         "ac3" => &["DD/AC3", "DD/AC-3", "AC3"],
         "dtshdma" => &["DTS-HD MA", "DTS-HD", "DTS"],
@@ -4194,6 +4194,32 @@ Language : English"
         };
         let (fs, _p, notes) = build_upload_fields(&info, form, &[]);
         assert_eq!(field_lookup(&fs, "medium_sel"), Some("2"), "{notes:?}");
+    }
+
+    #[test]
+    fn audio_codec_falls_back_to_mediainfo() {
+        let form = r#"<select name="audiocodec_sel[4]"><option value="0">请选择</option><option value="8">DD/AC3</option><option value="12">DDP/E-AC3</option><option value="3">DTS</option></select>"#;
+        let info = ReleaseInfo {
+            name: "Movie.2014.1080p.BluRay.x265-GRP".into(),
+            mediainfo: "Audio #1
+Format : AC-3
+Language : English"
+                .into(),
+            ..Default::default()
+        };
+        let (fs, _p, notes) = build_upload_fields(&info, form, &[]);
+        assert_eq!(field_lookup(&fs, "audiocodec_sel"), Some("8"), "{notes:?}");
+    }
+
+    #[test]
+    fn ddplus_maps_to_ddp_eac3() {
+        let form = r#"<select name="audiocodec_sel[4]"><option value="0">请选择</option><option value="8">DD/AC3</option><option value="12">DDP/E-AC3</option></select>"#;
+        let info = ReleaseInfo {
+            name: "Movie.2014.1080p.BluRay.x265.DD+5.1-GRP".into(),
+            ..Default::default()
+        };
+        let (fs, _p, notes) = build_upload_fields(&info, form, &[]);
+        assert_eq!(field_lookup(&fs, "audiocodec_sel"), Some("12"), "{notes:?}");
     }
 
     #[test]
