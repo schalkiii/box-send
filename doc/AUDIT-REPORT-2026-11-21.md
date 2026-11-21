@@ -831,3 +831,27 @@
 - 仍待办：**TEST-H1**（`reseed_e2e.rs` / `autopost_e2e.rs` 编排层 e2e）、
   **BUG-L8**（`cmd_sites` 直读原始 JSON）、**ENG-M2**（Rust release 流水线）、
   **ARC-2**（GUI 单文件继续拆分）、名字检索追加成员种名（Coraline 类漏检）。
+
+### 14.6 「发了 20 个只辅了几个」排查结论（11-22 凌晨）
+
+- **对象**：sbpt 上连续 20 条上传 `21627–21646`（用户此前发布，非本工具 autopost：
+  `auto-audit.jsonl` 的 `posted` 全部是 luckpt，sbpt 只有 18 条 `skipped_duplicate`）。
+- **根因**：这 20 条的内容**在本机 qB 库里完全不存在**——按标题 token 搜索 42,132 条
+  种子 0 命中，按站点 torrent 的精确 totalSize 比对 3,388 段内容 0 命中。
+  辅种的前提是本地已有同一份数据；没有数据就无法添加，与引擎逻辑无关。
+- **对照**：本地有数据的 21 条（21656–21673 中 18 条 + 20567/20569/20570 + 21669/21658）
+  已全部补进 qB（§14.1）。其中 18 条此前只差「上传回包 existed 后引擎不推下载器」
+  这一步，本次已修正并补辅。
+- **站点侧核对**：`viewpeerlist.php?id=21656` 显示 `Schalkiiii / qBittorrent/5.3.0 /
+  100%` 为做种者——站点详情页顶部的「0 个做种者」是缓存计数，实际 peer 列表正常。
+- **缺口**：21627–21646 若要辅种，需先把对应数据放进本机 qB（下载或挂载到同一保存
+  路径）；在此之前引擎不会、也不应凭空建种。
+
+### 14.7 下载器标签（Boxsend）
+
+- `torrents/add` 表单新增 `tags=Boxsend`（`qbittorrent::BOXSEND_TAG`）：引擎辅种/转种
+  加入 qB 的种子统一带标签，下载器里可直接筛选。
+- 「种子已在下载器」（409 / 补挂 tracker）路径走 `torrents/addTags` 追加标签，
+  不覆盖原有标签；失败只进备注，不影响推种。
+- 存量补标：本批 21 条 + 早先 21654/21653 共 23 条已补 `Boxsend` 标签并复核。
+- 单测 `add_form_uses_seed_mode_for_skip_checking` 增加标签断言。

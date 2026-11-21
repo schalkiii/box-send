@@ -41,6 +41,9 @@ pub struct AddTorrentResult {
     pub already: bool,
 }
 
+/// boxsend 添加/接管的种子统一打这个标签：下载器里可一眼筛出「引擎辅种/转种」的条目
+pub const BOXSEND_TAG: &str = "Boxsend";
+
 /// `torrents/add` 的表单字段；单独抽出以便单测 qB 5.3 的 seedMode 语义。
 fn add_form_fields(
     save_path: &str,
@@ -69,6 +72,8 @@ fn add_form_fields(
         // 启停三套参数名都发：5.x 认 stopped，4.3+/4.4+ 认 started / paused
         ("started", if paused { "false" } else { "true" }.to_string()),
         ("stopped", if paused { "true" } else { "false" }.to_string()),
+        // 引擎加进来的种子统一打标签，便于在下载器里筛选「Boxsend 辅种/转种」
+        ("tags", BOXSEND_TAG.to_string()),
     ];
     if let Some(layout) = content_layout {
         f.push(("contentLayout", layout.to_string()));
@@ -489,6 +494,21 @@ impl QBittorrent {
         Ok(())
     }
 
+    /// 给已有种子**追加**标签（qB `torrents/addTags` 是追加语义，不会覆盖原标签）。
+    /// 用于「种子早已在下载器」的接管路径：新加种由 `torrents/add` 的 tags 字段直接带上。
+    pub fn add_tags(&self, hashes: &[&str], tags: &[&str]) -> Result<()> {
+        if hashes.is_empty() || tags.is_empty() {
+            return Ok(());
+        }
+        self.login()?;
+        let fields = [("hashes", hashes.join("|")), ("tags", tags.join(","))];
+        match self.post_form_status("/api/v2/torrents/addTags", &fields) {
+            Some(200) => Ok(()),
+            Some(st) => Err(anyhow!("HTTP {st} POST torrents/addTags")),
+            None => Err(anyhow!("POST torrents/addTags 没通")),
+        }
+    }
+
     /// 推种。`paused=true` 是辅种安全网：先暂停挂上，校验通过再恢复（Swift `AssistPipeline.push` 同款）
     #[allow(clippy::too_many_arguments)]
     pub fn add_torrent(
@@ -578,7 +598,11 @@ impl QBittorrent {
                     already: true,
                 };
             }
-            let note = self.attach_site_tracker(hash, torrent_data);
+            let mut note = self.attach_site_tracker(hash, torrent_data);
+            // 接管旧种也打标签：后续在下载器里能按 Boxsend 统一筛选/批量操作
+            if let Err(e) = self.add_tags(&[hash], &[BOXSEND_TAG]) {
+                note = format!("{note}；打 {BOXSEND_TAG} 标签失败：{e:#}");
+            }
             return AddTorrentResult {
                 id: hash.to_string(),
                 note,
@@ -865,6 +889,8 @@ mod tests {
         assert_eq!(get("skip_checking"), Some("true"));
         assert_eq!(get("seedMode"), Some("true"));
         assert_eq!(get("started"), Some("true"));
+        // 引擎加种统一带 Boxsend 标签（下载器里可筛）
+        assert_eq!(get("tags"), Some(BOXSEND_TAG));
         assert_eq!(get("stopped"), Some("false"));
         assert_eq!(get("contentLayout"), Some("Original"));
     }
