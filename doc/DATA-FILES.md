@@ -1,11 +1,14 @@
 # 运行时数据文件（DATA-FILES）
 
-> 全部位于 `dataDir`（缺省 `~/.boxsend`，Windows 实机为 `%LOCALAPPDATA%\BoxSend`）。
+> 全部位于 `dataDir`：取 `boxsend.json` 的 `dataDir` 字段；**未配置时退到配置文件
+> 所在目录**（实机即 `C:\Users\Schal\AppData\Local\BoxSend`，因为配置在那里）。
+> 代码里没有 `~/.boxsend` 的缺省逻辑——找不到文件时先确认配置的 dataDir。
 > 本文件是手改/排障的契约：改前备份，改后保持引擎写出的完整字段形状。
 
 ## coverage.json（内容索引 + 站点覆盖账本）
 
-- **写入者**：`bsend run` / `plan` / `prime` / `reseed` / `autopost` / GUI（每轮收尾与单条落账）。
+- **写入者**：`bsend run` / `prime` / `reseed` / `autopost` / GUI 跑一轮（`plan` 是只读演练，
+  不写账本；`scan` 只写索引、不动站点格子）。
 - **结构**：`{ "contents": { "m:<hash16>": {...} } }`；每段内容含
   `name / totalSize / fileCount / manifestDigest / torrents{hash→meta} / trackerHosts /
   firstSeen / goneSince / coverage{siteId→格子} / source / forbidReseed`。
@@ -23,9 +26,9 @@
 ## auto-audit.jsonl（自动发种审计）
 
 - **写入者**：`bsend autopost`（`bsend::autopost::append_audit`）。
-- **每行一条 JSON**：`at`（Unix 秒）、`site`、`key`（contentKey）、`result`
-  （`posted / blocked / failed / review_failed / skipped_duplicate`），可选
-  `url`（posted）、`error`、`gates`（门禁矩阵）。
+- **每行一条 JSON**：`at`（写入时刻的 Unix 秒）、`site`、`key`（contentKey）、`result`
+  （`posted / blocked / failed / review_failed / skipped_duplicate / other_version /
+  existed_pending`），可选 `url`（posted/existed）、`error`、`note`、`gates`（门禁矩阵）。
 - **用途**：日限额（按北京时间日界计 `posted`）、同草稿退避（拦截 24h / 失败 6h）。
 - **手改边界**：只可追加/删除整行；**写失败会让本轮自动发种中止**（fail-closed），
   不要把它指向不可写路径。

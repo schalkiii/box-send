@@ -64,6 +64,8 @@ impl CoverageStatus {
     /// 零请求跳过的终态/暂态（重跑不重复）。
     /// ReseedDraft 算终态：草稿已生成，人工确认前重复检索只是白花请求
     /// （确认动作会把状态改写成 Reseeded/Rejected）。
+    /// OtherVersion 也算终态：站点已有同片其他版本是程序化结论，重查只会再次命中
+    /// 同一个目标种；真出现同版本时由人工/其他站点的辅种臂覆盖，不再周期性入队。
     pub fn is_settled(&self) -> bool {
         matches!(
             self,
@@ -73,6 +75,7 @@ impl CoverageStatus {
                 | CoverageStatus::Verifying
                 | CoverageStatus::Rejected
                 | CoverageStatus::ReseedDraft
+                | CoverageStatus::OtherVersion
         )
     }
 }
@@ -460,6 +463,14 @@ mod tests {
         files: Vec<(String, i64)>,
     ) -> impl FnMut(&LocalTorrent) -> Option<Vec<(String, i64)>> {
         move |_| Some(files.clone())
+    }
+
+    #[test]
+    fn other_version_is_terminal() {
+        // 「目标站已有其他版本」是程序化结论：重复入队只会再命中同一个目标种
+        assert!(CoverageStatus::OtherVersion.is_settled());
+        assert!(!CoverageStatus::ReviewPending.is_settled());
+        assert!(!CoverageStatus::Failed.is_settled());
     }
 
     #[test]

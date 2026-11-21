@@ -60,7 +60,7 @@ pub type ReseedRunner<'a> = dyn FnMut(
         &mut ContentIndex,
         &mut dyn FnMut(&str),
         Option<&crate::throttle::SiteThrottle>,
-    ) -> Result<String>
+    ) -> Result<reseed::ReseedOutcome>
     + 'a;
 
 /// 跑一遍自动发种。审计落在索引同目录 auto-audit.jsonl；posted 按北京时间日计限额。
@@ -203,7 +203,7 @@ pub fn run_autopost_with(
                 emit(AutopostEvent::Log(format!("   {line}")));
             }
         };
-        let rep = match reseed::review_reseed(cfg, &req, &mut log) {
+        let rep = match reseed::review_reseed(cfg, &req, &mut log, Some(&throttle)) {
             Ok(r) => r,
             Err(e) => {
                 append_audit(
@@ -283,23 +283,27 @@ pub fn run_autopost_with(
             },
             Some(&throttle),
         ) {
-            Ok(url) if url.is_empty() => {
-                // 目标站已有同条目：索引已落 ReviewPending，不算发布成功，也不占日限额。
+            Ok(reseed::ReseedOutcome::Duplicate(dup)) => {
                 index.save()?;
+                let result = reseed::ReseedOutcome::Duplicate(dup.clone()).audit_result();
                 append_audit(
                     &audit_path,
-                    serde_json::json!({"at": now, "site": site, "key": d.content_key,
-                        "result": "skipped_duplicate", "gates": gate_json}),
+                    serde_json::json!({"site": site, "key": d.content_key,
+                        "result": result, "url": dup.url, "note": dup.note, "gates": gate_json}),
                 )?;
                 emit(AutopostEvent::Outcome {
                     key: d.content_key.clone(),
                     site: site.clone(),
-                    result: "skipped_duplicate",
-                    url: None,
-                    error: None,
+                    result,
+                    url: dup.url,
+                    error: if result == "failed" {
+                        Some(dup.note)
+                    } else {
+                        None
+                    },
                 });
             }
-            Ok(url) => {
+            Ok(reseed::ReseedOutcome::Posted(url)) => {
                 index.save()?;
                 // 先落审计再记账：审计写失败就中止后续发布，避免日限额失守
                 append_audit(
@@ -399,9 +403,14 @@ pub fn in_backoff(last: Option<(i64, bool)>, now: i64) -> bool {
     }
 }
 
-/// 审计追加（JSONL）。写失败必须中止本轮：posted 记账丢失会让日限额失守、退避失效
-fn append_audit(path: &Path, entry: serde_json::Value) -> Result<()> {
+/// 审计追加（JSONL）。写失败必须中止本轮：posted 记账丢失会让日限额失守、退避失效。
+/// `at` 一律取**写入时刻**：循环起点的时间只用于白名单/日限额/退避判定，
+/// 单条发布可能跨午夜（校验等待最长 verifyWaitSec），记账不能沿用旧快照。
+fn append_audit(path: &Path, mut entry: serde_json::Value) -> Result<()> {
     use std::io::Write as _;
+    if let Some(obj) = entry.as_object_mut() {
+        obj.insert("at".into(), serde_json::json!(now_unix()));
+    }
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).context("审计目录创建失败")?;
     }
@@ -605,7 +614,9 @@ mod tests {
                           _: &mut dyn FnMut(&str),
                           _: Option<&crate::throttle::SiteThrottle>| {
             called += 1;
-            Ok("https://sbpt.link/details.php?id=1".to_string())
+            Ok(reseed::ReseedOutcome::Posted(
+                "https://sbpt.link/details.php?id=1".to_string(),
+            ))
         };
         let mut logs = Vec::new();
         let summary = run_autopost_with(
@@ -645,7 +656,11 @@ mod tests {
                           _: &mut dyn FnMut(&str),
                           _: Option<&crate::throttle::SiteThrottle>| {
             called += 1;
-            Ok(String::new())
+            Ok(reseed::ReseedOutcome::Duplicate(reseed::DuplicateOutcome {
+                status: crate::index::CoverageStatus::Assisted,
+                url: None,
+                note: "已覆盖".into(),
+            }))
         };
         let mut logs = Vec::new();
         let summary = run_autopost_with(
@@ -685,7 +700,11 @@ mod tests {
                           _: &mut dyn FnMut(&str),
                           _: Option<&crate::throttle::SiteThrottle>| {
             called += 1;
-            Ok(String::new())
+            Ok(reseed::ReseedOutcome::Duplicate(reseed::DuplicateOutcome {
+                status: crate::index::CoverageStatus::Assisted,
+                url: None,
+                note: "已覆盖".into(),
+            }))
         };
         let mut logs = Vec::new();
         let _ = run_autopost_with(
@@ -714,7 +733,11 @@ mod tests {
                           _: &mut dyn FnMut(&str),
                           _: Option<&crate::throttle::SiteThrottle>| {
             called += 1;
-            Ok(String::new())
+            Ok(reseed::ReseedOutcome::Duplicate(reseed::DuplicateOutcome {
+                status: crate::index::CoverageStatus::Assisted,
+                url: None,
+                note: "已覆盖".into(),
+            }))
         };
         // 站点过滤：只看 luckpt，草稿全是 sbpt
         let _ = run_autopost_with(
@@ -751,5 +774,45 @@ mod tests {
         // 父路径是文件 → 目录创建/打开必然失败，必须把错误 surface 出来
         let path = blocker.join("auto-audit.jsonl");
         assert!(append_audit(&path, serde_json::json!({"at": 1})).is_err());
+    }
+
+    #[test]
+    fn append_audit_stamps_write_time_not_stale_now() {
+        let dir = temp_dir("audit-time");
+        let path = dir.join("auto-audit.jsonl");
+        // 调用方传的 at=1 是「循环起点」的旧快照；落盘必须改成写入时刻
+        append_audit(&path, serde_json::json!({"at": 1, "site": "sbpt"})).unwrap();
+        let line = std::fs::read_to_string(&path).unwrap();
+        let v: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
+        let at = v.get("at").and_then(|a| a.as_i64()).unwrap();
+        assert!(
+            (now_unix() - at).abs() < 60,
+            "at 必须是写入时刻（差 {} 秒）",
+            now_unix() - at
+        );
+    }
+
+    #[test]
+    fn duplicate_outcomes_map_to_distinct_audit_results() {
+        use crate::index::CoverageStatus as S;
+        let outcome = |st| {
+            reseed::ReseedOutcome::Duplicate(reseed::DuplicateOutcome {
+                status: st,
+                url: None,
+                note: "x".into(),
+            })
+        };
+        assert_eq!(outcome(S::Assisted).audit_result(), "skipped_duplicate");
+        assert_eq!(outcome(S::OtherVersion).audit_result(), "other_version");
+        assert_eq!(outcome(S::ReviewPending).audit_result(), "existed_pending");
+        assert_eq!(
+            outcome(S::Failed).audit_result(),
+            "failed",
+            "复核失败必须走失败语义（退避 6h），不能记成重复"
+        );
+        assert_eq!(
+            reseed::ReseedOutcome::Posted("u".into()).audit_result(),
+            "posted"
+        );
     }
 }

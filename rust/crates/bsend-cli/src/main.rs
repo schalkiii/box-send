@@ -501,19 +501,15 @@ fn cmd_reseed(cfg: &Config, draft: Option<usize>, yes: bool) -> Result<()> {
     );
     let mut log = |line: &str| println!("  {line}");
     if !yes {
-        let rep = bsend::reseed::review_reseed(cfg, &req, &mut log)?;
+        let rep = bsend::reseed::review_reseed(cfg, &req, &mut log, None)?;
         println!();
         println!("{}", rep.render(200));
         println!("以上为审阅（未提交）。确认无误后加 `--yes` 真提交。");
         return Ok(());
     }
     let qb = connect_qb(cfg)?;
-    let url = bsend::reseed::run_reseed(cfg, &qb, &req, &mut index, &mut log, None)?;
-    if url.is_empty() {
-        println!("转种结束（站点已有该种子，格子记为已覆盖）");
-    } else {
-        println!("转种完成：{url}");
-    }
+    let outcome = bsend::reseed::run_reseed(cfg, &qb, &req, &mut index, &mut log, None)?;
+    println!("{}", outcome.display());
     Ok(())
 }
 

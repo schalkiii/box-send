@@ -283,13 +283,7 @@ impl BsendGui {
                     let _ = log_tx.send(GuiEvent::Log(line.to_string()));
                 };
                 match run_reseed(&cfg, &qb, &req, &mut index, &mut log, None) {
-                    Ok(url) => {
-                        if url.is_empty() {
-                            log("转种结束（站点已有该种子，格子记为已覆盖）");
-                        } else {
-                            log(&format!("转种完成：{url}"));
-                        }
-                    }
+                    Ok(outcome) => log(&outcome.display()),
                     Err(e) => {
                         log(&format!("转种失败：{e:#}"));
                         return Err(e);
@@ -336,7 +330,7 @@ impl BsendGui {
                 let mut log = move |line: &str| {
                     let _ = log_tx.send(GuiEvent::Log(line.to_string()));
                 };
-                let rep = review_reseed(&cfg, &req, &mut log)?;
+                let rep = review_reseed(&cfg, &req, &mut log, None)?;
                 for line in rep.render(200).lines() {
                     log(line);
                 }

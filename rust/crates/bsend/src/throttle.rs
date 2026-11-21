@@ -169,12 +169,13 @@ impl SiteThrottle {
         p.min_interval = p.min_interval.max(self.rate_limit_floor);
     }
 
-    /// 站点一切正常时恢复原节奏（一次成功的请求就该松开退避与最低间隔）
+    /// 站点一切正常时恢复退避倍数。
+    /// **不清**「本轮最低间隔」：限流页把该站抬到 60 秒/次后，一次成功就清零会在
+    /// 8 秒后再次撞限流（实机 hdsky 模式）；地板按轮次保留，下一轮重新学习。
     pub fn note_ok(&self, site_id: &str) {
         let mut pace = self.pace.lock().unwrap();
         if let Some(p) = pace.get_mut(site_id) {
             p.backoff = 1;
-            p.min_interval = Duration::ZERO;
         }
     }
 
@@ -359,9 +360,20 @@ mod tests {
         t.note_rate_limited("hdsky");
         t.force_last("hdsky", Duration::from_secs(1));
         assert_near(t.acquire_dur("hdsky", BudgetKind::Search).unwrap(), 239); // 8×30 − 1
-                                                                               // 一次成功请求恢复原节奏
+                                                                               // 一次成功请求只恢复退避倍数；限流地板本轮内保留，避免 8 秒后再撞
         t.note_ok("hdsky");
         t.force_last("hdsky", Duration::from_secs(1));
-        assert_near(t.acquire_dur("hdsky", BudgetKind::Search).unwrap(), 7);
+        assert_near(t.acquire_dur("hdsky", BudgetKind::Search).unwrap(), 59);
+    }
+
+    #[test]
+    fn rate_limit_floor_survives_a_success() {
+        let t = paced();
+        t.acquire_dur("hdsky", BudgetKind::Search).unwrap();
+        t.note_rate_limited("hdsky");
+        t.note_ok("hdsky");
+        t.force_last("hdsky", Duration::from_secs(1));
+        // 限流页明确 60 秒/次：成功一次不能把地板清零
+        assert_near(t.acquire_dur("hdsky", BudgetKind::Search).unwrap(), 59);
     }
 }

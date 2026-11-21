@@ -322,26 +322,39 @@ fn wanted_tags(info: &ReleaseInfo) -> Vec<&'static str> {
     out
 }
 
-pub fn preflight(info: &mut ReleaseInfo, tags: &[String]) -> Preflight {
+pub fn preflight(
+    info: &mut ReleaseInfo,
+    tags: &[String],
+    rules: &crate::gates::SiteRules,
+) -> Preflight {
     let mut pf = Preflight::default();
 
-    // ③ MediaInfo
+    // ③ MediaInfo：站点规则明确不要（requireMediaInfo=false）时降为警告，
+    // 否则「门禁放行、预检仍阻断」会让自动发种永远发不出去
     if info.mediainfo.trim().is_empty() {
-        pf.errors.push(
-            "MediaInfo 为空：源站详情页没有 MediaInfo/BDInfo 块，先在源站补齐或手动粘贴后再转种"
-                .into(),
-        );
+        let msg =
+            "MediaInfo 为空：源站详情页没有 MediaInfo/BDInfo 块，先在源站补齐或手动粘贴后再转种";
+        if rules.require_mediainfo() {
+            pf.errors.push(msg.into());
+        } else {
+            pf.warnings
+                .push(format!("{msg}（站点规则不要 MediaInfo，已放宽）"));
+        }
     }
 
-    // ② 链接：有 id 就自动补进简介；三个 id 都缺才是阻断
+    // ② 链接：有 id 就自动补进简介；三个 id 都缺时按站点规则决定阻断/警告
     if !info.has_media_links() {
         if info.ensure_media_links() {
             pf.fixes
                 .push("简介缺条目链接，已按源页 IMDb/豆瓣/TMDB 补上".into());
         } else {
-            pf.errors.push(
-                "简介缺少 IMDb/豆瓣/TMDB 链接，且源页解析不出条目 id：请手动把链接写进简介".into(),
-            );
+            let msg = "简介缺少 IMDb/豆瓣/TMDB 链接，且源页解析不出条目 id：请手动把链接写进简介";
+            if rules.require_links() {
+                pf.errors.push(msg.into());
+            } else {
+                pf.warnings
+                    .push(format!("{msg}（站点规则不要条目链接，已放宽）"));
+            }
         }
     }
 
@@ -2228,9 +2241,27 @@ impl ReviewReport {
         }
         out.push_str("将提交的字段：\n");
         for (n, v) in &self.prepared.fields {
-            out.push_str(&format!("  {n} = {}\n", truncate_chars(v, max)));
+            out.push_str(&format!(
+                "  {n} = {}\n",
+                truncate_chars(&mask_field_value(n, v), max)
+            ));
         }
         out
+    }
+}
+
+/// 审阅渲染的字段脱敏：按**字段名**判定（不按值猜），命中凭据类一律隐藏，
+/// 只保留「有这个字段 + 长度」，审阅仍能确认 passkey 等是否透传成功。
+/// 泄漏面：render/dump_fields 会进终端、GUI 日志与反馈截图，passkey 等同账号凭据。
+fn mask_field_value(name: &str, value: &str) -> String {
+    const SECRET_HINTS: [&str; 8] = [
+        "passkey", "token", "auth", "cookie", "secure", "uid", "secret", "password",
+    ];
+    let n = name.to_ascii_lowercase();
+    if SECRET_HINTS.iter().any(|h| n.contains(h)) {
+        format!("<已隐藏 len={}>", value.len())
+    } else {
+        value.to_string()
     }
 }
 
@@ -2245,12 +2276,25 @@ fn truncate_chars(s: &str, max: usize) -> String {
 
 /// 审阅一条龙：源页解析 → 预检 → 构造上传字段，但不 POST。
 /// 预检不通过也照常返回报告（审阅就是要看清问题），调用方看 `preflight.ok()`。
+/// `throttle` 给 autopost 用：源页/上传页/官方预审都是真实站点请求，必须领号；
+/// 单条人工审阅传 `None`（没有共享节流器，不额外限速）。
 pub fn review_reseed(
     cfg: &Config,
     req: &ReseedRequest,
     log: &mut dyn FnMut(&str),
+    throttle: Option<&SiteThrottle>,
 ) -> Result<ReviewReport> {
+    if let Some(t) = throttle {
+        if !t.acquire(&req.source_site, BudgetKind::Source) {
+            bail!("审阅预算用完（源站定位），本轮跳过该草稿");
+        }
+    }
     let rel = prepare_released(cfg, req, log)?;
+    if let Some(t) = throttle {
+        if !t.acquire(&req.target_site, BudgetKind::Search) {
+            bail!("审阅预算用完（目标站上传页），本轮跳过该草稿");
+        }
+    }
     log("抓目标站上传表单，构造提交字段…");
     let mut prepared = prepare_upload(&rel.tgt, &rel.info)?;
     if let Some(rules) = cfg.coverage.reseed_rules.get(&req.target_site) {
@@ -2263,6 +2307,11 @@ pub fn review_reseed(
     ));
     // 站点官方预审（LuckAudit）：把将要提交的字段交给站方打分，结论进审阅报告
     let (audit, audit_note) = if pre_audit_supported(&prepared.form_html) {
+        if let Some(t) = throttle {
+            if !t.acquire(&req.target_site, BudgetKind::Search) {
+                bail!("审阅预算用完（官方预审），本轮跳过该草稿");
+            }
+        }
         log("调用站点官方预审（LuckAudit）…");
         match run_pre_audit(&rel.tgt, &rel.info, &prepared) {
             Ok(v) => {
@@ -3240,6 +3289,46 @@ pub struct ReseedRequest {
     pub name: String,
 }
 
+/// 判重命中后的分类结果（不再把四种语义混成「空 URL」）
+#[derive(Debug, Clone)]
+pub struct DuplicateOutcome {
+    /// `assisted`（同分片已覆盖）/ `other_version` / `failed`（复核失败）/ `review_pending`（existed）
+    pub status: CoverageStatus,
+    pub url: Option<String>,
+    pub note: String,
+}
+
+/// 一次转种的结果：发布成功带详情页，或判重命中带明确分类。
+/// 自动发种据此写审计（posted / skipped_duplicate / other_version / failed / existed_pending）。
+#[derive(Debug, Clone)]
+pub enum ReseedOutcome {
+    Posted(String),
+    Duplicate(DuplicateOutcome),
+}
+
+impl ReseedOutcome {
+    /// 审计 result 词表（auto-audit.jsonl / DATA-FILES 同步）
+    pub fn audit_result(&self) -> &'static str {
+        match self {
+            ReseedOutcome::Posted(_) => "posted",
+            ReseedOutcome::Duplicate(d) => match d.status {
+                CoverageStatus::Assisted | CoverageStatus::Seeding => "skipped_duplicate",
+                CoverageStatus::OtherVersion => "other_version",
+                CoverageStatus::ReviewPending => "existed_pending",
+                _ => "failed",
+            },
+        }
+    }
+
+    /// 人工可读的一句话（CLI/GUI 共用）
+    pub fn display(&self) -> String {
+        match self {
+            ReseedOutcome::Posted(url) => format!("转种完成：{url}"),
+            ReseedOutcome::Duplicate(d) => format!("转种结束（{}）：{}", d.status.label(), d.note),
+        }
+    }
+}
+
 /// 源站解析 + 预检（`review_reseed` 与 `run_reseed` 共用）。
 /// 预检不通过不拦在这里，由调用方决定（审阅要出报告，正式转种要拦）。
 struct Released {
@@ -3398,7 +3487,15 @@ fn prepare_released(
         .into_iter()
         .map(|s| s.to_string())
         .collect();
-    let pf = preflight(&mut info, &tags);
+    let pf = preflight(
+        &mut info,
+        &tags,
+        &cfg.coverage
+            .reseed_rules
+            .get(&req.target_site)
+            .cloned()
+            .unwrap_or_default(),
+    );
     for f in &pf.fixes {
         log(&format!("预检·已自动补：{f}"));
     }
@@ -3426,7 +3523,7 @@ pub fn run_reseed(
     index: &mut ContentIndex,
     log: &mut dyn FnMut(&str),
     throttle: Option<&SiteThrottle>,
-) -> Result<String> {
+) -> Result<ReseedOutcome> {
     // 真实发种总闸：缺省关闭，任何调用方（CLI --yes / autopost / GUI）都过这里。
     crate::config::ensure_publish_enabled(cfg)?;
     // 调用方传共享节流（autopost 全局预算）就用它；单发一条时本地建一份
@@ -3518,11 +3615,15 @@ pub fn run_reseed(
             &req.content_key,
             &req.target_site,
             status,
-            Some(detail_url),
+            Some(detail_url.clone()),
             &why,
         );
         index.save()?;
-        return Ok(String::new());
+        return Ok(ReseedOutcome::Duplicate(DuplicateOutcome {
+            status,
+            url: Some(detail_url),
+            note: why,
+        }));
     }
     log("目标站未找到同条目，继续上传");
 
@@ -3601,19 +3702,24 @@ pub fn run_reseed(
     // 不能当新种 Reseeded；统一落 ReviewPending，避免假成功。
     if up.duplicate {
         let detail = up.detail_url.unwrap_or_default();
+        let note = format!(
+            "上传回包标记 existed（{}），详情页不可信，未加入下载器",
+            up.message
+        );
         write_cell(
             index,
             &req.content_key,
             &req.target_site,
             CoverageStatus::ReviewPending,
-            (!detail.is_empty()).then_some(detail),
-            &format!(
-                "上传回包标记 existed（{}），详情页不可信，未加入下载器",
-                up.message
-            ),
+            (!detail.is_empty()).then_some(detail.clone()),
+            &note,
         );
         index.save()?;
-        return Ok(String::new());
+        return Ok(ReseedOutcome::Duplicate(DuplicateOutcome {
+            status: CoverageStatus::ReviewPending,
+            url: (!detail.is_empty()).then_some(detail),
+            note,
+        }));
     }
     let detail_url = match up.detail_url {
         Some(u) => u,
@@ -3730,7 +3836,7 @@ pub fn run_reseed(
                 "发布成功，但回包详情页与站内检索都定位失败（回包 id 可能有误），请人工确认；勿重发",
             );
             index.save()?;
-            return Ok(detail_url);
+            return Ok(ReseedOutcome::Posted(detail_url));
         }
     };
     let tdata = tgt.download_torrent(&tpage, &detail_url)?;
@@ -3775,7 +3881,7 @@ pub fn run_reseed(
             &format!("已加入下载器（{}）", add.note),
         );
         index.save()?;
-        return Ok(detail_url);
+        return Ok(ReseedOutcome::Posted(detail_url));
     }
     let site_hash = if add.id.is_empty() {
         bencode::info_hash_v1(&tdata).unwrap_or_default()
@@ -3800,7 +3906,7 @@ pub fn run_reseed(
                     "转种成功：校验到 100%，已在做种",
                 );
                 index.save()?;
-                return Ok(detail_url);
+                return Ok(ReseedOutcome::Posted(detail_url));
             }
             if waited > 0 && !state.contains("check") && !state.contains("meta") {
                 let _ = qb.set_paused(&[&site_hash], true);
@@ -3848,7 +3954,7 @@ pub fn run_reseed(
     }
     index.save()?;
     log("校验还没跑完，落「校验中」下一轮收尾");
-    Ok(detail_url)
+    Ok(ReseedOutcome::Posted(detail_url))
 }
 
 fn write_cell(
@@ -3896,7 +4002,7 @@ fn adapter_for(cfg: &Config, site_id: &str) -> Result<NexusPhp> {
 pub fn dump_fields(fields: &[Field]) -> String {
     let mut out = String::new();
     for (n, v) in fields {
-        let flat = v.replace('\n', "\\n");
+        let flat = mask_field_value(n, v).replace('\n', "\\n");
         out.push_str(&format!("{n}={flat}\n"));
     }
     out
@@ -3958,7 +4064,7 @@ Frame rate : 25</pre>
             mediainfo: String::new(),
             ..Default::default()
         };
-        let pf = preflight(&mut info, &[]);
+        let pf = preflight(&mut info, &[], &crate::gates::SiteRules::default());
         assert!(!pf.ok());
         assert!(pf.errors.iter().any(|e| e.contains("MediaInfo")));
     }
@@ -3973,10 +4079,32 @@ Frame rate : 25</pre>
             ..Default::default()
         };
         let tags = vec!["中字".to_string()];
-        let pf = preflight(&mut info, &tags);
+        let pf = preflight(&mut info, &tags, &crate::gates::SiteRules::default());
         assert!(pf.ok(), "{:?}", pf.errors);
         assert!(info.descr.contains("imdb.com"));
         assert!(!pf.fixes.is_empty());
+    }
+
+    #[test]
+    fn preflight_relaxes_mediainfo_when_rules_allow() {
+        // requireMediaInfo=false：预检不再阻断，降为警告（否则门禁放行也发不出去）
+        let mut info = ReleaseInfo {
+            name: "x".into(),
+            descr: "IMDb: https://www.imdb.com/title/tt1/".into(),
+            mediainfo: String::new(),
+            ..Default::default()
+        };
+        let rules = crate::gates::SiteRules {
+            require_mediainfo: Some(false),
+            ..Default::default()
+        };
+        let pf = preflight(&mut info, &[], &rules);
+        assert!(
+            pf.ok(),
+            "requireMediaInfo=false 时不应阻断：{:?}",
+            pf.errors
+        );
+        assert!(pf.warnings.iter().any(|w| w.contains("放宽")));
     }
 
     #[test]
@@ -5015,5 +5143,77 @@ Language : Chinese"));
             "{:?}",
             d.core_gaps()
         );
+    }
+
+    #[test]
+    fn run_reseed_refuses_when_publish_gate_closed() {
+        // 总闸关闭时必须在任何网络动作之前 bail（CLI/GUI/autopost 共用这道闸）
+        let dir = std::env::temp_dir().join(format!("bsend-reseed-gate-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg_path = dir.join("boxsend.json");
+        std::fs::write(
+            &cfg_path,
+            r#"{
+              "sourceSites": [{"id": "luckpt", "name": "LuckPT", "url": "https://pt.luckpt.de/", "framework": "NexusPHP", "enabled": true}],
+              "targetSites": ["luckpt"],
+              "downloader": {"url": "http://127.0.0.1:1", "username": "u", "password": "p"},
+              "assist": {"publishEnabled": false}
+            }"#,
+        )
+        .unwrap();
+        let cfg = crate::config::Config::load(&cfg_path).unwrap();
+        let qb = crate::qbittorrent::QBittorrent::new(&cfg.downloader.url, "u", "p").unwrap();
+        let mut index = crate::index::ContentIndex::load(&cfg.coverage_state_path());
+        let req = request_from_draft(
+            "m:gate",
+            "Gate Test",
+            "luckpt",
+            "https://pt.luckpt.de/details.php?id=1",
+            "luckpt",
+        );
+        let err = run_reseed(&cfg, &qb, &req, &mut index, &mut |_| {}, None).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("publishEnabled"),
+            "错误必须点明总闸：{err:#}"
+        );
+    }
+
+    #[test]
+    fn review_render_masks_secret_field_values() {
+        let prepared = PreparedUpload {
+            action: "https://x/takeupload.php".into(),
+            form_url: "https://x/upload.php".into(),
+            fields: vec![
+                ("name".into(), "Show.Name.2026".into()),
+                ("passkey".into(), "abc123".into()),
+                ("c_secure_pass".into(), "deadbeef".into()),
+                ("descr".into(), "简介".into()),
+            ],
+            picked_tags: vec![],
+            tag_warn: None,
+            select_notes: vec![],
+            form_html: String::new(),
+        };
+        let rep = ReviewReport {
+            info: ReleaseInfo::default(),
+            preflight: Preflight::default(),
+            prepared,
+            audit: None,
+            audit_note: None,
+        };
+        let text = rep.render(200);
+        assert!(text.contains("name = Show.Name.2026"), "{text}");
+        assert!(text.contains("passkey = <已隐藏 len=6>"), "{text}");
+        assert!(text.contains("descr = 简介"), "{text}");
+        assert!(!text.contains("abc123"), "passkey 值泄漏：{text}");
+        assert!(!text.contains("deadbeef"), "secure 值泄漏：{text}");
+        // dump_fields 同样走脱敏
+        let dump = dump_fields(&[
+            ("passkey".into(), "abc123".into()),
+            ("name".into(), "Show".into()),
+        ]);
+        assert!(!dump.contains("abc123"), "{dump}");
+        assert!(dump.contains("name=Show"), "{dump}");
     }
 }

@@ -268,9 +268,10 @@ NexusPHP 的 `index.php?returnto=…` 跳转）、站点限流页（HTTP 200 但
   各站覆盖格子（status / at / url / note）、源种记录（siteId + detailUrl，或 missAt 负缓存）。
 - 状态机：`seeding / assisted / reseeded / verifying / reviewPending / rejected /
   miss / waitSource / failed / reseedDraft / otherVersion`。`seeding / assisted /
-  reseeded / rejected / reseedDraft` 为终态，不会再产生请求；`otherVersion`
-  （目标站已有其他版本、pieces 不一致）不自动重传；`verifying` 由下一轮收尾 pass
-  接管（凭格子里的 verifyHash 直查下载器）；其余四类歇一个 missTTL 再重查。
+  reseeded / rejected / reseedDraft / otherVersion` 为终态，不会再产生请求；
+  `otherVersion`（目标站已有其他版本、pieces 不一致）不自动重传、也不周期性重查；
+  `verifying` 由下一轮收尾 pass 接管（凭格子里的 verifyHash 直查下载器）；
+  其余四类歇一个 missTTL 再重查。
 - 解析失败的文件会被挪成 `coverage.json.corrupt` 留证，不会被下一轮 save 无声覆盖。
   **手改账本必须保持完整字段形状**：格子的 `url`/`note` 无 serde 缺省，漏写会让
   整个文件被判 corrupt、索引从零重建（历史结论全丢）；改前备份、改后校验。
