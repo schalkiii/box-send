@@ -1704,6 +1704,37 @@ pub fn apply_site_rules(prep: &mut PreparedUpload, rules: &crate::gates::SiteRul
     }
 }
 
+/// 源种必须与 qB 里某个**已完成**的本地成员分片结构一致（pieces hash 相同），
+/// 且返回该成员的 savePath/category 供推种复用。只看 info hash 属于内容组不够：
+/// 同文件不同分片长度的重新打包 hash 不同，无法跨种（浪潮实测）。
+fn matching_local_member(
+    qb: &QBittorrent,
+    entry: &crate::index::ContentEntry,
+    source_data: &[u8],
+) -> Result<Option<(String, String, Option<String>)>> {
+    let src_pieces = bencode::pieces_hash(source_data)
+        .ok_or_else(|| anyhow!("源种缺少 pieces，无法确认分片结构"))?;
+    for (hash, meta) in &entry.torrents {
+        let Some((progress, _)) = qb.torrent_progress(hash).ok().flatten() else {
+            continue;
+        };
+        if progress < 0.999 {
+            continue;
+        }
+        let Ok(local) = qb.export_torrent(hash) else {
+            continue;
+        };
+        if bencode::pieces_hash(&local).as_deref() == Some(src_pieces.as_str()) {
+            return Ok(Some((
+                hash.clone(),
+                meta.save_path.clone(),
+                meta.category.clone(),
+            )));
+        }
+    }
+    Ok(None)
+}
+
 pub fn prepare_upload(target: &NexusPhp, info: &ReleaseInfo) -> Result<PreparedUpload> {
     let form_url = resolve_url("upload.php", &target.base);
     let form_html = target
@@ -3235,21 +3266,23 @@ pub fn run_reseed(
 
     // ---- 4 下载源种 + 上传目标站 ----
     let torrent_data = src.download_torrent(&page, &req.source_url)?;
-    // 源种 info hash 必须属于当前本地内容：人工草稿/源站搜错版本时拦下，
-    // 避免「站点有 1080p、本地 2160p」这类版本错配（实测绿里奇迹）。
-    if let Some(src_hash) = bencode::info_hash_v1(&torrent_data) {
-        let belongs = index
-            .contents
-            .get(&req.content_key)
-            .map(|e| e.torrents.contains_key(&src_hash))
-            .unwrap_or(false);
-        if !belongs {
-            bail!(
-                "源种 hash {src_hash} 不属于本地内容「{}」（源页版本与本地文件不一致），拒绝上传",
-                req.name
-            );
-        }
-    }
+    // 程序化硬闸：源种分片结构必须与 qB 中一个已完成成员一致；只看内容组 hash
+    // 不够（同文件不同分片长度无法跨种，浪潮实测）。
+    let entry = index
+        .contents
+        .get(&req.content_key)
+        .ok_or_else(|| anyhow!("索引里找不到内容 {}", req.content_key))?;
+    let matched_member = matching_local_member(qb, entry, &torrent_data)?.ok_or_else(|| {
+        anyhow!(
+            "源种分片结构与本地 qB 中任何已完成副本都不一致，拒绝上传（{}）",
+            req.name
+        )
+    })?;
+    log(&format!(
+        "源种分片校验通过：本地成员 {}（savePath {}）",
+        &matched_member.0[..12.min(matched_member.0.len())],
+        matched_member.1
+    ));
     log(&format!(
         "源种已下载（{} bytes），提交到 {} 上传页…",
         torrent_data.len(),
@@ -3340,16 +3373,7 @@ pub fn run_reseed(
         }
     };
     let tdata = tgt.download_torrent(&tpage, &detail_url)?;
-    let (rep_hash, meta_save_path, category) = {
-        let entry = index
-            .contents
-            .get(&req.content_key)
-            .ok_or_else(|| anyhow!("索引里找不到内容 {}", req.content_key))?;
-        let (h, m) = entry
-            .pick_meta()
-            .ok_or_else(|| anyhow!("内容 {} 没有成员种子，不知道保存路径", req.content_key))?;
-        (h.clone(), m.save_path.clone(), m.category.clone())
-    };
+    let (rep_hash, meta_save_path, category) = matched_member;
     let limit = cfg
         .downloader
         .site_up_limits
