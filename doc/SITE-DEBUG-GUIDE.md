@@ -14,7 +14,7 @@
 | `bsend plan --only 名称 [--sites …]` | 预演一轮：检索照跑，推送只出结论、不落盘 | 读站点 |
 | `bsend reseed --draft N` | 审阅一条转种草稿（预检 + 官方预审 + 将提交字段） | 读源站/目标站，不发种 |
 | `bsend reseed --draft N --yes` | 真发种（预检 → 官方预审 → 上传 → 发后自检 → 回推校验） | 写站点 |
-| `bsend gatecheck`（规划 P2） | 门禁矩阵：pass / auto-fix / block + 证据 | 只读 |
+| `bsend gatecheck`（已实现） | 门禁矩阵：pass / auto-fix / block + 证据 | 只读 |
 
 ## 2. 标准调试流程（七步）
 
