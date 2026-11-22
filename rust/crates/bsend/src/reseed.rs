@@ -3565,7 +3565,7 @@ pub fn run_reseed(
 ) -> Result<ReseedOutcome> {
     let started = now_unix();
     let result = run_reseed_inner(cfg, qb, req, index, log, throttle);
-    append_reseed_log(cfg, req, started, &result);
+    append_reseed_log(cfg, req, started, &result, index);
     result
 }
 
@@ -4104,6 +4104,7 @@ fn append_reseed_log(
     req: &ReseedRequest,
     started: i64,
     result: &Result<ReseedOutcome>,
+    index: &ContentIndex,
 ) {
     use std::io::Write as _;
     let path = cfg
@@ -4120,6 +4121,19 @@ fn append_reseed_log(
         ),
         Err(e) => ("failed", None, Some(format!("{e:#}"))),
     };
+    // 发种后的下载器确认：只有格子落到 Reseeded/Assisted/Seeding 才算「已辅到 qB」
+    let cell = index
+        .contents
+        .get(&req.content_key)
+        .and_then(|e| e.coverage.get(&req.target_site));
+    let cell_status = cell
+        .and_then(|c| serde_json::to_value(c.status).ok())
+        .and_then(|v| v.as_str().map(str::to_string))
+        .unwrap_or_default();
+    let seeded = matches!(
+        cell.map(|c| c.status),
+        Some(CoverageStatus::Reseeded | CoverageStatus::Assisted | CoverageStatus::Seeding)
+    );
     let line = serde_json::json!({
         "at": now_unix(),
         "started_at": started,
@@ -4131,6 +4145,8 @@ fn append_reseed_log(
         "result": word,
         "url": url,
         "note": note,
+        "cell_status": cell_status,
+        "seeded": seeded,
     });
     // 日志失败不影响发种结论（但 stderr 留一句，便于发现磁盘问题）
     match std::fs::OpenOptions::new()

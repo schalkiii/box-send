@@ -14,7 +14,7 @@ mod config_io;
 mod jobs;
 mod types;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -1496,12 +1496,12 @@ fn status_chip(status: CoverageStatus, count: usize) -> StatusChip {
 }
 
 fn main() {
-    let config_path = std::env::args()
-        .nth(1)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("boxsend.json"));
+    let config_path = resolve_config_path(std::env::args().nth(1).map(PathBuf::from));
     let cfg = Config::load(&config_path).unwrap_or_else(|e| {
-        eprintln!("加载配置 {} 失败：{e:#}", config_path.display());
+        show_error(&format!(
+            "加载配置失败：\n{}\n\n{e:#}\n\n可用命令行参数指定配置文件路径。",
+            config_path.display()
+        ));
         std::process::exit(1);
     });
 
@@ -1522,4 +1522,86 @@ fn main() {
         .expect("打开窗口失败");
         cx.activate(true);
     });
+}
+
+/// 配置文件定位：命令行参数优先；无参数时先找当前目录，再找系统默认
+/// `%LOCALAPPDATA%\BoxSend\boxsend.json`。双击 exe 时当前目录是 target\debug，
+/// 只有回退到系统默认位置才能正常启动（否则会静默退出，看起来像「双击没反应」）。
+fn resolve_config_path(arg: Option<PathBuf>) -> PathBuf {
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let local = std::env::var_os("LOCALAPPDATA")
+        .map(|v| PathBuf::from(v).join("BoxSend").join("boxsend.json"));
+    pick_config_path(arg, &cwd, local.as_deref())
+}
+
+fn pick_config_path(arg: Option<PathBuf>, cwd: &Path, local: Option<&Path>) -> PathBuf {
+    if let Some(a) = arg {
+        return a;
+    }
+    let cwd_cfg = cwd.join("boxsend.json");
+    if cwd_cfg.exists() {
+        return cwd_cfg;
+    }
+    if let Some(l) = local {
+        return l.to_path_buf();
+    }
+    cwd_cfg
+}
+
+/// 加载失败时给用户一个可见的错误框（GUI 子系统没有控制台，eprintln 看不到）
+#[cfg(windows)]
+fn show_error(message: &str) {
+    use std::os::windows::ffi::OsStrExt;
+    #[link(name = "user32")]
+    extern "system" {
+        fn MessageBoxW(
+            hwnd: *mut core::ffi::c_void,
+            text: *const u16,
+            caption: *const u16,
+            u_type: u32,
+        ) -> i32;
+    }
+    let wide = |s: &str| {
+        std::ffi::OsStr::new(s)
+            .encode_wide()
+            .chain(Some(0))
+            .collect::<Vec<u16>>()
+    };
+    let text = wide(message);
+    let caption = wide("BoxSend");
+    // MB_OK | MB_ICONERROR = 0x00000010
+    unsafe {
+        MessageBoxW(std::ptr::null_mut(), text.as_ptr(), caption.as_ptr(), 0x10);
+    }
+}
+
+#[cfg(not(windows))]
+fn show_error(message: &str) {
+    eprintln!("{message}");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pick_config_path;
+    use std::path::PathBuf;
+
+    #[test]
+    fn config_path_prefers_arg_then_cwd_then_local_appdata() {
+        let dir = std::env::temp_dir().join(format!("bsend-gui-path-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let cwd_cfg = dir.join("boxsend.json");
+        let local = dir.join("local").join("boxsend.json");
+        std::fs::create_dir_all(local.parent().unwrap()).unwrap();
+
+        // 命令行参数优先
+        let arg = PathBuf::from("custom.json");
+        assert_eq!(pick_config_path(Some(arg.clone()), &dir, Some(&local)), arg);
+        // 当前目录有配置就用当前目录
+        std::fs::write(&cwd_cfg, "{}").unwrap();
+        assert_eq!(pick_config_path(None, &dir, Some(&local)), cwd_cfg);
+        // 当前目录没有则回退到 %LOCALAPPDATA%
+        std::fs::remove_file(&cwd_cfg).unwrap();
+        assert_eq!(pick_config_path(None, &dir, Some(&local)), local);
+    }
 }

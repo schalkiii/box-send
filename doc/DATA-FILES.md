@@ -45,7 +45,9 @@
   `autopost` 共用；每次转种写一行）。
 - **每行一条 JSON**：`at`（结束时刻）、`started_at`、`key`、`name`、`source_site`、
   `source_url`、`target_site`、`result`（`posted / skipped_duplicate / other_version /
-  existed_pending / same_hash_skipped / failed`）、`url`、`note`。
+  existed_pending / same_hash_skipped / failed`）、`url`、`note`、`cell_status`、`seeded`。
+- `seeded`：发种后是否确认已辅到 qB（格子落到 `reseeded/assisted/seeding` 才为 true；
+  `verifying` 表示还在校验，需下一轮收尾）。
 - **用途**：回答「站点上发了、qB 里为什么没有」——每次动作有开始/结束时间、源/目标站与
   结果；日志写失败只打 stderr，不影响发种结论（fail-open）。
 - **手改边界**：只追加/删除整行，可整文件删除（不影响账本与限额）。

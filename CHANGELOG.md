@@ -14,8 +14,8 @@
 - 引擎加入下载器的种子统一带 `Boxsend` 标签（已有种子走 `addTags` 追加）。
 - Rust release 工作流（`v*` tag 触发，CLI + GUI + SHA256SUMS）。
 - 搜索结果多候选择优：同片多版本时优先取名称最接近发布名的条目。
-- `reseed-log.jsonl`：CLI/GUI/autopost 每次转种落一行动作日志，便于排查
-  「站点发了、qB 没辅上」。
+- `reseed-log.jsonl`：CLI/GUI/autopost 每次转种落一行动作日志，含 `seeded`
+  （是否已确认在 qB 做种），便于排查「站点发了、qB 没辅上」。
 
 ### Changed
 
@@ -38,6 +38,8 @@
   `--limit` 在演练下限制审阅条数（此前不生效，会跑完全部草稿）。
 - 站内判重命中（同分片）/ 上传回包 existed 时，下载目标种并推入下载器做种
   （此前只记「已覆盖/待确认」，qB 里没有目标站 tracker）。
+- GUI 双击启动：配置文件默认回退到 `%LOCALAPPDATA%\BoxSend\boxsend.json`；
+  加载失败弹可见错误框（此前无控制台，双击后静默退出）。
 
 ## [0.1.0] - 2026-11-22
 

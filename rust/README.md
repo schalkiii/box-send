@@ -127,7 +127,8 @@ GUI「转种草稿」页的「审阅」按钮与之等价（字段清单打进�
    不打标签），记「同 hash 跳过」；分片不一致才记「其他版本」跳过。
 
    每次转种（CLI / GUI / autopost）都会在 dataDir 追加一行 `reseed-log.jsonl`：
-   开始/结束时间、源/目标站、结果与备注，用于排查「站点发了、qB 没辅上」。
+   开始/结束时间、源/目标站、结果、备注，以及 `seeded`（是否已确认在 qB 做种：
+   只有校验到 100%、格子落到 `reseeded/assisted/seeding` 才为 true）。
 
    **落盘布局（`NoSubfolder`）**：qB 默认把多文件种子放进 `<savepath>/<种子根名>/`。
    如果目标站种子的根名与本地已有种子不同（`Show.S01-GRP` vs `Show S01 GRP`），

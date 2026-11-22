@@ -1794,6 +1794,11 @@ fn e2e_duplicate_hit_pushes_target_torrent_to_downloader() {
         logs.iter().any(|l| l.contains("100%")),
         "应走完校验到 100%：{logs:?}"
     );
+    let action_log = std::fs::read_to_string(dir.join("reseed-log.jsonl")).unwrap();
+    assert!(
+        action_log.contains("\"seeded\":true"),
+        "动作日志必须记录已辅到 qB：{action_log}"
+    );
 }
 
 /// 同 hash：qB 不允许同 hash 两条，按策略绝不碰原种子（不补挂 tracker、不打标签），
@@ -1895,6 +1900,11 @@ fn e2e_same_hash_skips_without_touching_existing_torrent() {
         "同 hash 不应调用 torrents/add（更不能补挂 tracker/打标签）"
     );
     assert!(logs.iter().any(|l| l.contains("不改动原种子")), "{logs:?}");
+    let action_log = std::fs::read_to_string(dir.join("reseed-log.jsonl")).unwrap();
+    assert!(
+        action_log.contains("\"seeded\":false") && action_log.contains("same_hash_skipped"),
+        "同 hash 跳过必须如实记录未辅到 qB：{action_log}"
+    );
 }
 /// 回包后再能检索到条目——引擎要定位、下载目标种并挂到本地数据上，而不是只记待确认。
 fn reseed_site_server_upload_existed(torrent: Arc<Vec<u8>>) -> MockServer {
