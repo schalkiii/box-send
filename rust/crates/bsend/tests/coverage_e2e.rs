@@ -1615,15 +1615,18 @@ Height : 1080 pixels</pre>
 }
 
 /// qB mock：本地成员 hash 已完成、可导出源种；目标种 add 后单查直接 100%。
+/// `target_present` 控制目标种是否已在下载器（同 hash 策略用例置 true）。
 fn qb_server_for_reseed(
     local_hash: String,
     local_torrent: Vec<u8>,
     target_hash: String,
+    target_present: bool,
     captured: CapturedRequests,
 ) -> MockServer {
     let local_hash = Arc::new(local_hash);
     let target_hash = Arc::new(target_hash);
     let local_torrent = Arc::new(local_torrent);
+    let present = Arc::new(AtomicBool::new(target_present));
     MockServer::start(Arc::new(move |method, path, body| {
         let lh = &*local_hash;
         let th = &*target_hash;
@@ -1635,6 +1638,9 @@ fn qb_server_for_reseed(
         }
         if path.starts_with("/api/v2/torrents/info") {
             if path.contains("hashes=") {
+                if path.contains(th.as_str()) && !present.load(Ordering::SeqCst) {
+                    return (200, "application/json", b"[]".to_vec());
+                }
                 let hash = if path.contains(th.as_str()) { th } else { lh };
                 let json = format!(
                     r#"[{{"hash":"{hash}","progress":1.0,"state":"pausedUP","up_limit":-1,"name":"Pack","save_path":"/data/"}}]"#
@@ -1663,6 +1669,7 @@ fn qb_server_for_reseed(
                 .lock()
                 .unwrap()
                 .push((path.to_string(), body.to_vec()));
+            present.store(true, Ordering::SeqCst);
             return (200, "text/plain", b"Ok.".to_vec());
         }
         (200, "text/plain", Vec::new())
@@ -1686,6 +1693,7 @@ fn e2e_duplicate_hit_pushes_target_torrent_to_downloader() {
         local_hash.clone(),
         t_src.as_ref().clone(),
         target_hash.clone(),
+        false,
         captured.clone(),
     );
     let src = reseed_site_server(t_src.clone());
@@ -1788,7 +1796,106 @@ fn e2e_duplicate_hit_pushes_target_torrent_to_downloader() {
     );
 }
 
-/// 目标站上传回包「已存在」：上传前检索故意不命中，逼出 existed 分支；
+/// 同 hash：qB 不允许同 hash 两条，按策略绝不碰原种子（不补挂 tracker、不打标签），
+/// 连 add 请求都不应发出，格子记「同 hash 跳过」。
+#[test]
+fn e2e_same_hash_skips_without_touching_existing_torrent() {
+    let dir = temp_dir("same-hash");
+    let t = Arc::new(torrent_bytes("Pack", FILES));
+    let hash = bencode::info_hash_v1(&t).unwrap();
+
+    let captured: CapturedRequests = Arc::new(Mutex::new(Vec::new()));
+    let qb = qb_server_for_reseed(
+        hash.clone(),
+        t.as_ref().clone(),
+        hash.clone(),
+        true,
+        captured.clone(),
+    );
+    let src = reseed_site_server(t.clone());
+    let tgt = reseed_site_server(t.clone());
+    let mut cfg = test_config(qb.port, src.port, tgt.port, &dir);
+    cfg.coverage.reseed_publish_enabled = true;
+
+    let key = "m:samehash000000000000";
+    let src_url = format!("http://127.0.0.1:{}/details.php?id=1002", src.port);
+    let mut index = ContentIndex::load(&cfg.coverage_state_path());
+    index.contents.insert(
+        key.to_string(),
+        ContentEntry {
+            name: NAME.into(),
+            total_size: 105,
+            file_count: FILES.len(),
+            manifest_digest: "0".repeat(16),
+            torrents: std::collections::BTreeMap::from([(
+                hash.clone(),
+                TorrentMeta {
+                    save_path: "/data".into(),
+                    category: None,
+                    last_seen: 0,
+                    tracker_hosts: Vec::new(),
+                    hash_v2: None,
+                    added_on: 0,
+                },
+            )]),
+            tracker_hosts: Vec::new(),
+            first_seen: 0,
+            gone_since: None,
+            coverage: std::collections::BTreeMap::from([(
+                "hdsky".to_string(),
+                SiteCoverage {
+                    status: CoverageStatus::ReseedDraft,
+                    at: 0,
+                    url: None,
+                    note: None,
+                    verify_hash: None,
+                },
+            )]),
+            source: Some(SourceRecord {
+                site_id: "pter".into(),
+                detail_url: src_url.clone(),
+                resolved_at: 0,
+                miss_at: None,
+            }),
+            forbid_reseed: false,
+        },
+    );
+    index.save().unwrap();
+
+    let qb_client = QBittorrent::new(&cfg.downloader.url, "admin", "pass").unwrap();
+    let req = ReseedRequest {
+        content_key: key.into(),
+        source_site: "pter".into(),
+        source_url: src_url,
+        target_site: "hdsky".into(),
+        name: NAME.into(),
+    };
+    let mut logs = Vec::new();
+    let outcome = run_reseed(
+        &cfg,
+        &qb_client,
+        &req,
+        &mut index,
+        &mut |l| logs.push(l.to_string()),
+        None,
+    )
+    .unwrap();
+
+    match outcome {
+        ReseedOutcome::Duplicate(d) => {
+            assert_eq!(d.status, CoverageStatus::SameHashSkip, "{d:?}");
+            assert!(d.note.contains("同 hash"), "{}", d.note);
+        }
+        other => panic!("同 hash 应返回 Duplicate(SameHashSkip)，实际 {other:?}"),
+    }
+    let cell = &index.contents[key].coverage["hdsky"];
+    assert_eq!(cell.status, CoverageStatus::SameHashSkip, "{cell:?}");
+    assert!(
+        captured.lock().unwrap().is_empty(),
+        "同 hash 不应调用 torrents/add（更不能补挂 tracker/打标签）"
+    );
+    assert!(logs.iter().any(|l| l.contains("不改动原种子")), "{logs:?}");
+}
 /// 回包后再能检索到条目——引擎要定位、下载目标种并挂到本地数据上，而不是只记待确认。
 fn reseed_site_server_upload_existed(torrent: Arc<Vec<u8>>) -> MockServer {
     let uploaded = Arc::new(AtomicBool::new(false));
@@ -1843,6 +1950,7 @@ fn e2e_upload_existed_pushes_target_torrent_to_downloader() {
         local_hash.clone(),
         t_src.as_ref().clone(),
         target_hash.clone(),
+        false,
         captured.clone(),
     );
     let src = reseed_site_server(t_src.clone());

@@ -1939,6 +1939,11 @@ pub fn apply_site_rules(prep: &mut PreparedUpload, rules: &crate::gates::SiteRul
     }
 }
 
+/// qB 中与内容分片一致的本地成员：(hash, savePath, category)
+type MatchedMember = (String, String, Option<String>);
+/// 判重复核产物：目标站 .torrent 字节 + 本地同分片成员
+type DupCheck = Option<(Vec<u8>, MatchedMember)>;
+
 /// 源种必须与 qB 里某个**已完成**的本地成员分片结构一致（pieces hash 相同），
 /// 且返回该成员的 savePath/category 供推种复用。只看 info hash 属于内容组不够：
 /// 同文件不同分片长度的重新打包 hash 不同，无法跨种（浪潮实测）。
@@ -1946,7 +1951,7 @@ fn matching_local_member(
     qb: &QBittorrent,
     entry: &crate::index::ContentEntry,
     source_data: &[u8],
-) -> Result<Option<(String, String, Option<String>)>> {
+) -> Result<Option<MatchedMember>> {
     let src_pieces = bencode::pieces_hash(source_data)
         .ok_or_else(|| anyhow!("源种缺少 pieces，无法确认分片结构"))?;
     for (hash, meta) in &entry.torrents {
@@ -3344,6 +3349,7 @@ impl ReseedOutcome {
             ReseedOutcome::Duplicate(d) => match d.status {
                 CoverageStatus::Assisted | CoverageStatus::Seeding => "skipped_duplicate",
                 CoverageStatus::OtherVersion => "other_version",
+                CoverageStatus::SameHashSkip => "same_hash_skipped",
                 CoverageStatus::ReviewPending => "existed_pending",
                 _ => "failed",
             },
@@ -3546,7 +3552,24 @@ fn prepare_released(
 
 /// 转种一条龙：解析源页 → 预检 → 官方预审 → 上传 → 发后自检 → 推种校验 → 格子落账。
 /// `log` 收进度行；返回新种详情页链接。
+///
+/// 所有调用方（CLI / GUI / autopost）都会在这里落一条 `reseed-log.jsonl`：
+/// 记录开始时间、源/目标站、结果与错误，用于事后排查「发了但没辅上」这类问题。
 pub fn run_reseed(
+    cfg: &Config,
+    qb: &QBittorrent,
+    req: &ReseedRequest,
+    index: &mut ContentIndex,
+    log: &mut dyn FnMut(&str),
+    throttle: Option<&SiteThrottle>,
+) -> Result<ReseedOutcome> {
+    let started = now_unix();
+    let result = run_reseed_inner(cfg, qb, req, index, log, throttle);
+    append_reseed_log(cfg, req, started, &result);
+    result
+}
+
+fn run_reseed_inner(
     cfg: &Config,
     qb: &QBittorrent,
     req: &ReseedRequest,
@@ -3609,7 +3632,7 @@ pub fn run_reseed(
         if !throttle.acquire(&rel.tgt.site_id, BudgetKind::Search) {
             bail!("目标站判重复核预算用完，拒绝在未确认重复情况的上传");
         }
-        let verdict: Result<Option<(Vec<u8>, (String, String, Option<String>))>> = (|| {
+        let verdict: Result<DupCheck> = (|| {
             let page = rel.tgt.fetch_torrent_page(&detail_url)?;
             let data = rel.tgt.download_torrent(&page, &detail_url)?;
             let entry = index
@@ -3634,20 +3657,35 @@ pub fn run_reseed(
                     log,
                 ) {
                     Ok(state) => {
-                        let note = match state {
-                            CoverageStatus::Reseeded => {
-                                format!("目标站已有同分片「{title}」，已下载目标种并加入下载器做种")
-                            }
-                            CoverageStatus::Assisted => format!(
-                                "目标站已有同分片「{title}」，下载器里已存在（已补挂 tracker）"
+                        let (status, note) = match state {
+                            CoverageStatus::Reseeded => (
+                                CoverageStatus::Assisted,
+                                format!(
+                                    "目标站已有同分片「{title}」，已下载目标种并加入下载器做种"
+                                ),
                             ),
-                            _ => format!(
-                                "目标站已有同分片「{title}」，已加入下载器，校验中（下一轮收尾）"
+                            CoverageStatus::Assisted => (
+                                CoverageStatus::Assisted,
+                                format!(
+                                    "目标站已有同分片「{title}」，下载器里已存在（已补挂 tracker）"
+                                ),
+                            ),
+                            CoverageStatus::SameHashSkip => (
+                                CoverageStatus::SameHashSkip,
+                                format!(
+                                    "目标站已有同分片「{title}」，但目标种与已有种子同 hash；按策略不改动原种子，跳过"
+                                ),
+                            ),
+                            _ => (
+                                CoverageStatus::Assisted,
+                                format!(
+                                    "目标站已有同分片「{title}」，已加入下载器，校验中（下一轮收尾）"
+                                ),
                             ),
                         };
                         log(&format!("目标站判重命中：{title} → {detail_url}；{note}"));
                         return Ok(ReseedOutcome::Duplicate(DuplicateOutcome {
-                            status: CoverageStatus::Assisted,
+                            status,
                             url: Some(detail_url),
                             note,
                         }));
@@ -3818,7 +3856,7 @@ pub fn run_reseed(
         if !throttle.acquire(&tgt.site_id, BudgetKind::Search) {
             bail!("上传回包 existed，但判重复核预算用完，拒绝继续");
         }
-        let verdict: Result<Option<(Vec<u8>, (String, String, Option<String>))>> = (|| {
+        let verdict: Result<DupCheck> = (|| {
             let page = tgt.fetch_torrent_page(&detail_url)?;
             let data = tgt.download_torrent(&page, &detail_url)?;
             let entry = index
@@ -3841,18 +3879,28 @@ pub fn run_reseed(
                     log,
                 ) {
                     Ok(state) => {
-                        let note = match state {
-                            CoverageStatus::Reseeded => {
-                                "上传回包 existed：已下载目标种并加入下载器做种".to_string()
-                            }
-                            CoverageStatus::Assisted => {
-                                "上传回包 existed：下载器里已存在（已补挂 tracker）".to_string()
-                            }
-                            _ => "上传回包 existed：已加入下载器，校验中（下一轮收尾）".to_string(),
+                        let (status, note) = match state {
+                            CoverageStatus::Reseeded => (
+                                CoverageStatus::Assisted,
+                                "上传回包 existed：已下载目标种并加入下载器做种".to_string(),
+                            ),
+                            CoverageStatus::Assisted => (
+                                CoverageStatus::Assisted,
+                                "上传回包 existed：下载器里已存在（已补挂 tracker）".to_string(),
+                            ),
+                            CoverageStatus::SameHashSkip => (
+                                CoverageStatus::SameHashSkip,
+                                "上传回包 existed：目标种与已有种子同 hash；按策略不改动原种子，跳过"
+                                    .to_string(),
+                            ),
+                            _ => (
+                                CoverageStatus::Assisted,
+                                "上传回包 existed：已加入下载器，校验中（下一轮收尾）".to_string(),
+                            ),
                         };
                         log(&note);
                         Ok(ReseedOutcome::Duplicate(DuplicateOutcome {
-                            status: CoverageStatus::Assisted,
+                            status,
                             url: Some(detail_url),
                             note,
                         }))
@@ -4049,6 +4097,56 @@ pub fn run_reseed(
     Ok(ReseedOutcome::Posted(detail_url))
 }
 
+/// 转种动作日志（JSONL，fail-open）：GUI/CLI/autopost 每次转种都写一行。
+/// 与 `auto-audit.jsonl` 分开：后者管日限额/退避，这里只留可追溯的动作现场。
+fn append_reseed_log(
+    cfg: &Config,
+    req: &ReseedRequest,
+    started: i64,
+    result: &Result<ReseedOutcome>,
+) {
+    use std::io::Write as _;
+    let path = cfg
+        .coverage_state_path()
+        .parent()
+        .map(|p| p.join("reseed-log.jsonl"))
+        .unwrap_or_else(|| std::path::PathBuf::from("reseed-log.jsonl"));
+    let (word, url, note): (&str, Option<&str>, Option<String>) = match result {
+        Ok(ReseedOutcome::Posted(u)) => ("posted", Some(u.as_str()), None),
+        Ok(ReseedOutcome::Duplicate(d)) => (
+            ReseedOutcome::Duplicate(d.clone()).audit_result(),
+            d.url.as_deref(),
+            Some(d.note.clone()),
+        ),
+        Err(e) => ("failed", None, Some(format!("{e:#}"))),
+    };
+    let line = serde_json::json!({
+        "at": now_unix(),
+        "started_at": started,
+        "key": req.content_key,
+        "name": req.name,
+        "source_site": req.source_site,
+        "source_url": req.source_url,
+        "target_site": req.target_site,
+        "result": word,
+        "url": url,
+        "note": note,
+    });
+    // 日志失败不影响发种结论（但 stderr 留一句，便于发现磁盘问题）
+    match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        Ok(mut f) => {
+            if let Err(e) = writeln!(f, "{line}") {
+                eprintln!("写 reseed-log.jsonl 失败：{e}");
+            }
+        }
+        Err(e) => eprintln!("打开 reseed-log.jsonl 失败（{}）：{e}", path.display()),
+    }
+}
+
 fn write_cell(
     index: &mut ContentIndex,
     key: &str,
@@ -4084,11 +4182,27 @@ fn push_target_torrent(
     name: &str,
     detail_url: &str,
     tdata: &[u8],
-    matched_member: (String, String, Option<String>),
+    matched_member: MatchedMember,
     index: &mut ContentIndex,
     log: &mut dyn FnMut(&str),
 ) -> Result<CoverageStatus> {
     let (rep_hash, meta_save_path, category) = matched_member;
+    // 同 hash 绝不碰原种子：qB 不允许同 hash 两条，提前判掉，连 add 请求都不发
+    let target_hash = bencode::info_hash_v1(tdata).unwrap_or_default();
+    if !target_hash.is_empty() && matches!(qb.torrent_progress(&target_hash), Ok(Some(_))) {
+        let note = "目标种与下载器已有种子 info hash 相同；按策略不改动原种子，跳过该站";
+        write_cell(
+            index,
+            &req.content_key,
+            &req.target_site,
+            CoverageStatus::SameHashSkip,
+            Some(detail_url.to_string()),
+            note,
+        );
+        index.save()?;
+        log(note);
+        return Ok(CoverageStatus::SameHashSkip);
+    }
     let limit = cfg
         .downloader
         .site_up_limits
@@ -4102,7 +4216,7 @@ fn push_target_torrent(
     }
     let save_path = layout.save_path().unwrap_or(&meta_save_path).to_string();
     let fname = format!("{name}.torrent");
-    let add = qb.add_torrent(
+    let add = qb.add_torrent_new_only(
         tdata,
         &fname,
         &save_path,
@@ -4117,18 +4231,20 @@ fn push_target_torrent(
         log(&format!("下载器回执：{}", add.note));
     }
     if add.already {
-        // 只有「下载器里早有这个种」才直接落终态；新加种的 note（限速未生效/
-        // missingFiles）必须继续走校验，否则种子永远暂停不作种
+        // 同 hash：qB 不允许同 hash 两条；按策略绝不改动原种子（不补挂 tracker、
+        // 不打标签），只落终态备注，交人工决定是否放弃目标站做种。
+        let note = "目标种与下载器已有种子 info hash 相同；按策略不改动原种子，跳过该站";
         write_cell(
             index,
             &req.content_key,
             &req.target_site,
-            CoverageStatus::Assisted,
+            CoverageStatus::SameHashSkip,
             Some(detail_url.to_string()),
-            &format!("已加入下载器（{}）", add.note),
+            note,
         );
         index.save()?;
-        return Ok(CoverageStatus::Assisted);
+        log(note);
+        return Ok(CoverageStatus::SameHashSkip);
     }
     let site_hash = if add.id.is_empty() {
         bencode::info_hash_v1(tdata).unwrap_or_default()

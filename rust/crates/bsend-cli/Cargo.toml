@@ -4,6 +4,7 @@ description = "box-send 铺种引擎 CLI：内容索引 → 源种定位 → 辅
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
 
 [dependencies]
 bsend = { path = "../bsend" }

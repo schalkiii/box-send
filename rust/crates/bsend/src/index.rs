@@ -32,6 +32,9 @@ pub enum CoverageStatus {
     ReviewPending,
     /// 目标站已有同片其他版本（pieces 不一致），程序化判定，不再人工确认
     OtherVersion,
+    /// 目标种与下载器已有种子 info hash 相同：qB 不允许同 hash 两条，
+    /// 按策略**不改动原种子**（不补挂 tracker、不打标签），跳过该站
+    SameHashSkip,
     /// 人工否决（不是同一内容）
     Rejected,
     /// 站内没有（负缓存，missTTL 天内不再重搜）
@@ -53,6 +56,7 @@ impl CoverageStatus {
             CoverageStatus::Verifying => "校验中",
             CoverageStatus::ReviewPending => "待人工确认",
             CoverageStatus::OtherVersion => "其他版本",
+            CoverageStatus::SameHashSkip => "同 hash 跳过",
             CoverageStatus::Rejected => "人工否决",
             CoverageStatus::Miss => "站内没有",
             CoverageStatus::WaitSource => "待找源",
@@ -76,6 +80,7 @@ impl CoverageStatus {
                 | CoverageStatus::Rejected
                 | CoverageStatus::ReseedDraft
                 | CoverageStatus::OtherVersion
+                | CoverageStatus::SameHashSkip
         )
     }
 }

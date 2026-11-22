@@ -19,7 +19,9 @@
   - 想「立刻重查某站某内容」= **删除该站格子**（无格 = 待查），不要写
     `status: "missing"`（枚举合法值是 `miss`，且 `miss` 是负缓存，TTL 内会被预筛跳过）。
   - 状态枚举 snake_case：`seeding / assisted / reseeded / verifying / review_pending /
-    rejected / miss / wait_source / failed / reseed_draft / other_version`。
+    rejected / miss / wait_source / failed / reseed_draft / other_version / same_hash_skip`。
+    `same_hash_skip`：目标种与下载器已有种子 info hash 相同，按策略不改动原种子（不补挂
+    tracker、不打标签），该站暂不做种。
   - 改后可用 `bsend status` 验证能被正常解析。
 - **损坏隔离**：解析失败时原文件改名 `coverage.json.corrupt` 留证，不会静默覆盖。
 
@@ -28,10 +30,25 @@
 - **写入者**：`bsend autopost`（`bsend::autopost::append_audit`）。
 - **每行一条 JSON**：`at`（写入时刻的 Unix 秒）、`site`、`key`（contentKey）、`result`
   （`posted / blocked / failed / review_failed / skipped_duplicate / other_version /
-  existed_pending`），可选 `url`（posted/existed）、`error`、`note`、`gates`（门禁矩阵）。
+  existed_pending / same_hash_skipped`），可选 `url`（posted/existed）、`error`、`note`、
+  `gates`（门禁矩阵）。
+- **词义**：`skipped_duplicate` = 目标站已有同分片条目（含本工具此前发布的），跳过重传；
+  **不是**站点拒绝上传。`same_hash_skipped` = 目标种与下载器已有种子同 hash，按策略不改动
+  原种子。
 - **用途**：日限额（按北京时间日界计 `posted`）、同草稿退避（拦截 24h / 失败 6h）。
 - **手改边界**：只可追加/删除整行；**写失败会让本轮自动发种中止**（fail-closed），
   不要把它指向不可写路径。
+
+## reseed-log.jsonl（转种动作日志）
+
+- **写入者**：`bsend::reseed::run_reseed`（CLI `reseed --yes`、GUI「确认转种」、
+  `autopost` 共用；每次转种写一行）。
+- **每行一条 JSON**：`at`（结束时刻）、`started_at`、`key`、`name`、`source_site`、
+  `source_url`、`target_site`、`result`（`posted / skipped_duplicate / other_version /
+  existed_pending / same_hash_skipped / failed`）、`url`、`note`。
+- **用途**：回答「站点上发了、qB 里为什么没有」——每次动作有开始/结束时间、源/目标站与
+  结果；日志写失败只打 stderr，不影响发种结论（fail-open）。
+- **手改边界**：只追加/删除整行，可整文件删除（不影响账本与限额）。
 
 ## pieces-cache.json（pieces-hash 通道缓存）
 

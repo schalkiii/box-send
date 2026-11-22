@@ -4,6 +4,7 @@ description = "BoxSend 铺种引擎（Rust）：内容索引 → 源种定位 �
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

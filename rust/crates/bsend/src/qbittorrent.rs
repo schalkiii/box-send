@@ -560,6 +560,59 @@ impl QBittorrent {
         paused: bool,
         content_layout: Option<&str>,
     ) -> Result<AddTorrentResult> {
+        self.add_torrent_ex(
+            data,
+            filename,
+            save_path,
+            category,
+            skip_checking,
+            up_limit,
+            paused,
+            content_layout,
+            true,
+        )
+    }
+
+    /// 同 `add_torrent`，但**绝不接管已有种子**：同 hash 已存在时不补挂 tracker、
+    /// 不打标签，只回执「已存在」——用于「同 hash 不改动原种子」的转种策略。
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_torrent_new_only(
+        &self,
+        data: &[u8],
+        filename: &str,
+        save_path: &str,
+        category: Option<&str>,
+        skip_checking: bool,
+        up_limit: i64,
+        paused: bool,
+        content_layout: Option<&str>,
+    ) -> Result<AddTorrentResult> {
+        self.add_torrent_ex(
+            data,
+            filename,
+            save_path,
+            category,
+            skip_checking,
+            up_limit,
+            paused,
+            content_layout,
+            false,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn add_torrent_ex(
+        &self,
+        data: &[u8],
+        filename: &str,
+        save_path: &str,
+        category: Option<&str>,
+        skip_checking: bool,
+        up_limit: i64,
+        paused: bool,
+        content_layout: Option<&str>,
+        adopt_existing: bool,
+    ) -> Result<AddTorrentResult> {
         self.login()?;
 
         let fields = add_form_fields(
@@ -594,7 +647,7 @@ impl QBittorrent {
         if status == 409 {
             // 5.2+: 未新增任何种子时返回 409 Conflict（典型场景：种子已存在于下载器）
             // 视为已添加，保证重复执行幂等；明确提示「已存在」
-            return Ok(self.verify(&hash, up_limit, true, data));
+            return Ok(self.verify(&hash, up_limit, true, data, adopt_existing));
         }
         if status != 200 {
             self.session_died(status);
@@ -617,7 +670,7 @@ impl QBittorrent {
                 }
             }
         }
-        Ok(self.verify(&hash, up_limit, false, data))
+        Ok(self.verify(&hash, up_limit, false, data, true))
     }
 
     /// 添加后回查：确认种子存在、限速是否生效（限速端点被隧道挡住时给用户可见提示）
@@ -627,12 +680,21 @@ impl QBittorrent {
         up_limit: i64,
         already: bool,
         torrent_data: &[u8],
+        adopt_existing: bool,
     ) -> AddTorrentResult {
         if already {
             if hash.is_empty() {
                 return AddTorrentResult {
                     id: String::new(),
                     note: "已存在于下载器".into(),
+                    already: true,
+                };
+            }
+            // 「同 hash 不改动原种子」策略：只回执，不补挂 tracker、不打标签
+            if !adopt_existing {
+                return AddTorrentResult {
+                    id: hash.to_string(),
+                    note: "已存在于下载器（同 hash），按策略不改动原种子".into(),
                     already: true,
                 };
             }

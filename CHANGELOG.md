@@ -14,6 +14,8 @@
 - 引擎加入下载器的种子统一带 `Boxsend` 标签（已有种子走 `addTags` 追加）。
 - Rust release 工作流（`v*` tag 触发，CLI + GUI + SHA256SUMS）。
 - 搜索结果多候选择优：同片多版本时优先取名称最接近发布名的条目。
+- `reseed-log.jsonl`：CLI/GUI/autopost 每次转种落一行动作日志，便于排查
+  「站点发了、qB 没辅上」。
 
 ### Changed
 
@@ -21,6 +23,8 @@
 - `otherVersion` 纳入终态，不再每 7 天重复入队。
 - 限流地板按轮次保留（一次成功不再回到 8 秒节奏）。
 - `requireLinks` / `requireMediaInfo` 放宽同时作用于门禁与预检。
+- 同 hash 目标种一律不改动原种子（不补挂 tracker、不打标签），记「同 hash 跳过」；
+  qB 不允许同 hash 两条，新加种子只适用于 hash 不同的目标种。
 
 ### Fixed
 

@@ -737,6 +737,8 @@ DOC-M3），**仍待修 15 条（高 0 / 中 5 / 低 10）**。已修条目在 �
 | TEST-L4 | 编排层注入 reviewer：posted/blocked 记账分支可零网络验证 | 单测 `autopost_writes_posted_and_blocked_audit` |
 | GAP-4 | `autopost --dry-run` 空白名单时逐条门禁演练（此前直接全跳过，与提示文案不符）；演练下 `--limit` 改为限制审阅条数 | 单测 `dry_run_with_empty_whitelist_drills_all_drafts` / `dry_run_with_configured_whitelist_skips_unlisted_site` / `dry_run_limit_caps_reviewed_drafts` |
 | BUG-M14（新发现） | 站内判重命中（同分片）/ 上传回包 existed 时，也必须下载目标种推入下载器（补挂 tracker 或 NoSubfolder 复用目录）并校验；此前只写 Assisted/待确认，qB 里没有目标站 tracker | e2e `e2e_duplicate_hit_pushes_target_torrent_to_downloader` / `e2e_upload_existed_pushes_target_torrent_to_downloader` |
+| BUG-M15（策略） | 同 hash 绝不改动原种子：qB 不允许同 hash 两条，改为提前判掉、不发 add、不补挂 tracker/标签，格子记 `same_hash_skip` | e2e `e2e_same_hash_skips_without_touching_existing_torrent` |
+| ENG-M4（新发现） | 新增 `reseed-log.jsonl`：CLI/GUI/autopost 每次转种都落一行（时间/源/目标/结果/备注），解决「站点发了、qB 没辅上」无据可查 | e2e 路径实跑 + DATA-FILES 契约 |
 | ENG-L3 | 新增根 `LICENSE`（MIT）与 `CHANGELOG.md` | markdownlint |
 
 ### 8.2 仍未处理
@@ -750,7 +752,7 @@ DOC-M3），**仍待修 15 条（高 0 / 中 5 / 低 10）**。已修条目在 �
 ### 8.3 验证基线
 
 - `cargo fmt` 通过；`cargo clippy --workspace --all-targets -D warnings` 零告警；
-  `cargo test --workspace`：**191 单测 + 21 e2e + 2 CLI + 2 GUI** 全绿。
+  `cargo test --workspace`：**191 单测 + 22 e2e + 2 CLI + 2 GUI** 全绿。
 - 实机只读演练：`bsend autopost --dry-run --sites sbpt --limit 20`
   → 20 条门禁通过、5 条拦截、1 条目标站上传页瞬断（50x/10054，可重试）、
   1 条退避跳过；未真实发种。

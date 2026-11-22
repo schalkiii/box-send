@@ -1481,6 +1481,7 @@ fn status_chip(status: CoverageStatus, count: usize) -> StatusChip {
         CoverageStatus::Verifying => ("校验中", 0xd29922),
         CoverageStatus::ReviewPending => ("待人工确认", 0xf0883e),
         CoverageStatus::OtherVersion => ("其他版本", 0xd29922),
+        CoverageStatus::SameHashSkip => ("同 hash 跳过", 0x8b949e),
         CoverageStatus::Rejected => ("人工否决", 0x8b949e),
         CoverageStatus::Miss => ("站内没有", 0x484f58),
         CoverageStatus::WaitSource => ("待找源", 0x39c5cf),
