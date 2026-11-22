@@ -2455,6 +2455,36 @@ fn relocate_posted_detail(tgt: &NexusPhp, name: &str, log: &mut dyn FnMut(&str))
     None
 }
 
+/// existed 回包的详情页不可全信（常是中转/跳转 id）：先核对标题，不符再按
+/// IMDb 区 / 标题检索找回真实条目。只做定位，不判重。
+fn locate_existing_target(
+    tgt: &NexusPhp,
+    info: &ReleaseInfo,
+    hint: &str,
+    log: &mut dyn FnMut(&str),
+) -> Option<String> {
+    if !hint.is_empty() {
+        if let Ok(p) = tgt.fetch_torrent_page(hint) {
+            if norm_post_title(&p.name) == norm_post_title(&info.name) {
+                return Some(hint.to_string());
+            }
+            log(&format!(
+                "existed 回包详情页标题不符（页面「{}」），按 IMDb/标题校正…",
+                p.name
+            ));
+        }
+    }
+    if let Ok(Some((u, title))) = target_has_imdb(tgt, info.imdb.as_deref(), log) {
+        log(&format!("existed 校正：IMDb 区找到「{title}」→ {u}"));
+        return Some(u);
+    }
+    let u = relocate_posted_detail(tgt, &info.name, log);
+    if let Some(u) = &u {
+        log(&format!("existed 校正：按标题找到 {u}"));
+    }
+    u
+}
+
 pub fn verify_posted(target: &NexusPhp, detail_url: &str, info: &ReleaseInfo) -> Vec<String> {
     match target.fetch_html(detail_url, target.base.as_str()) {
         Ok(html) => verify_posted_html(&html, info),
@@ -3579,51 +3609,110 @@ pub fn run_reseed(
         if !throttle.acquire(&rel.tgt.site_id, BudgetKind::Search) {
             bail!("目标站判重复核预算用完，拒绝在未确认重复情况的上传");
         }
-        let verdict: Result<bool> = (|| {
+        let verdict: Result<Option<(Vec<u8>, (String, String, Option<String>))>> = (|| {
             let page = rel.tgt.fetch_torrent_page(&detail_url)?;
             let data = rel.tgt.download_torrent(&page, &detail_url)?;
             let entry = index
                 .contents
                 .get(&req.content_key)
                 .context("判重复核：索引缺内容条目")?;
-            Ok(matching_local_member(qb, entry, &data)?.is_some())
+            Ok(matching_local_member(qb, entry, &data)?.map(|m| (data, m)))
         })();
-        let (status, why) = match verdict {
-            Ok(true) => (
-                CoverageStatus::Assisted,
-                format!("目标站已有同内容同分片「{title}」，未重复上传"),
-            ),
-            Ok(false) => (
-                CoverageStatus::OtherVersion,
-                format!("目标站已有其他版本「{title}」；pieces 不一致，未上传"),
-            ),
-            Err(e) => (
-                CoverageStatus::Failed,
-                format!("目标站已有条目「{title}」，但复核失败（{e:#}），不判其他版本"),
-            ),
-        };
-        log(&format!(
-            "目标站判重命中：{title} → {detail_url}；{}",
-            match status {
-                CoverageStatus::Assisted => "同分片，已覆盖",
-                CoverageStatus::OtherVersion => "不同版本，跳过",
-                _ => "复核失败，待重查",
+        match verdict {
+            // 同分片：目标站已有同一内容，仍要下载目标种挂到本地数据上（跨站辅种）。
+            // 只写 Assisted 不推下载器，站点上就只有发布记录、qB 里没有目标站 tracker。
+            Ok(Some((data, member))) => {
+                match push_target_torrent(
+                    cfg,
+                    qb,
+                    req,
+                    &rel.info.name,
+                    &detail_url,
+                    &data,
+                    member,
+                    index,
+                    log,
+                ) {
+                    Ok(state) => {
+                        let note = match state {
+                            CoverageStatus::Reseeded => {
+                                format!("目标站已有同分片「{title}」，已下载目标种并加入下载器做种")
+                            }
+                            CoverageStatus::Assisted => format!(
+                                "目标站已有同分片「{title}」，下载器里已存在（已补挂 tracker）"
+                            ),
+                            _ => format!(
+                                "目标站已有同分片「{title}」，已加入下载器，校验中（下一轮收尾）"
+                            ),
+                        };
+                        log(&format!("目标站判重命中：{title} → {detail_url}；{note}"));
+                        return Ok(ReseedOutcome::Duplicate(DuplicateOutcome {
+                            status: CoverageStatus::Assisted,
+                            url: Some(detail_url),
+                            note,
+                        }));
+                    }
+                    Err(e) => {
+                        let why = format!("目标站已有同分片「{title}」，但推进下载器失败（{e:#}）");
+                        log(&why);
+                        write_cell(
+                            index,
+                            &req.content_key,
+                            &req.target_site,
+                            CoverageStatus::Failed,
+                            Some(detail_url.clone()),
+                            &why,
+                        );
+                        index.save()?;
+                        return Ok(ReseedOutcome::Duplicate(DuplicateOutcome {
+                            status: CoverageStatus::Failed,
+                            url: Some(detail_url),
+                            note: why,
+                        }));
+                    }
+                }
             }
-        ));
-        write_cell(
-            index,
-            &req.content_key,
-            &req.target_site,
-            status,
-            Some(detail_url.clone()),
-            &why,
-        );
-        index.save()?;
-        return Ok(ReseedOutcome::Duplicate(DuplicateOutcome {
-            status,
-            url: Some(detail_url),
-            note: why,
-        }));
+            Ok(None) => {
+                let why = format!("目标站已有其他版本「{title}」；pieces 不一致，未上传");
+                log(&format!(
+                    "目标站判重命中：{title} → {detail_url}；不同版本，跳过"
+                ));
+                write_cell(
+                    index,
+                    &req.content_key,
+                    &req.target_site,
+                    CoverageStatus::OtherVersion,
+                    Some(detail_url.clone()),
+                    &why,
+                );
+                index.save()?;
+                return Ok(ReseedOutcome::Duplicate(DuplicateOutcome {
+                    status: CoverageStatus::OtherVersion,
+                    url: Some(detail_url),
+                    note: why,
+                }));
+            }
+            Err(e) => {
+                let why = format!("目标站已有条目「{title}」，但复核失败（{e:#}），不判其他版本");
+                log(&format!(
+                    "目标站判重命中：{title} → {detail_url}；复核失败，待重查"
+                ));
+                write_cell(
+                    index,
+                    &req.content_key,
+                    &req.target_site,
+                    CoverageStatus::Failed,
+                    Some(detail_url.clone()),
+                    &why,
+                );
+                index.save()?;
+                return Ok(ReseedOutcome::Duplicate(DuplicateOutcome {
+                    status: CoverageStatus::Failed,
+                    url: Some(detail_url),
+                    note: why,
+                }));
+            }
+        }
     }
     log("目标站未找到同条目，继续上传");
 
@@ -3698,28 +3787,134 @@ pub fn run_reseed(
     let up = submit_upload(&tgt, &prep, &torrent_data, &filename)?;
     log(&format!("上传结果：{}", up.message));
 
-    // 站点回包带 duplicate 标志时，即使给了链接也可能是无效 existed 跳转，
-    // 不能当新种 Reseeded；统一落 ReviewPending，避免假成功。
+    // 站点回包带 duplicate 标志时，回包链接可能只是 existed 跳转（不可信），
+    // 但不能只落 ReviewPending 就完事：目标站已有条目同样要下载目标种挂到本地数据上，
+    // 否则站点上有发布记录、qB 里却没有目标站 tracker（跨站辅种缺这一步）。
     if up.duplicate {
-        let detail = up.detail_url.unwrap_or_default();
-        let note = format!(
-            "上传回包标记 existed（{}），详情页不可信，未加入下载器",
-            up.message
-        );
-        write_cell(
-            index,
-            &req.content_key,
-            &req.target_site,
-            CoverageStatus::ReviewPending,
-            (!detail.is_empty()).then_some(detail.clone()),
-            &note,
-        );
-        index.save()?;
-        return Ok(ReseedOutcome::Duplicate(DuplicateOutcome {
-            status: CoverageStatus::ReviewPending,
-            url: (!detail.is_empty()).then_some(detail),
-            note,
-        }));
+        let hint = up.detail_url.unwrap_or_default();
+        let Some(detail_url) = locate_existing_target(&tgt, &info, &hint, log) else {
+            let note = format!(
+                "上传回包标记 existed（{}），站内没定位到条目，未加入下载器",
+                up.message
+            );
+            write_cell(
+                index,
+                &req.content_key,
+                &req.target_site,
+                CoverageStatus::ReviewPending,
+                (!hint.is_empty()).then_some(hint.clone()),
+                &note,
+            );
+            index.save()?;
+            return Ok(ReseedOutcome::Duplicate(DuplicateOutcome {
+                status: CoverageStatus::ReviewPending,
+                url: (!hint.is_empty()).then_some(hint),
+                note,
+            }));
+        };
+        log(&format!(
+            "existed 条目已定位：{detail_url}，下载目标种判重…"
+        ));
+        if !throttle.acquire(&tgt.site_id, BudgetKind::Search) {
+            bail!("上传回包 existed，但判重复核预算用完，拒绝继续");
+        }
+        let verdict: Result<Option<(Vec<u8>, (String, String, Option<String>))>> = (|| {
+            let page = tgt.fetch_torrent_page(&detail_url)?;
+            let data = tgt.download_torrent(&page, &detail_url)?;
+            let entry = index
+                .contents
+                .get(&req.content_key)
+                .context("existed 判重复核：索引缺内容条目")?;
+            Ok(matching_local_member(qb, entry, &data)?.map(|m| (data, m)))
+        })();
+        return match verdict {
+            Ok(Some((data, member))) => {
+                match push_target_torrent(
+                    cfg,
+                    qb,
+                    req,
+                    &info.name,
+                    &detail_url,
+                    &data,
+                    member,
+                    index,
+                    log,
+                ) {
+                    Ok(state) => {
+                        let note = match state {
+                            CoverageStatus::Reseeded => {
+                                "上传回包 existed：已下载目标种并加入下载器做种".to_string()
+                            }
+                            CoverageStatus::Assisted => {
+                                "上传回包 existed：下载器里已存在（已补挂 tracker）".to_string()
+                            }
+                            _ => "上传回包 existed：已加入下载器，校验中（下一轮收尾）".to_string(),
+                        };
+                        log(&note);
+                        Ok(ReseedOutcome::Duplicate(DuplicateOutcome {
+                            status: CoverageStatus::Assisted,
+                            url: Some(detail_url),
+                            note,
+                        }))
+                    }
+                    Err(e) => {
+                        let why = format!("上传回包 existed，但推进下载器失败（{e:#}）");
+                        log(&why);
+                        write_cell(
+                            index,
+                            &req.content_key,
+                            &req.target_site,
+                            CoverageStatus::Failed,
+                            Some(detail_url.clone()),
+                            &why,
+                        );
+                        index.save()?;
+                        Ok(ReseedOutcome::Duplicate(DuplicateOutcome {
+                            status: CoverageStatus::Failed,
+                            url: Some(detail_url),
+                            note: why,
+                        }))
+                    }
+                }
+            }
+            Ok(None) => {
+                let why =
+                    "上传回包 existed：目标站条目 pieces 与本地不一致（其他版本），未加入下载器";
+                log(why);
+                write_cell(
+                    index,
+                    &req.content_key,
+                    &req.target_site,
+                    CoverageStatus::OtherVersion,
+                    Some(detail_url.clone()),
+                    why,
+                );
+                index.save()?;
+                Ok(ReseedOutcome::Duplicate(DuplicateOutcome {
+                    status: CoverageStatus::OtherVersion,
+                    url: Some(detail_url),
+                    note: why.to_string(),
+                }))
+            }
+            Err(e) => {
+                let why = format!("上传回包 existed，但判重复核失败（{e:#}），未加入下载器");
+                log(&why);
+                write_cell(
+                    index,
+                    &req.content_key,
+                    &req.target_site,
+                    CoverageStatus::Failed,
+                    Some(detail_url.clone()),
+                    &why,
+                );
+                index.save()?;
+                Ok(ReseedOutcome::Duplicate(DuplicateOutcome {
+                    status: CoverageStatus::Failed,
+                    url: Some(detail_url),
+                    note: why,
+                }))
+            }
+        };
     }
     let detail_url = match up.detail_url {
         Some(u) => u,
@@ -3840,120 +4035,17 @@ pub fn run_reseed(
         }
     };
     let tdata = tgt.download_torrent(&tpage, &detail_url)?;
-    let (rep_hash, meta_save_path, category) = matched_member;
-    let limit = cfg
-        .downloader
-        .site_up_limits
-        .get(&req.target_site)
-        .copied()
-        .unwrap_or(cfg.downloader.default_up_limit);
-    // 落盘布局：按成员种子实时 savepath；根名不同的同内容新种用 NoSubfolder 复用既有目录
-    let layout =
-        crate::layout::resolve_for_torrent(qb, &rep_hash, &tdata, &info.name, &meta_save_path);
-    if let crate::layout::AddLayout::Mismatch(why) = &layout {
-        bail!("新种布局对不上，不推下载器：{why}");
-    }
-    let save_path = layout.save_path().unwrap_or(&meta_save_path).to_string();
-    let fname = format!("{}.torrent", info.name);
-    let add = qb.add_torrent(
+    push_target_torrent(
+        cfg,
+        qb,
+        req,
+        &info.name,
+        &detail_url,
         &tdata,
-        &fname,
-        &save_path,
-        category.as_deref(),
-        cfg.coverage.skip_hash_check,
-        limit,
-        // 跳过校验时必须直接开始，paused=true 再恢复会让 qB 重新进入校验
-        !cfg.coverage.skip_hash_check,
-        layout.content_layout(),
-    )?;
-    if !add.note.is_empty() {
-        log(&format!("下载器回执：{}", add.note));
-    }
-    if add.already {
-        // 只有「下载器里早有这个种」才直接落终态；新加种的 note（限速未生效/
-        // missingFiles）必须继续走校验，否则种子永远暂停不作种
-        write_cell(
-            index,
-            &req.content_key,
-            &req.target_site,
-            CoverageStatus::Assisted,
-            Some(detail_url.clone()),
-            &format!("已加入下载器（{}）", add.note),
-        );
-        index.save()?;
-        return Ok(ReseedOutcome::Posted(detail_url));
-    }
-    let site_hash = if add.id.is_empty() {
-        bencode::info_hash_v1(&tdata).unwrap_or_default()
-    } else {
-        add.id
-    };
-    let _ = qb.set_paused(&[&site_hash], false);
-    log("已加入下载器并启动校验…");
-    let poll = cfg.coverage.verify_poll_sec.max(1);
-    let mut waited: u64 = 0;
-    while waited < cfg.coverage.verify_wait_sec {
-        if let Ok(Some((progress, state))) = qb.torrent_progress(&site_hash) {
-            if progress >= 0.999 {
-                let _ = qb.set_download_limit(&site_hash, 0);
-                log("校验到 100%，已在做种");
-                write_cell(
-                    index,
-                    &req.content_key,
-                    &req.target_site,
-                    CoverageStatus::Reseeded,
-                    Some(detail_url.clone()),
-                    "转种成功：校验到 100%，已在做种",
-                );
-                index.save()?;
-                return Ok(ReseedOutcome::Posted(detail_url));
-            }
-            if waited > 0 && !state.contains("check") && !state.contains("meta") {
-                let _ = qb.set_paused(&[&site_hash], true);
-                if cfg.coverage.remove_on_verify_fail {
-                    let _ = qb.remove_torrent(&site_hash, true);
-                }
-                write_cell(
-                    index,
-                    &req.content_key,
-                    &req.target_site,
-                    CoverageStatus::Failed,
-                    Some(detail_url.clone()),
-                    &format!(
-                        "校验后只到 {:.0}%：分片结构与本地不同，无法转种",
-                        progress * 100.0
-                    ),
-                );
-                index.save()?;
-                bail!(
-                    "校验后只到 {:.0}%，分片结构与本地不同，无法转种",
-                    progress * 100.0
-                );
-            }
-        }
-        thread::sleep(Duration::from_secs(poll));
-        waited += poll;
-    }
-    // 超时：落 Verifying，下一轮收尾
-    write_cell(
+        matched_member,
         index,
-        &req.content_key,
-        &req.target_site,
-        CoverageStatus::Verifying,
-        Some(detail_url.clone()),
-        &format!(
-            "校验还没跑完（等了 {} 秒），下一轮接着收尾",
-            cfg.coverage.verify_wait_sec
-        ),
-    );
-    // verify_hash 收尾凭据
-    if let Some(e) = index.contents.get_mut(&req.content_key) {
-        if let Some(c) = e.coverage.get_mut(&req.target_site) {
-            c.verify_hash = Some(site_hash);
-        }
-    }
-    index.save()?;
-    log("校验还没跑完，落「校验中」下一轮收尾");
+        log,
+    )?;
     Ok(ReseedOutcome::Posted(detail_url))
 }
 
@@ -3977,6 +4069,139 @@ fn write_cell(
             },
         );
     }
+}
+
+/// 把目标站 `.torrent` 推进下载器并校验：发布成功、或目标站已有同分片条目
+/// （existed / 站内判重命中）时共用——「新站已有条目」也要下载目标种挂到本地数据上，
+/// 否则站点上永远只有发布记录、下载器里没有这个 tracker。
+/// 返回最终格子状态：`Reseeded`（校验 100% 在做种）/ `Assisted`（下载器里早已有，
+/// 已补挂 tracker）/ `Verifying`（本轮没验完，下一轮收尾）；校验失败返回 Err（格子已写 Failed）。
+#[allow(clippy::too_many_arguments)]
+fn push_target_torrent(
+    cfg: &Config,
+    qb: &QBittorrent,
+    req: &ReseedRequest,
+    name: &str,
+    detail_url: &str,
+    tdata: &[u8],
+    matched_member: (String, String, Option<String>),
+    index: &mut ContentIndex,
+    log: &mut dyn FnMut(&str),
+) -> Result<CoverageStatus> {
+    let (rep_hash, meta_save_path, category) = matched_member;
+    let limit = cfg
+        .downloader
+        .site_up_limits
+        .get(&req.target_site)
+        .copied()
+        .unwrap_or(cfg.downloader.default_up_limit);
+    // 落盘布局：按成员种子实时 savepath；根名不同的同内容新种用 NoSubfolder 复用既有目录
+    let layout = crate::layout::resolve_for_torrent(qb, &rep_hash, tdata, name, &meta_save_path);
+    if let crate::layout::AddLayout::Mismatch(why) = &layout {
+        bail!("新种布局对不上，不推下载器：{why}");
+    }
+    let save_path = layout.save_path().unwrap_or(&meta_save_path).to_string();
+    let fname = format!("{name}.torrent");
+    let add = qb.add_torrent(
+        tdata,
+        &fname,
+        &save_path,
+        category.as_deref(),
+        cfg.coverage.skip_hash_check,
+        limit,
+        // 跳过校验时必须直接开始，paused=true 再恢复会让 qB 重新进入校验
+        !cfg.coverage.skip_hash_check,
+        layout.content_layout(),
+    )?;
+    if !add.note.is_empty() {
+        log(&format!("下载器回执：{}", add.note));
+    }
+    if add.already {
+        // 只有「下载器里早有这个种」才直接落终态；新加种的 note（限速未生效/
+        // missingFiles）必须继续走校验，否则种子永远暂停不作种
+        write_cell(
+            index,
+            &req.content_key,
+            &req.target_site,
+            CoverageStatus::Assisted,
+            Some(detail_url.to_string()),
+            &format!("已加入下载器（{}）", add.note),
+        );
+        index.save()?;
+        return Ok(CoverageStatus::Assisted);
+    }
+    let site_hash = if add.id.is_empty() {
+        bencode::info_hash_v1(tdata).unwrap_or_default()
+    } else {
+        add.id
+    };
+    let _ = qb.set_paused(&[&site_hash], false);
+    log("已加入下载器并启动校验…");
+    let poll = cfg.coverage.verify_poll_sec.max(1);
+    let mut waited: u64 = 0;
+    while waited < cfg.coverage.verify_wait_sec {
+        if let Ok(Some((progress, state))) = qb.torrent_progress(&site_hash) {
+            if progress >= 0.999 {
+                let _ = qb.set_download_limit(&site_hash, 0);
+                log("校验到 100%，已在做种");
+                write_cell(
+                    index,
+                    &req.content_key,
+                    &req.target_site,
+                    CoverageStatus::Reseeded,
+                    Some(detail_url.to_string()),
+                    "转种成功：校验到 100%，已在做种",
+                );
+                index.save()?;
+                return Ok(CoverageStatus::Reseeded);
+            }
+            if waited > 0 && !state.contains("check") && !state.contains("meta") {
+                let _ = qb.set_paused(&[&site_hash], true);
+                if cfg.coverage.remove_on_verify_fail {
+                    let _ = qb.remove_torrent(&site_hash, true);
+                }
+                write_cell(
+                    index,
+                    &req.content_key,
+                    &req.target_site,
+                    CoverageStatus::Failed,
+                    Some(detail_url.to_string()),
+                    &format!(
+                        "校验后只到 {:.0}%：分片结构与本地不同，无法转种",
+                        progress * 100.0
+                    ),
+                );
+                index.save()?;
+                bail!(
+                    "校验后只到 {:.0}%，分片结构与本地不同，无法转种",
+                    progress * 100.0
+                );
+            }
+        }
+        thread::sleep(Duration::from_secs(poll));
+        waited += poll;
+    }
+    // 超时：落 Verifying，下一轮收尾
+    write_cell(
+        index,
+        &req.content_key,
+        &req.target_site,
+        CoverageStatus::Verifying,
+        Some(detail_url.to_string()),
+        &format!(
+            "校验还没跑完（等了 {} 秒），下一轮接着收尾",
+            cfg.coverage.verify_wait_sec
+        ),
+    );
+    // verify_hash 收尾凭据
+    if let Some(e) = index.contents.get_mut(&req.content_key) {
+        if let Some(c) = e.coverage.get_mut(&req.target_site) {
+            c.verify_hash = Some(site_hash);
+        }
+    }
+    index.save()?;
+    log("校验还没跑完，落「校验中」下一轮收尾");
+    Ok(CoverageStatus::Verifying)
 }
 
 fn adapter_for(cfg: &Config, site_id: &str) -> Result<NexusPhp> {

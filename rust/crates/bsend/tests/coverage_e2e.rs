@@ -9,14 +9,18 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
 use bsend::bencode;
 use bsend::config::{Config, CoverageSettings, DownloaderSettings, SiteConf};
 use bsend::coverage::{run_round, RoundOptions};
-use bsend::index::{ContentIndex, CoverageStatus};
+use bsend::index::{
+    ContentEntry, ContentIndex, CoverageStatus, SiteCoverage, SourceRecord, TorrentMeta,
+};
 use bsend::qbittorrent::QBittorrent;
+use bsend::reseed::{run_reseed, ReseedOutcome, ReseedRequest};
 use bsend::sites::nexusphp::NexusPhp;
 use bsend::sites::Framework;
 
@@ -1573,5 +1577,365 @@ fn e2e_source_budget_exhaustion_writes_no_cell() {
     assert_eq!(
         report.skipped_no_budget, 2,
         "两个站都因预算耗尽跳过（不是预筛跳过）"
+    );
+}
+
+// ---------- 转种判重命中：目标站已有同分片条目 ----------
+
+/// 目标站（NexusPHP）最小页面：检索结果 + 详情页 + 种子下载。
+/// 检索结果带 title 属性（IMDb 判重只认 `<a title=... href=details.php?id=N>`）。
+fn reseed_site_server(torrent: Arc<Vec<u8>>) -> MockServer {
+    MockServer::start(Arc::new(move |_method, path, _body| {
+        if path.starts_with("/torrents.php") {
+            let html = format!(r#"<a title="{NAME}" href="details.php?id=1002">{NAME}</a>"#);
+            return (200, "text/html", html.into_bytes());
+        }
+        if path.starts_with("/details.php") {
+            let html = format!(
+                r#"<html><body><h1 id="top">{NAME}</h1>
+<div id="kdescr">简介 https://www.imdb.com/title/tt1234567/</div>
+<pre>General
+Unique ID : 1
+Format : Matroska
+File size : 100 MiB
+Bit rate : 1000 kb/s
+
+Video
+Width : 1920 pixels
+Height : 1080 pixels</pre>
+<a href="download.php?id=1002">下载种子</a></body></html>"#
+            );
+            return (200, "text/html", html.into_bytes());
+        }
+        if path.starts_with("/download.php") {
+            return (200, "application/x-bittorrent", torrent.as_ref().clone());
+        }
+        (404, "text/plain", Vec::new())
+    }))
+}
+
+/// qB mock：本地成员 hash 已完成、可导出源种；目标种 add 后单查直接 100%。
+fn qb_server_for_reseed(
+    local_hash: String,
+    local_torrent: Vec<u8>,
+    target_hash: String,
+    captured: CapturedRequests,
+) -> MockServer {
+    let local_hash = Arc::new(local_hash);
+    let target_hash = Arc::new(target_hash);
+    let local_torrent = Arc::new(local_torrent);
+    MockServer::start(Arc::new(move |method, path, body| {
+        let lh = &*local_hash;
+        let th = &*target_hash;
+        if path.starts_with("/api/v2/auth/login") {
+            return (200, "text/plain", b"Ok.".to_vec());
+        }
+        if path.starts_with("/api/v2/app/version") {
+            return (200, "text/plain", b"v5.3.0".to_vec());
+        }
+        if path.starts_with("/api/v2/torrents/info") {
+            if path.contains("hashes=") {
+                let hash = if path.contains(th.as_str()) { th } else { lh };
+                let json = format!(
+                    r#"[{{"hash":"{hash}","progress":1.0,"state":"pausedUP","up_limit":-1,"name":"Pack","save_path":"/data/"}}]"#
+                );
+                return (200, "application/json", json.into_bytes());
+            }
+            let json = format!(
+                r#"[{{"hash":"{lh}","infohash_v2":"","name":"Pack","save_path":"/data/","category":"","tags":"","size":105,"progress":1.0,"tracker_hosts":[]}}]"#
+            );
+            return (200, "application/json", json.into_bytes());
+        }
+        if path.starts_with("/api/v2/torrents/export") {
+            return (
+                200,
+                "application/x-bittorrent",
+                local_torrent.as_ref().clone(),
+            );
+        }
+        if path.starts_with("/api/v2/torrents/files") {
+            let json = r#"[{"name":"Pack/a.mkv","size":100,"index":0},{"name":"Pack/s/ch.srt","size":5,"index":1}]"#;
+            return (200, "application/json", json.as_bytes().to_vec());
+        }
+        if path.starts_with("/api/v2/torrents/add") {
+            assert_eq!(method, "POST");
+            captured
+                .lock()
+                .unwrap()
+                .push((path.to_string(), body.to_vec()));
+            return (200, "text/plain", b"Ok.".to_vec());
+        }
+        (200, "text/plain", Vec::new())
+    }))
+}
+
+/// 目标站判重命中（同分片）时，必须下载目标种并推进下载器：
+/// 只写 Assisted 不推种，qB 里就永远没有目标站 tracker（「发了 20 个只辅了几个」的根因）。
+#[test]
+fn e2e_duplicate_hit_pushes_target_torrent_to_downloader() {
+    let dir = temp_dir("dup-push");
+    // 同文件、同 pieces，根名不同 → info hash 不同，走「新加种 + NoSubfolder 复用目录」
+    let t_src = Arc::new(torrent_bytes("Pack", FILES));
+    let t_tgt = Arc::new(torrent_bytes("Pack2", FILES));
+    let local_hash = bencode::info_hash_v1(&t_src).unwrap();
+    let target_hash = bencode::info_hash_v1(&t_tgt).unwrap();
+    assert_ne!(local_hash, target_hash, "根名不同，info hash 必须不同");
+
+    let captured: CapturedRequests = Arc::new(Mutex::new(Vec::new()));
+    let qb = qb_server_for_reseed(
+        local_hash.clone(),
+        t_src.as_ref().clone(),
+        target_hash.clone(),
+        captured.clone(),
+    );
+    let src = reseed_site_server(t_src.clone());
+    let tgt = reseed_site_server(t_tgt.clone());
+    let mut cfg = test_config(qb.port, src.port, tgt.port, &dir);
+    cfg.coverage.reseed_publish_enabled = true;
+
+    let key = "m:duppush000000000000";
+    let src_url = format!("http://127.0.0.1:{}/details.php?id=1002", src.port);
+    let mut index = ContentIndex::load(&cfg.coverage_state_path());
+    index.contents.insert(
+        key.to_string(),
+        ContentEntry {
+            name: NAME.into(),
+            total_size: 105,
+            file_count: FILES.len(),
+            manifest_digest: "0".repeat(16),
+            torrents: std::collections::BTreeMap::from([(
+                local_hash.clone(),
+                TorrentMeta {
+                    save_path: "/data".into(),
+                    category: None,
+                    last_seen: 0,
+                    tracker_hosts: Vec::new(),
+                    hash_v2: None,
+                    added_on: 0,
+                },
+            )]),
+            tracker_hosts: Vec::new(),
+            first_seen: 0,
+            gone_since: None,
+            coverage: std::collections::BTreeMap::from([(
+                "hdsky".to_string(),
+                SiteCoverage {
+                    status: CoverageStatus::ReseedDraft,
+                    at: 0,
+                    url: None,
+                    note: None,
+                    verify_hash: None,
+                },
+            )]),
+            source: Some(SourceRecord {
+                site_id: "pter".into(),
+                detail_url: src_url.clone(),
+                resolved_at: 0,
+                miss_at: None,
+            }),
+            forbid_reseed: false,
+        },
+    );
+    index.save().unwrap();
+
+    let qb_client = QBittorrent::new(&cfg.downloader.url, "admin", "pass").unwrap();
+    let req = ReseedRequest {
+        content_key: key.into(),
+        source_site: "pter".into(),
+        source_url: src_url,
+        target_site: "hdsky".into(),
+        name: NAME.into(),
+    };
+    let mut logs = Vec::new();
+    let outcome = run_reseed(
+        &cfg,
+        &qb_client,
+        &req,
+        &mut index,
+        &mut |l| logs.push(l.to_string()),
+        None,
+    )
+    .unwrap();
+
+    match outcome {
+        ReseedOutcome::Duplicate(d) => {
+            assert_eq!(d.status, CoverageStatus::Assisted, "{d:?}");
+            assert!(
+                d.note.contains("下载目标种") || d.note.contains("做种"),
+                "判重命中也要下载目标种并做种：{}",
+                d.note
+            );
+        }
+        other => panic!("判重命中应返回 Duplicate，实际 {other:?}"),
+    }
+    let cell = &index.contents[key].coverage["hdsky"];
+    assert_eq!(
+        cell.status,
+        CoverageStatus::Reseeded,
+        "目标种必须真的推进 qB 并校验 100%：{cell:?}"
+    );
+    let adds = captured.lock().unwrap();
+    assert_eq!(adds.len(), 1, "必须调用一次 torrents/add");
+    let body = String::from_utf8_lossy(&adds[0].1);
+    assert!(body.contains("name=\"torrents\""), "add 必须带种子文件");
+    assert!(
+        body.contains("NoSubfolder"),
+        "根名不同应带 contentLayout=NoSubfolder 复用既有目录：{body}"
+    );
+    assert!(
+        logs.iter().any(|l| l.contains("100%")),
+        "应走完校验到 100%：{logs:?}"
+    );
+}
+
+/// 目标站上传回包「已存在」：上传前检索故意不命中，逼出 existed 分支；
+/// 回包后再能检索到条目——引擎要定位、下载目标种并挂到本地数据上，而不是只记待确认。
+fn reseed_site_server_upload_existed(torrent: Arc<Vec<u8>>) -> MockServer {
+    let uploaded = Arc::new(AtomicBool::new(false));
+    MockServer::start(Arc::new(move |_method, path, _body| {
+        if path.starts_with("/upload.php") {
+            let form = r#"<html><body><form action="takeupload.php" method="post" enctype="multipart/form-data">
+<input type="text" name="name" value="">
+<input type="text" name="small_descr" value="">
+<textarea name="descr"></textarea>
+<input type="text" name="technical_info" value="">
+<input type="text" name="imdb_url" value="">
+<input type="file" name="file">
+<input type="submit" value="发布">
+</form></body></html>"#;
+            return (200, "text/html", form.as_bytes().to_vec());
+        }
+        if path.starts_with("/takeupload.php") {
+            uploaded.store(true, Ordering::SeqCst);
+            return (200, "text/html", "<p>种子已存在</p>".as_bytes().to_vec());
+        }
+        if path.starts_with("/torrents.php") {
+            if uploaded.load(Ordering::SeqCst) {
+                let html = format!(r#"<a title="{NAME}" href="details.php?id=1002">{NAME}</a>"#);
+                return (200, "text/html", html.into_bytes());
+            }
+            return (200, "text/html", "<p>没有种子</p>".as_bytes().to_vec());
+        }
+        if path.starts_with("/details.php") {
+            let html = format!(
+                r#"<html><body><h1 id="top">{NAME}</h1>
+<a href="download.php?id=1002">下载种子</a></body></html>"#
+            );
+            return (200, "text/html", html.into_bytes());
+        }
+        if path.starts_with("/download.php") {
+            return (200, "application/x-bittorrent", torrent.as_ref().clone());
+        }
+        (404, "text/plain", Vec::new())
+    }))
+}
+
+#[test]
+fn e2e_upload_existed_pushes_target_torrent_to_downloader() {
+    let dir = temp_dir("existed-push");
+    let t_src = Arc::new(torrent_bytes("Pack", FILES));
+    let t_tgt = Arc::new(torrent_bytes("Pack2", FILES));
+    let local_hash = bencode::info_hash_v1(&t_src).unwrap();
+    let target_hash = bencode::info_hash_v1(&t_tgt).unwrap();
+
+    let captured: CapturedRequests = Arc::new(Mutex::new(Vec::new()));
+    let qb = qb_server_for_reseed(
+        local_hash.clone(),
+        t_src.as_ref().clone(),
+        target_hash.clone(),
+        captured.clone(),
+    );
+    let src = reseed_site_server(t_src.clone());
+    let tgt = reseed_site_server_upload_existed(t_tgt.clone());
+    let mut cfg = test_config(qb.port, src.port, tgt.port, &dir);
+    cfg.coverage.reseed_publish_enabled = true;
+
+    let key = "m:existed0000000000000";
+    let src_url = format!("http://127.0.0.1:{}/details.php?id=1002", src.port);
+    let mut index = ContentIndex::load(&cfg.coverage_state_path());
+    index.contents.insert(
+        key.to_string(),
+        ContentEntry {
+            name: NAME.into(),
+            total_size: 105,
+            file_count: FILES.len(),
+            manifest_digest: "0".repeat(16),
+            torrents: std::collections::BTreeMap::from([(
+                local_hash.clone(),
+                TorrentMeta {
+                    save_path: "/data".into(),
+                    category: None,
+                    last_seen: 0,
+                    tracker_hosts: Vec::new(),
+                    hash_v2: None,
+                    added_on: 0,
+                },
+            )]),
+            tracker_hosts: Vec::new(),
+            first_seen: 0,
+            gone_since: None,
+            coverage: std::collections::BTreeMap::from([(
+                "hdsky".to_string(),
+                SiteCoverage {
+                    status: CoverageStatus::ReseedDraft,
+                    at: 0,
+                    url: None,
+                    note: None,
+                    verify_hash: None,
+                },
+            )]),
+            source: Some(SourceRecord {
+                site_id: "pter".into(),
+                detail_url: src_url.clone(),
+                resolved_at: 0,
+                miss_at: None,
+            }),
+            forbid_reseed: false,
+        },
+    );
+    index.save().unwrap();
+
+    let qb_client = QBittorrent::new(&cfg.downloader.url, "admin", "pass").unwrap();
+    let req = ReseedRequest {
+        content_key: key.into(),
+        source_site: "pter".into(),
+        source_url: src_url,
+        target_site: "hdsky".into(),
+        name: NAME.into(),
+    };
+    let mut logs = Vec::new();
+    let outcome = run_reseed(
+        &cfg,
+        &qb_client,
+        &req,
+        &mut index,
+        &mut |l| logs.push(l.to_string()),
+        None,
+    )
+    .unwrap();
+
+    match outcome {
+        ReseedOutcome::Duplicate(d) => {
+            assert_eq!(d.status, CoverageStatus::Assisted, "{d:?}");
+            assert!(
+                d.note.contains("existed")
+                    && (d.note.contains("做种") || d.note.contains("加入下载器")),
+                "existed 后必须下载目标种并推进下载器：{}",
+                d.note
+            );
+        }
+        other => panic!("existed 应返回 Duplicate，实际 {other:?}"),
+    }
+    let cell = &index.contents[key].coverage["hdsky"];
+    assert_ne!(cell.status, CoverageStatus::ReviewPending, "{cell:?}");
+    assert_eq!(cell.status, CoverageStatus::Reseeded, "{cell:?}");
+    assert_eq!(
+        captured.lock().unwrap().len(),
+        1,
+        "必须调用一次 torrents/add"
+    );
+    assert!(
+        logs.iter().any(|l| l.contains("existed 条目已定位")),
+        "应定位到真实条目：{logs:?}"
     );
 }
