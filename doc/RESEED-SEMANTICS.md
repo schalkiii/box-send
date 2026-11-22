@@ -51,14 +51,31 @@ qB 的多文件种子默认落到 `<savepath>/<种子根名>/`。目标站与源
 - `other_version`：目标站同片但 pieces 不一致，无法跨种。
 - `existed_pending`：上传回包标记已存在，但当时无法定位/复核，待人工确认。
 
-## 5. 日志
+## 6. 日志
 
 - `reseed-log.jsonl`（dataDir）：每次 `run_reseed` 一行，含 `at / started_at / key /
   name / source_site / source_url / target_site / result / url / note`；
   CLI、GUI「确认转种」、autopost 共用。写失败只打 stderr（fail-open）。
 - `auto-audit.jsonl`：autopost 的门禁/审计流水（日限额与退避依据），不是唯一动作日志。
 
-## 6. 历史案例（2026-11-21/22）
+## 7. 审阅产物直发（自动发种路径）
+
+`review_reseed` 返回的 `ReviewReport` 除了给人看的字段，还带一份发布侧载荷：
+审阅时已经取到的源/目标适配器与源页（`carry`）。自动发种的门禁通过后，
+`run_reseed_reviewed` 直接拿这份报告发布：
+
+- **不再二次抓源页 / 上传页**，也不再重复调官方预审；
+- **提交字段就是门禁看到的那一份**（`prepared.fields` 原样提交），
+  避免「审阅时缺字段被补上、发布时又换一份」的漂移；
+- 审阅时的官方预审结论一并复用：没通过直接拦，接口异常则沿用「按本地预检继续」；
+- 审阅站点与请求站点不一致、或报告缺载荷，一律拒绝提交。
+
+CLI 单发 / GUI「确认转种」没有审阅产物，仍走 `run_reseed` 现场构造（预检 → 上传页 →
+官方预审）；两条路径都过同一个 `publishEnabled` 总闸。自动发种这条路径由
+`autopost.rs` 的 `ReseedRunner` 第六个参数传入，测试里注入假 runner 即可验证
+「门禁通过的那份 == 真正提交的那份」。
+
+## 8. 历史案例（2026-11-21/22）
 
 - sbpt `21656–21673`（18 条）：qB 有 100% 源站成员（例：`Black.2005…` 32 个成员，
   progress=1.0）。`skipped_duplicate` 来自工具在后续一轮发现这些条目已在 sbpt 上

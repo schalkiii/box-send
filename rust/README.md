@@ -325,7 +325,9 @@ cargo test          # 数量以本次 cargo test 输出为准（单测 + e2e：m
                     # （含 qB 5.x 单 tracker 字段）、源站优先、负缓存、dry-run、
                     # C 级人工确认、409 已存在补挂 tracker、校验中跨轮收尾
                     # （启动/回滚两分支）、预算耗尽不记负缓存、
-                    #  登录墙（login.php 与 returnto 两种）、限流页、429 映射失败）
+                    #  登录墙（login.php 与 returnto 两种）、限流页、429 映射失败、
+                    #  审阅产物直发（提交字段一致、源页/上传页零重抓）、
+                    #  站点 takeupload 拒收（保留 errorbox、不推种））
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 ```

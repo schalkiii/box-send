@@ -2184,6 +2184,14 @@ fn sole_detail_url(body: &str, final_url: &str, action: &str) -> Option<String> 
 
 // ---------------- 审阅模式（不提交） ----------------
 
+/// 审阅时已取到的发布侧载荷：源/目标适配器与源页。
+/// 发布器直接复用它们，既不再抓源页/上传页，也保证提交字段与门禁判定是同一份。
+pub(crate) struct ReviewCarry {
+    src: NexusPhp,
+    tgt: NexusPhp,
+    page: TorrentPage,
+}
+
 /// 审阅结果：将要提交的全部内容摆出来，不 POST、不落账
 pub struct ReviewReport {
     pub info: ReleaseInfo,
@@ -2193,6 +2201,8 @@ pub struct ReviewReport {
     pub audit: Option<AuditVerdict>,
     /// 官方预审没跑通时的原因（只提示，不阻断审阅）
     pub audit_note: Option<String>,
+    /// 发布器复用（`run_reseed_reviewed`）；渲染与单测不需要
+    pub(crate) carry: Option<ReviewCarry>,
 }
 
 impl ReviewReport {
@@ -2341,6 +2351,11 @@ pub fn review_reseed(
         prepared,
         audit,
         audit_note,
+        carry: Some(ReviewCarry {
+            src: rel.src,
+            tgt: rel.tgt,
+            page: rel.page,
+        }),
     })
 }
 
@@ -3563,8 +3578,34 @@ pub fn run_reseed(
     log: &mut dyn FnMut(&str),
     throttle: Option<&SiteThrottle>,
 ) -> Result<ReseedOutcome> {
+    run_reseed_impl(cfg, qb, req, index, log, throttle, None)
+}
+
+/// 用审阅产物直发（BUG-M7）：跳过源页/上传页/官方预审的二次抓取，
+/// 提交字段与门禁判定完全同一份，消除「门禁通过的那份 ≠ 真正上传的那份」。
+pub fn run_reseed_reviewed(
+    cfg: &Config,
+    qb: &QBittorrent,
+    req: &ReseedRequest,
+    index: &mut ContentIndex,
+    log: &mut dyn FnMut(&str),
+    throttle: Option<&SiteThrottle>,
+    review: ReviewReport,
+) -> Result<ReseedOutcome> {
+    run_reseed_impl(cfg, qb, req, index, log, throttle, Some(review))
+}
+
+fn run_reseed_impl(
+    cfg: &Config,
+    qb: &QBittorrent,
+    req: &ReseedRequest,
+    index: &mut ContentIndex,
+    log: &mut dyn FnMut(&str),
+    throttle: Option<&SiteThrottle>,
+    review: Option<ReviewReport>,
+) -> Result<ReseedOutcome> {
     let started = now_unix();
-    let result = run_reseed_inner(cfg, qb, req, index, log, throttle);
+    let result = run_reseed_inner(cfg, qb, req, index, log, throttle, review);
     append_reseed_log(cfg, req, started, &result, index);
     result
 }
@@ -3576,6 +3617,7 @@ fn run_reseed_inner(
     index: &mut ContentIndex,
     log: &mut dyn FnMut(&str),
     throttle: Option<&SiteThrottle>,
+    review: Option<ReviewReport>,
 ) -> Result<ReseedOutcome> {
     // 真实发种总闸：缺省关闭，任何调用方（CLI --yes / autopost / GUI）都过这里。
     crate::config::ensure_publish_enabled(cfg)?;
@@ -3588,7 +3630,53 @@ fn run_reseed_inner(
             &owned_throttle
         }
     };
-    let rel = prepare_released(cfg, req, log)?;
+    // 自动发种路径：直接复用审阅产物（同一份字段），不再二次抓源页/上传页。
+    // 单发/CLI --yes 没有审阅产物，仍走 prepare_released 的现场构造。
+    let (rel, prepared_from_review) = match review {
+        Some(rep) => {
+            let Some(carry) = rep.carry else {
+                bail!("审阅产物缺少发布载荷，不能直发（请重新审阅后再发）");
+            };
+            if carry.src.site_id != req.source_site || carry.tgt.site_id != req.target_site {
+                bail!(
+                    "审阅产物与请求站点不一致（审阅 {}→{}，请求 {}→{}），拒绝提交",
+                    carry.src.site_id,
+                    carry.tgt.site_id,
+                    req.source_site,
+                    req.target_site
+                );
+            }
+            // 官方预审结论随审阅产物一起复用：没过不再重复请求，直接拦。
+            if let Some(a) = &rep.audit {
+                if !a.passed {
+                    let first = a
+                        .details
+                        .first()
+                        .map(|d| d.message.clone())
+                        .unwrap_or_default();
+                    bail!(
+                        "官方预审未通过（{}，总分 {}/100）：{first}。补齐后重试",
+                        a.status,
+                        a.total_score
+                    );
+                }
+            }
+            if let Some(note) = &rep.audit_note {
+                log(&format!(
+                    "官方预审接口异常（{note}，审阅时；不重复请求），按本地预检继续"
+                ));
+            }
+            let rel = Released {
+                src: carry.src,
+                tgt: carry.tgt,
+                page: carry.page,
+                info: rep.info,
+                preflight: rep.preflight,
+            };
+            (rel, Some(rep.prepared))
+        }
+        None => (prepare_released(cfg, req, log)?, None),
+    };
     if !rel.preflight.ok() {
         for e in &rel.preflight.errors {
             log(&format!("预检·阻断：{e}"));
@@ -3762,35 +3850,44 @@ fn run_reseed_inner(
         ..
     } = rel;
 
-    // ---- 3 构造上传字段 + 站点官方预审（LuckAudit）----
-    let mut prep = prepare_upload(&tgt, &info)?;
-    if let Some(rules) = cfg.coverage.reseed_rules.get(&req.target_site) {
-        apply_site_rules(&mut prep, rules);
-    }
-    if pre_audit_supported(&prep.form_html) {
-        log("调用站点官方预审（LuckAudit）…");
-        match run_pre_audit(&tgt, &info, &prep) {
-            Ok(v) => {
-                log(&format!("官方预审：{}", v.summary()));
-                for d in &v.details {
-                    log(&format!("官方预审·{}", d.line()));
-                }
-                if !v.passed {
-                    let first = v
-                        .details
-                        .first()
-                        .map(|d| d.message.clone())
-                        .unwrap_or_default();
-                    bail!(
-                        "官方预审未通过（{}，总分 {}/100）：{first}。补齐后重试",
-                        v.status,
-                        v.total_score
-                    );
+    // ---- 3 上传字段：审阅产物直传；否则现场构造 + 官方预审 ----
+    let prep = match prepared_from_review {
+        Some(prep) => {
+            log("复用审阅产物：提交字段与门禁判定为同一份（跳过上传页/官方预审二次抓取）");
+            prep
+        }
+        None => {
+            let mut prep = prepare_upload(&tgt, &info)?;
+            if let Some(rules) = cfg.coverage.reseed_rules.get(&req.target_site) {
+                apply_site_rules(&mut prep, rules);
+            }
+            if pre_audit_supported(&prep.form_html) {
+                log("调用站点官方预审（LuckAudit）…");
+                match run_pre_audit(&tgt, &info, &prep) {
+                    Ok(v) => {
+                        log(&format!("官方预审：{}", v.summary()));
+                        for d in &v.details {
+                            log(&format!("官方预审·{}", d.line()));
+                        }
+                        if !v.passed {
+                            let first = v
+                                .details
+                                .first()
+                                .map(|d| d.message.clone())
+                                .unwrap_or_default();
+                            bail!(
+                                "官方预审未通过（{}，总分 {}/100）：{first}。补齐后重试",
+                                v.status,
+                                v.total_score
+                            );
+                        }
+                    }
+                    Err(e) => log(&format!("官方预审接口异常（{e:#}），按本地预检继续")),
                 }
             }
-            Err(e) => log(&format!("官方预审接口异常（{e:#}），按本地预检继续")),
+            prep
         }
-    }
+    };
 
     // ---- 4 下载源种 + 上传目标站 ----
     let torrent_data = src.download_torrent(&page, &req.source_url)?;
@@ -4667,6 +4764,7 @@ Frame rate : 25</pre>
                 suggestions: vec!["发布前自查".into()],
             }),
             audit_note: None,
+            carry: None,
         };
         let t = rep.render(10);
         assert!(t.contains("只审不发"));
@@ -5558,6 +5656,7 @@ Language : Chinese"));
             prepared,
             audit: None,
             audit_note: None,
+            carry: None,
         };
         let text = rep.render(200);
         assert!(text.contains("name = Show.Name.2026"), "{text}");

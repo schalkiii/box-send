@@ -52,14 +52,16 @@ pub struct AutopostSummary {
     pub posted: usize,
 }
 
-/// 单草稿发布执行器。生产路径是 `reseed::run_reseed`；测试注入假实现即可
-/// 在不碰真实站点的前提下验证白名单/日限额/退避/审计等编排安全闸。
+/// 单草稿发布执行器。生产路径是 `reseed::run_reseed_reviewed`（复用审阅产物）；
+/// 测试注入假实现即可在不碰真实站点的前提下验证白名单/日限额/退避/审计等编排安全闸。
+/// 第六个参数是门禁通过的那份审阅产物——发布必须提交同一份字段（BUG-M7）。
 pub type ReseedRunner<'a> = dyn FnMut(
         &Config,
         &reseed::ReseedRequest,
         &mut ContentIndex,
         &mut dyn FnMut(&str),
         Option<&crate::throttle::SiteThrottle>,
+        Option<reseed::ReviewReport>,
     ) -> Result<reseed::ReseedOutcome>
     + 'a;
 
@@ -96,7 +98,7 @@ pub fn run_autopost(
             opts,
             emit,
             &mut |cfg, req, log, throttle| reseed::review_reseed(cfg, req, log, throttle),
-            &mut |_, _, _, _, _| anyhow::bail!("dry-run 不应调用发布器（内部错误）"),
+            &mut |_, _, _, _, _, _| anyhow::bail!("dry-run 不应调用发布器（内部错误）"),
         );
     }
     let qb = QBittorrent::new(
@@ -113,8 +115,9 @@ pub fn run_autopost(
         opts,
         emit,
         &mut |cfg, req, log, throttle| reseed::review_reseed(cfg, req, log, throttle),
-        &mut |cfg, req, index, log, throttle| {
-            reseed::run_reseed(cfg, &qb, req, index, log, throttle)
+        &mut |cfg, req, index, log, throttle, reviewed| match reviewed {
+            Some(rep) => reseed::run_reseed_reviewed(cfg, &qb, req, index, log, throttle, rep),
+            None => reseed::run_reseed(cfg, &qb, req, index, log, throttle),
         },
     )
 }
@@ -276,18 +279,20 @@ pub fn run_autopost_with(
             .iter()
             .find(|(n, _)| n == "type")
             .map(|(_, l)| l.clone());
-        let input = gates::GateInput {
-            rules: &rules,
-            name: &rep.info.name,
-            subtitle: &rep.info.subtitle,
-            descr: &rep.info.descr,
-            mediainfo: &rep.info.mediainfo,
-            has_links: rep.info.has_media_links(),
-            type_label: type_label.as_deref(),
-            core_gaps: &core,
-            audit_passed: rep.audit.as_ref().map(|a| a.passed),
+        let results = {
+            let input = gates::GateInput {
+                rules: &rules,
+                name: &rep.info.name,
+                subtitle: &rep.info.subtitle,
+                descr: &rep.info.descr,
+                mediainfo: &rep.info.mediainfo,
+                has_links: rep.info.has_media_links(),
+                type_label: type_label.as_deref(),
+                core_gaps: &core,
+                audit_passed: rep.audit.as_ref().map(|a| a.passed),
+            };
+            gates::evaluate(&input)
         };
-        let results = gates::evaluate(&input);
         let gate_json: Vec<serde_json::Value> = results
             .iter()
             .map(|r| {
@@ -330,6 +335,7 @@ pub fn run_autopost_with(
                 emit(AutopostEvent::Log(format!("   {l}")));
             },
             Some(&throttle),
+            Some(rep),
         ) {
             Ok(reseed::ReseedOutcome::Duplicate(dup)) => {
                 index.save()?;
@@ -671,7 +677,8 @@ mod tests {
                           _: &reseed::ReseedRequest,
                           _: &mut ContentIndex,
                           _: &mut dyn FnMut(&str),
-                          _: Option<&crate::throttle::SiteThrottle>| {
+                          _: Option<&crate::throttle::SiteThrottle>,
+                          _: Option<reseed::ReviewReport>| {
             called += 1;
             Ok(reseed::ReseedOutcome::Posted(
                 "https://sbpt.link/details.php?id=1".to_string(),
@@ -714,7 +721,8 @@ mod tests {
                           _: &reseed::ReseedRequest,
                           _: &mut ContentIndex,
                           _: &mut dyn FnMut(&str),
-                          _: Option<&crate::throttle::SiteThrottle>| {
+                          _: Option<&crate::throttle::SiteThrottle>,
+                          _: Option<reseed::ReviewReport>| {
             called += 1;
             Ok(reseed::ReseedOutcome::Duplicate(reseed::DuplicateOutcome {
                 status: crate::index::CoverageStatus::Assisted,
@@ -759,7 +767,8 @@ mod tests {
                           _: &reseed::ReseedRequest,
                           _: &mut ContentIndex,
                           _: &mut dyn FnMut(&str),
-                          _: Option<&crate::throttle::SiteThrottle>| {
+                          _: Option<&crate::throttle::SiteThrottle>,
+                          _: Option<reseed::ReviewReport>| {
             called += 1;
             Ok(reseed::ReseedOutcome::Duplicate(reseed::DuplicateOutcome {
                 status: crate::index::CoverageStatus::Assisted,
@@ -793,7 +802,8 @@ mod tests {
                           _: &reseed::ReseedRequest,
                           _: &mut ContentIndex,
                           _: &mut dyn FnMut(&str),
-                          _: Option<&crate::throttle::SiteThrottle>| {
+                          _: Option<&crate::throttle::SiteThrottle>,
+                          _: Option<reseed::ReviewReport>| {
             called += 1;
             Ok(reseed::ReseedOutcome::Duplicate(reseed::DuplicateOutcome {
                 status: crate::index::CoverageStatus::Assisted,
@@ -929,6 +939,7 @@ mod tests {
             preflight: Default::default(),
             audit: None,
             audit_note: None,
+            carry: None,
         }
     }
 
@@ -940,15 +951,15 @@ mod tests {
         cfg.coverage.auto_reseed_sites.clear();
         let mut reviewed = 0;
         let mut runner_called = 0;
-        let mut no_runner =
-            |_: &Config,
-             _: &reseed::ReseedRequest,
-             _: &mut ContentIndex,
-             _: &mut dyn FnMut(&str),
-             _: Option<&crate::throttle::SiteThrottle>| {
-                runner_called += 1;
-                Ok(reseed::ReseedOutcome::Posted("u".into()))
-            };
+        let mut no_runner = |_: &Config,
+                             _: &reseed::ReseedRequest,
+                             _: &mut ContentIndex,
+                             _: &mut dyn FnMut(&str),
+                             _: Option<&crate::throttle::SiteThrottle>,
+                             _: Option<reseed::ReviewReport>| {
+            runner_called += 1;
+            Ok(reseed::ReseedOutcome::Posted("u".into()))
+        };
         let mut logs = Vec::new();
         let summary = run_autopost_with(
             &cfg,
@@ -981,14 +992,14 @@ mod tests {
         let mut cfg = cfg_with_drafts(&dir, 2, 1);
         cfg.coverage.auto_reseed_sites = vec!["luckpt".into()];
         let mut reviewed = 0;
-        let mut no_runner =
-            |_: &Config,
-             _: &reseed::ReseedRequest,
-             _: &mut ContentIndex,
-             _: &mut dyn FnMut(&str),
-             _: Option<&crate::throttle::SiteThrottle>| {
-                Ok(reseed::ReseedOutcome::Posted("u".into()))
-            };
+        let mut no_runner = |_: &Config,
+                             _: &reseed::ReseedRequest,
+                             _: &mut ContentIndex,
+                             _: &mut dyn FnMut(&str),
+                             _: Option<&crate::throttle::SiteThrottle>,
+                             _: Option<reseed::ReviewReport>| {
+            Ok(reseed::ReseedOutcome::Posted("u".into()))
+        };
         let mut logs = Vec::new();
         let _ = run_autopost_with(
             &cfg,
@@ -1018,14 +1029,14 @@ mod tests {
         let dir = temp_dir("dry-limit");
         let cfg = cfg_with_drafts(&dir, 2, 3);
         let mut reviewed = 0;
-        let mut no_runner =
-            |_: &Config,
-             _: &reseed::ReseedRequest,
-             _: &mut ContentIndex,
-             _: &mut dyn FnMut(&str),
-             _: Option<&crate::throttle::SiteThrottle>| {
-                Ok(reseed::ReseedOutcome::Posted("u".into()))
-            };
+        let mut no_runner = |_: &Config,
+                             _: &reseed::ReseedRequest,
+                             _: &mut ContentIndex,
+                             _: &mut dyn FnMut(&str),
+                             _: Option<&crate::throttle::SiteThrottle>,
+                             _: Option<reseed::ReviewReport>| {
+            Ok(reseed::ReseedOutcome::Posted("u".into()))
+        };
         let _ = run_autopost_with(
             &cfg,
             &AutopostOptions {
@@ -1058,8 +1069,19 @@ mod tests {
                           _: &reseed::ReseedRequest,
                           _: &mut ContentIndex,
                           _: &mut dyn FnMut(&str),
-                          _: Option<&crate::throttle::SiteThrottle>| {
+                          _: Option<&crate::throttle::SiteThrottle>,
+                          review: Option<reseed::ReviewReport>| {
             posted_runner_called += 1;
+            // BUG-M7：门禁通过后必须把「审阅的那一份」交给发布器，不能在发布器里再构造
+            let rep = review.expect("门禁通过后应把审阅产物交给发布器（同一份字段）");
+            assert!(
+                rep.prepared
+                    .fields
+                    .iter()
+                    .any(|(n, v)| n == "name" && v == &rep.info.name),
+                "发布字段必须来自门禁所见的审阅产物：{:?}",
+                rep.prepared.fields
+            );
             Ok(reseed::ReseedOutcome::Posted(
                 "https://sbpt.link/details.php?id=9".into(),
             ))

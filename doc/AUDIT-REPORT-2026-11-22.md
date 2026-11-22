@@ -742,18 +742,19 @@ DOC-M3），**仍待修 15 条（高 0 / 中 5 / 低 10）**。已修条目在 �
 | BUG-M16（新发现） | GUI 双击无窗口：默认配置路径改为「当前目录 → `%LOCALAPPDATA%\BoxSend\boxsend.json`」，加载失败弹 Windows 错误框 | GUI 单测 `config_path_prefers_arg_then_cwd_then_local_appdata` + 双击模拟（可见窗口进程存活） |
 | ENG-L3 | 新增根 `LICENSE`（MIT）与 `CHANGELOG.md` | markdownlint |
 
-### 8.2 仍未处理
+### 8.2 仍未处理（已于 11-22 下午补齐，见 8.6）
 
-- **S-03 的 BUG-M7**：审阅产物直传发布（门禁字段与提交字段一致性）。节流半已修；
-  字段复用需要把 `Released`（含 `NexusPhp`/`TorrentPage`）贯穿到 `run_reseed`，
-  改动面大，留到下一轮串行做。
-- **S-16** 其余项：mock 级 HTTP 的 posted/blocked 断言（编排层已由 TEST-L4 覆盖，
-  站点写接口级仍留给真实发种前验证）。
+- ~~**S-03 的 BUG-M7**：审阅产物直传发布（门禁字段与提交字段一致性）。~~
+  已实现 `ReviewReport.carry` + `run_reseed_reviewed`，autopost 门禁通过后直发。
+- ~~**S-16** 其余项：mock 级 HTTP 的 posted/blocked 断言。~~
+  已补 `e2e_reviewed_release_reuses_fields_without_refetching`（posted）与
+  `e2e_site_rejected_upload_marks_failed_and_skips_downloader`（站点写接口 blocked）。
 
 ### 8.3 验证基线
 
 - `cargo fmt` 通过；`cargo clippy --workspace --all-targets -D warnings` 零告警；
-  `cargo test --workspace`：**191 单测 + 22 e2e + 2 CLI + 3 GUI** 全绿。
+  `cargo test --workspace`：**191 单测 + 22 e2e + 2 CLI + 3 GUI** 全绿
+  （11-22 下午更新为 **196 单测 + 24 e2e + 2 CLI + 3 GUI**，见 8.6）。
 - 实机只读演练：`bsend autopost --dry-run --sites sbpt --limit 20`
   → 20 条门禁通过、5 条拦截、1 条目标站上传页瞬断（50x/10054，可重试）、
   1 条退避跳过；未真实发种。
@@ -782,3 +783,29 @@ DOC-M3），**仍待修 15 条（高 0 / 中 5 / 低 10）**。已修条目在 �
   等同名下拉的软提示。
 - GUI 修复：双击启动默认回退 `%LOCALAPPDATA%\BoxSend\boxsend.json`，加载失败弹
   可见错误框；模拟双击（工作目录 `C:\Windows\Temp`）进程存活且有可见窗口。
+
+### 8.6 当轮补齐（11-22 下午，串行）
+
+- **BUG-M7 审阅产物直发**：`ReviewReport` 携带审阅时的源/目标适配器与源页（`carry`），
+  autopost 门禁通过后调用 `run_reseed_reviewed`；提交字段与门禁判定同一份，源页/上传页/
+  官方预审均不再二次请求。CLI 单发与 GUI 确认仍走 `run_reseed` 现场构造，两条路径共用
+  `publishEnabled` 总闸。守卫：站点不一致/缺载荷直接拒绝；审阅官方预审未过直接拦。
+- **S-16 站点写接口级断言**：
+  - `e2e_reviewed_release_reuses_fields_without_refetching`：审阅后直发只 POST 一次
+    `takeupload`，multipart 含审阅的全部非空字段；源站详情页与上传表单请求数不增；
+    发布后格子 `reseeded`。
+  - `e2e_site_rejected_upload_marks_failed_and_skips_downloader`：`takeupload` 返回
+    errorbox → 发布报错保留原文、不重投、不推种、不擅改格子（失败由编排层记审计）。
+- **P1 只读巡检**：`scripts/seeding-audit.ps1` + `doc/SEEDING-AUDIT.md`。实跑本机：
+  覆盖率异常 144 格（failed 41 / wait_source 54 / reseed_draft 29 等），
+  qB 5.3 本地免密登录（204 空体）已兼容；无凭据输出。
+- **P2 站点矩阵**：`scripts/site-matrix.ps1` + `doc/SITE-ADAPTATION-MATRIX.md`。
+  147 站｜启用 101｜全停 13｜停转种 35｜drill ok 54 / fail 46 / 未测 47；
+  formcheck 最新 ok 54 / gap 4 / fail 46 / 未测 43。最大同类失败：
+  27 站账号无发布权限，7 站无可解析静态上传表单。
+- **P3 纯函数单测**：`models.rs` +3（hash 归一/目录推导/JudgeLevel 序列化），
+  `manifest.rs` +2（Unicode/空清单/大小写），`bencode.rs` +1（异常长度/空 files）。
+  单测 191 → 196。
+- **验证基线（本轮）**：`cargo fmt` 通过；`cargo clippy --workspace --all-targets
+  -- -D warnings` 零告警；`cargo test --workspace`：**196 单测 + 24 e2e + 2 CLI + 3 GUI**
+  全绿。未真实发种、未改用户配置、未 push。

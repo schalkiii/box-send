@@ -1,5 +1,12 @@
 # 并行开发计划（2026-11-22）
 
+> **执行结果（11-22 下午）**：P1/P2/P3 已在主工作区串行完成（未另开 worktree/分支），
+> 产物为 `scripts/seeding-audit.ps1`、`doc/SEEDING-AUDIT.md`、`scripts/site-matrix.ps1`、
+> `doc/SITE-ADAPTATION-MATRIX.md`，以及 `models.rs`/`manifest.rs`/`bencode.rs` 的纯函数单测。
+> 验收：fmt/clippy 零告警，`cargo test --workspace` 196 单测 + 24 e2e + 2 CLI + 3 GUI 全绿。
+> 同时补齐了主 Agent 遗留的 BUG-M7（审阅产物直发）与 S-16（站点写接口级 posted/blocked e2e）。
+> P4（`bsend doctor`）仍暂缓。
+
 目标：主 Agent 继续修转种/验证/GUI，另一个 AI Agent 并行做**不与主 Agent 写集相交**的
 验证与增强任务。所有任务都**不真实发种、不改配置、不打印凭据、不 push**。
 

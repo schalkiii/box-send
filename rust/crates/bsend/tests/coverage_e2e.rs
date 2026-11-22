@@ -20,7 +20,7 @@ use bsend::index::{
     ContentEntry, ContentIndex, CoverageStatus, SiteCoverage, SourceRecord, TorrentMeta,
 };
 use bsend::qbittorrent::QBittorrent;
-use bsend::reseed::{run_reseed, ReseedOutcome, ReseedRequest};
+use bsend::reseed::{review_reseed, run_reseed, run_reseed_reviewed, ReseedOutcome, ReseedRequest};
 use bsend::sites::nexusphp::NexusPhp;
 use bsend::sites::Framework;
 
@@ -1945,6 +1945,302 @@ fn reseed_site_server_upload_existed(torrent: Arc<Vec<u8>>) -> MockServer {
         }
         (404, "text/plain", Vec::new())
     }))
+}
+
+/// 目标站 mock：上传表单 → takeupload 成功并给详情页；详情页可下载目标种。
+/// `uploads` 记下 takeupload 的 multipart 请求体，供「直发提交同一份字段」断言。
+fn reseed_site_server_upload_result(
+    torrent: Arc<Vec<u8>>,
+    uploads: CapturedRequests,
+    reject: bool,
+) -> MockServer {
+    MockServer::start(Arc::new(move |_method, path, body| {
+        if path.starts_with("/upload.php") {
+            let form = r#"<html><body><form action="takeupload.php" method="post" enctype="multipart/form-data">
+<input type="text" name="name" value="">
+<input type="text" name="small_descr" value="">
+<textarea name="descr"></textarea>
+<input type="text" name="technical_info" value="">
+<input type="text" name="imdb_url" value="">
+<input type="file" name="file">
+<input type="submit" value="发布">
+</form></body></html>"#;
+            return (200, "text/html", form.as_bytes().to_vec());
+        }
+        if path.starts_with("/takeupload.php") {
+            uploads
+                .lock()
+                .unwrap()
+                .push((path.to_string(), body.to_vec()));
+            if reject {
+                let html = r#"<html><body><div id="errorbox">发布失败：标题不符合站点规范</div></body></html>"#;
+                return (200, "text/html", html.as_bytes().to_vec());
+            }
+            let html = format!(r#"<p>发布成功</p><a href="details.php?id=1002">{NAME}</a>"#);
+            return (200, "text/html", html.into_bytes());
+        }
+        // 上传前判重检索：没有条目（上传走 success/reject 分支，不依赖回包跳转）
+        if path.starts_with("/torrents.php") {
+            return (200, "text/html", "<p>没有种子</p>".as_bytes().to_vec());
+        }
+        if path.starts_with("/download.php") {
+            return (200, "application/x-bittorrent", torrent.as_ref().clone());
+        }
+        if path.starts_with("/details.php") {
+            let html = format!(
+                r#"<html><body><h1 id="top">{NAME}</h1>
+<div id="kdescr">简介 https://www.imdb.com/title/tt1234567/</div>
+<a href="download.php?id=1002">下载种子</a></body></html>"#
+            );
+            return (200, "text/html", html.into_bytes());
+        }
+        (404, "text/plain", Vec::new())
+    }))
+}
+
+#[test]
+fn e2e_reviewed_release_reuses_fields_without_refetching() {
+    // BUG-M7：审阅产物直发——提交字段与门禁判定同一份，且不再二次抓源页/上传页。
+    let dir = temp_dir("reviewed-release");
+    let t_src = Arc::new(torrent_bytes("Pack", FILES));
+    let t_tgt = Arc::new(torrent_bytes("Pack2", FILES));
+    let local_hash = bencode::info_hash_v1(&t_src).unwrap();
+    let target_hash = bencode::info_hash_v1(&t_tgt).unwrap();
+
+    let adds: CapturedRequests = Arc::new(Mutex::new(Vec::new()));
+    let uploads: CapturedRequests = Arc::new(Mutex::new(Vec::new()));
+    let qb = qb_server_for_reseed(
+        local_hash.clone(),
+        t_src.as_ref().clone(),
+        target_hash.clone(),
+        false,
+        adds.clone(),
+    );
+    let src = reseed_site_server(t_src.clone());
+    let tgt = reseed_site_server_upload_result(t_tgt.clone(), uploads.clone(), false);
+    let mut cfg = test_config(qb.port, src.port, tgt.port, &dir);
+    cfg.coverage.reseed_publish_enabled = true;
+
+    let key = "m:reviewed0000000000000";
+    let src_url = format!("http://127.0.0.1:{}/details.php?id=1002", src.port);
+    let mut index = ContentIndex::load(&cfg.coverage_state_path());
+    index.contents.insert(
+        key.to_string(),
+        ContentEntry {
+            name: NAME.into(),
+            total_size: 105,
+            file_count: FILES.len(),
+            manifest_digest: "0".repeat(16),
+            torrents: std::collections::BTreeMap::from([(
+                local_hash.clone(),
+                TorrentMeta {
+                    save_path: "/data".into(),
+                    category: None,
+                    last_seen: 0,
+                    tracker_hosts: Vec::new(),
+                    hash_v2: None,
+                    added_on: 0,
+                },
+            )]),
+            tracker_hosts: Vec::new(),
+            first_seen: 0,
+            gone_since: None,
+            coverage: std::collections::BTreeMap::from([(
+                "hdsky".to_string(),
+                SiteCoverage {
+                    status: CoverageStatus::ReseedDraft,
+                    at: 0,
+                    url: None,
+                    note: None,
+                    verify_hash: None,
+                },
+            )]),
+            source: Some(SourceRecord {
+                site_id: "pter".into(),
+                detail_url: src_url.clone(),
+                resolved_at: 0,
+                miss_at: None,
+            }),
+            forbid_reseed: false,
+        },
+    );
+    index.save().unwrap();
+
+    let qb_client = QBittorrent::new(&cfg.downloader.url, "admin", "pass").unwrap();
+    let req = ReseedRequest {
+        content_key: key.into(),
+        source_site: "pter".into(),
+        source_url: src_url,
+        target_site: "hdsky".into(),
+        name: NAME.into(),
+    };
+    let mut logs = Vec::new();
+    let rep = review_reseed(&cfg, &req, &mut |l| logs.push(l.to_string()), None).unwrap();
+    // 审阅：源页要抓两次（detail 页 + 原 HTML），上传表单一次
+    assert_eq!(
+        src.requests("GET /details.php").len(),
+        2,
+        "审阅阶段应抓源页（详情+原文）：{:?}",
+        src.requests("GET /")
+    );
+    assert_eq!(
+        tgt.requests("GET /upload.php").len(),
+        1,
+        "审阅阶段应抓一次上传表单"
+    );
+    let reviewed_fields = rep.prepared.fields.clone();
+
+    let src_before = src.requests("GET /details.php").len();
+    let form_before = tgt.requests("GET /upload.php").len();
+    let outcome = run_reseed_reviewed(
+        &cfg,
+        &qb_client,
+        &req,
+        &mut index,
+        &mut |l| logs.push(l.to_string()),
+        None,
+        rep,
+    )
+    .unwrap();
+    assert!(
+        matches!(outcome, ReseedOutcome::Posted(_)),
+        "审阅产物应能直接发布：{outcome:?}"
+    );
+    assert_eq!(
+        src.requests("GET /details.php").len(),
+        src_before,
+        "直发不得二次抓源页：{:?}",
+        src.requests("GET /")
+    );
+    assert_eq!(
+        tgt.requests("GET /upload.php").len(),
+        form_before,
+        "直发不得二次抓上传页：{:?}",
+        tgt.requests("GET /")
+    );
+
+    // 真正提交的 multipart 必须包含审阅时的那份字段值（门禁看到的就是上传的）
+    let posts = uploads.lock().unwrap();
+    assert_eq!(posts.len(), 1, "应只有一次 takeupload 提交");
+    let body = String::from_utf8_lossy(&posts[0].1);
+    for (name, value) in &reviewed_fields {
+        if value.trim().is_empty() {
+            continue;
+        }
+        assert!(
+            body.contains(value.as_str()),
+            "提交体缺少审阅字段 {name}={value}"
+        );
+    }
+    assert!(
+        logs.iter()
+            .any(|l| l.contains("复用审阅产物：提交字段与门禁判定为同一份")),
+        "应明确记录复用审阅产物：{logs:?}"
+    );
+    let cell = &index.contents[key].coverage["hdsky"];
+    assert_eq!(cell.status, CoverageStatus::Reseeded, "{cell:?}");
+}
+
+#[test]
+fn e2e_site_rejected_upload_marks_failed_and_skips_downloader() {
+    // S-16：站点写接口级 blocked（takeupload 返回 errorbox）→ 记 failed，不下载/不推种。
+    let dir = temp_dir("site-reject");
+    let t_src = Arc::new(torrent_bytes("Pack", FILES));
+    let t_tgt = Arc::new(torrent_bytes("Pack2", FILES));
+    let local_hash = bencode::info_hash_v1(&t_src).unwrap();
+    let target_hash = bencode::info_hash_v1(&t_tgt).unwrap();
+    let adds: CapturedRequests = Arc::new(Mutex::new(Vec::new()));
+    let uploads: CapturedRequests = Arc::new(Mutex::new(Vec::new()));
+    let qb = qb_server_for_reseed(
+        local_hash.clone(),
+        t_src.as_ref().clone(),
+        target_hash.clone(),
+        false,
+        adds.clone(),
+    );
+    let src = reseed_site_server(t_src.clone());
+    let tgt = reseed_site_server_upload_result(t_tgt.clone(), uploads.clone(), true);
+    let mut cfg = test_config(qb.port, src.port, tgt.port, &dir);
+    cfg.coverage.reseed_publish_enabled = true;
+
+    let key = "m:rejected000000000000";
+    let src_url = format!("http://127.0.0.1:{}/details.php?id=1002", src.port);
+    let mut index = ContentIndex::load(&cfg.coverage_state_path());
+    index.contents.insert(
+        key.to_string(),
+        ContentEntry {
+            name: NAME.into(),
+            total_size: 105,
+            file_count: FILES.len(),
+            manifest_digest: "0".repeat(16),
+            torrents: std::collections::BTreeMap::from([(
+                local_hash.clone(),
+                TorrentMeta {
+                    save_path: "/data".into(),
+                    category: None,
+                    last_seen: 0,
+                    tracker_hosts: Vec::new(),
+                    hash_v2: None,
+                    added_on: 0,
+                },
+            )]),
+            tracker_hosts: Vec::new(),
+            first_seen: 0,
+            gone_since: None,
+            coverage: std::collections::BTreeMap::from([(
+                "hdsky".to_string(),
+                SiteCoverage {
+                    status: CoverageStatus::ReseedDraft,
+                    at: 0,
+                    url: None,
+                    note: None,
+                    verify_hash: None,
+                },
+            )]),
+            source: Some(SourceRecord {
+                site_id: "pter".into(),
+                detail_url: src_url.clone(),
+                resolved_at: 0,
+                miss_at: None,
+            }),
+            forbid_reseed: false,
+        },
+    );
+    index.save().unwrap();
+
+    let qb_client = QBittorrent::new(&cfg.downloader.url, "admin", "pass").unwrap();
+    let req = ReseedRequest {
+        content_key: key.into(),
+        source_site: "pter".into(),
+        source_url: src_url,
+        target_site: "hdsky".into(),
+        name: NAME.into(),
+    };
+    let rep = review_reseed(&cfg, &req, &mut |_| {}, None).unwrap();
+    let err = run_reseed_reviewed(&cfg, &qb_client, &req, &mut index, &mut |_| {}, None, rep)
+        .expect_err("站点 errorbox 必须让发布返回错误，而不是假装成功");
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("标题不符合站点规范"),
+        "应保留站点 errorbox 原文：{msg}"
+    );
+    assert_eq!(
+        uploads.lock().unwrap().len(),
+        1,
+        "站点拒收不应同字节重投（非「必填缺失」错误）"
+    );
+    assert!(
+        adds.lock().unwrap().is_empty(),
+        "站点拒收后不得把目标种推入下载器：{:?}",
+        adds.lock().unwrap()
+    );
+    // CLI/单发路径把错误抛给调用方；格子由编排层（autopost 审计）落 failed。
+    let cell = &index.contents[key].coverage["hdsky"];
+    assert_eq!(
+        cell.status,
+        CoverageStatus::ReseedDraft,
+        "直发失败不擅改格子：{cell:?}"
+    );
 }
 
 #[test]

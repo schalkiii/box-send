@@ -16,6 +16,10 @@
 - 搜索结果多候选择优：同片多版本时优先取名称最接近发布名的条目。
 - `reseed-log.jsonl`：CLI/GUI/autopost 每次转种落一行动作日志，含 `seeded`
   （是否已确认在 qB 做种），便于排查「站点发了、qB 没辅上」。
+- `scripts/seeding-audit.ps1` + `doc/SEEDING-AUDIT.md`：只读巡检覆盖率异常格、
+  未成种记录与下载器卡种；不打印 cookie/passkey。
+- `scripts/site-matrix.ps1` + `doc/SITE-ADAPTATION-MATRIX.md`：只读生成 147 站适配矩阵
+  （启用/暂停/停转种/实测/formcheck/pieces/cookie 数）。
 
 ### Changed
 
@@ -40,6 +44,11 @@
   （此前只记「已覆盖/待确认」，qB 里没有目标站 tracker）。
 - GUI 双击启动：配置文件默认回退到 `%LOCALAPPDATA%\BoxSend\boxsend.json`；
   加载失败弹可见错误框（此前无控制台，双击后静默退出）。
+- **自动发种改为「审阅产物直发」**（BUG-M7）：门禁通过后直接把 `ReviewReport`
+  交给 `run_reseed_reviewed`，提交字段与门禁判定同一份；不再二次抓源页/上传页、
+  不重复调官方预审，消除「审阅字段 ≠ 真正上传字段」的漂移。单发 CLI/GUI 仍走现场构造。
+- 新增站点写接口级 e2e：审阅产物直发（提交体字段一致、源页/表单零重抓）与
+  `takeupload` 拒收（保留 errorbox 原文、不推种、不改格子）。
 
 ## [0.1.0] - 2026-11-22
 

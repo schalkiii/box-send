@@ -122,3 +122,70 @@ pub enum Layout {
     /// 结构不同，别加
     Differs,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn local_torrent_normalizes_and_filters() {
+        let t = LocalTorrent::new(
+            "ABCDEF0123456789ABCDEF0123456789ABCDEF01",
+            Some("FEDCBA9876543210FEDCBA9876543210"),
+            "Pack",
+            "/data",
+            Some(""),
+            vec!["Boxsend".into()],
+            105,
+            1.0,
+            vec!["TRACKER.Example.COM".into()],
+            42,
+        );
+        assert_eq!(
+            t.hash, "abcdef0123456789abcdef0123456789abcdef01",
+            "v1 hash 必须小写归一"
+        );
+        assert_eq!(
+            t.hash_v2.as_deref(),
+            Some("fedcba9876543210fedcba9876543210"),
+            "v2 hash 同样归一"
+        );
+        assert_eq!(t.category, None, "空 category 不能保留空串");
+        assert_eq!(t.tracker_hosts, vec!["tracker.example.com"]);
+        assert_eq!(
+            t.all_hashes(),
+            vec![t.hash.clone(), t.hash_v2.clone().unwrap()]
+        );
+    }
+
+    #[test]
+    fn fingerprint_sums_files_and_derives_root() {
+        let fp = TorrentFingerprint::from_local_files(&[
+            ("Pack/a.mkv".into(), 100),
+            ("Pack/s/ch.srt".into(), 5),
+        ]);
+        assert_eq!(fp.root, "Pack");
+        assert_eq!(fp.total_size, 105);
+        assert_eq!(fp.file_count(), 2);
+
+        let empty = TorrentFingerprint::new(String::new(), Vec::new());
+        assert_eq!(empty.total_size, 0);
+        assert_eq!(empty.file_count(), 0);
+        assert_eq!(empty.root, "");
+    }
+
+    #[test]
+    fn judge_level_uses_kind_tag_and_snake_case() {
+        let v = serde_json::to_value(JudgeLevel::SameFiles).unwrap();
+        assert_eq!(v["kind"], "same_files");
+        let v = serde_json::to_value(JudgeLevel::SameHash { hash: "A".into() }).unwrap();
+        assert_eq!(v["kind"], "same_hash");
+        assert_eq!(v["hash"], "A");
+        let v = serde_json::to_value(JudgeLevel::NameOnly {
+            site_name: "站名".into(),
+        })
+        .unwrap();
+        assert_eq!(v["kind"], "name_only");
+        assert_eq!(v["site_name"], "站名");
+    }
+}

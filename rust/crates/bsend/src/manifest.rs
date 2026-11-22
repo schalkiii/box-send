@@ -166,5 +166,38 @@ mod tests {
             common_root(&[("R\\a.mkv".into(), 1), ("R\\b.mkv".into(), 1)]),
             "R"
         );
+        // 混用分隔符也要认
+        assert_eq!(
+            common_root(&[("R/a.mkv".into(), 1), ("R\\b.mkv".into(), 1)]),
+            "R"
+        );
+    }
+
+    #[test]
+    fn unicode_and_empty_manifest_edges() {
+        // Unicode 路径照常保留（只做 ASCII 小写，不误伤中文）
+        let m = comparable_key(&fp("字幕组", &[("字幕组/第01集.mkv", 10)]));
+        assert_eq!(
+            m.keys,
+            BTreeSet::from(["第01集.mkv|10".to_string()]),
+            "根目录与点段必须剥掉"
+        );
+        assert_eq!(m.count(), 1);
+
+        // 空文件清单：合法输入，摘要仍是稳定的 16 位 hex
+        let empty = comparable_key(&fp("R", &[]));
+        assert_eq!(empty.count(), 0);
+        assert_eq!(empty.total_size, 0);
+        let d = manifest_digest(&empty);
+        assert_eq!(d.len(), 16);
+        assert!(d.chars().all(|c| c.is_ascii_hexdigit()));
+
+        // 只差大小写（Windows 打包常见）：归一化后摘要一致
+        let a = comparable_key(&fp("R", &[("R/ABC.mkv", 1)]));
+        let b = comparable_key(&fp("r", &[("r/abc.mkv", 1)]));
+        assert_eq!(manifest_digest(&a), manifest_digest(&b));
+        // 大小写不同但内容不同：摘要仍必须区分
+        let c = comparable_key(&fp("r", &[("r/abc.nfo", 1)]));
+        assert_ne!(manifest_digest(&b), manifest_digest(&c));
     }
 }

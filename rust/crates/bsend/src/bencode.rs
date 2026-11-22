@@ -697,4 +697,26 @@ pub(crate) mod tests {
         )]));
         assert!(pieces_hash(&v2).is_none());
     }
+
+    #[test]
+    fn malformed_lengths_and_empty_file_list_are_rejected() {
+        // 长度超过剩余字节 / 缺长度 / 缺结束符，都必须 None 而不是 panic
+        assert!(read_string(b"5:abc", 0).is_none());
+        assert!(read_string(b":abc", 0).is_none());
+        assert!(read_string(b"0:", 0).is_some());
+        assert!(read_int(b"i12", 0).is_none());
+        assert!(read_int(b"12e", 0).is_none());
+        assert_eq!(read_int(b"i-5e", 0), Some((-5, 4)));
+
+        // 空 files 清单不能误判成单文件种（没有 length）
+        let d = enc(&BVal::d(vec![(
+            "info",
+            BVal::d(vec![
+                ("files", BVal::L(vec![])),
+                ("name", BVal::s("empty-pack")),
+            ]),
+        )]));
+        assert!(file_list(&d).is_none(), "空 files 清单应返回 None");
+        assert!(total_length(&d).is_none(), "空清单总长度不可信");
+    }
 }
