@@ -770,3 +770,15 @@ DOC-M3），**仍待修 15 条（高 0 / 中 5 / 低 10）**。已修条目在 �
   `%LOCALAPPDATA%\BoxSend\startup.log`（184 MB）、
   `coverage.json.bak-*` 19 份（350.5 MB，建议只留最近 2 份）。
 - 明日真发交接见 `doc/NIGHT-SHIFT-2026-11-22.md`。
+
+### 8.5 站点适配复测（11-22 中午，只读）
+
+- `bsend sites --json`：147 站｜启用 101｜暂停 13｜转种暂停 35｜有 cookie 120；
+  drill 结论：ok 54 / fail 46 / gap 4 / 未测 43。
+- 4 个 gap：hdcity（简介为空，JS 表单，已暂停转种）、musopia（`medium_sel` 未选）、
+  muxuege（`audiocodec_sel` 未选）、ptfans（`medium_sel` 未选）。
+- 本轮抽测 3 站 `formcheck`（只读、不 POST）：audiences / baozi / crabpt
+  **全部表单齐（3/3）**，无硬缺口；仅有 `team_sel`、`processing_sel`、`codec_sel`
+  等同名下拉的软提示。
+- GUI 修复：双击启动默认回退 `%LOCALAPPDATA%\BoxSend\boxsend.json`，加载失败弹
+  可见错误框；模拟双击（工作目录 `C:\Windows\Temp`）进程存活且有可见窗口。
