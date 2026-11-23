@@ -62,11 +62,18 @@ pub struct SiteDef {
 
 /// 站点 announce 用的额外域名（页面主域之外）。
 ///
-/// 实机 41,882 条种子的 tracker host 统计出来的两处真实差异：
-/// - luckpt：页面在 `pt.luckpt.de`，announce 在 `tracker.luckpt.de`（557 条种子）；
-/// - chdbits：页面在 `ptchdbits.co`，announce 在 `chdbits.xyz`（136 条种子）。
+/// 实机 42,190 条种子的 tracker host 统计出来的真实差异：
+/// - luckpt：页面在 `pt.luckpt.de`，announce 在 `tracker.luckpt.de`（565 条种子）；
+/// - chdbits：页面在 `ptchdbits.co`，announce 在 `chdbits.xyz`（136 条种子）；
+/// - baozi：页面在 `p.t-baozi.cc`，announce 在 `tracker.t-baozi.cc`（607 条种子）；
+/// - novahd：页面在 `pt.novahd.top`，announce 在 `tracker.novahd.top`（641 条种子）；
+/// - xingyunge：页面在 `pt.xingyungept.org`，announce 在 `tracker.xingyungept.org`（717 条种子）；
+/// - ptlgs：页面在 `ptlgs.org`，announce 在 `ptl.gs`（594 条种子）；
+/// - pthome：页面在 `www.pthome.net`，announce 在 `t.pthome.org`（411 条种子）；
+/// - agsvpt：页面在 `agsvpt.com`，announce 在 `tracker.agsvpt.cn`（806 条种子）；
+/// - cspt：页面在 `cspt.top`，站上种子的 announce 在 `tracker.cspt.cc`。
 ///
-/// 不补这两条，「已在做种」预筛会把它们当成未覆盖去逐站检索（hdsky 那种 60 秒/次的站，
+/// 不补这些别名，「已在做种」预筛会把它们当成未覆盖去逐站检索（hdsky 那种 60 秒/次的站，
 /// 代价极高）。配置里 `overrides.announceHosts` 可以再追加（GUI 写的配置没有这一项也能跑）。
 pub fn extra_announce_hosts(site_id: &str) -> &'static [&'static str] {
     match site_id {
@@ -74,17 +81,38 @@ pub fn extra_announce_hosts(site_id: &str) -> &'static [&'static str] {
         "chdbits" => &["chdbits.xyz", "chdbits.co"],
         // 页面在 www.hdkyl.in，announce 在 tracker.hdkyl.in；不补别名 qB 真值会漏判。
         "qilin" => &["tracker.hdkyl.in"],
+        "baozi" => &["tracker.t-baozi.cc"],
+        "novahd" => &["tracker.novahd.top"],
+        "xingyunge" => &["tracker.xingyungept.org"],
+        "ptlgs" => &["ptl.gs"],
+        "pthome" => &["t.pthome.org"],
+        "agsvpt" => &["tracker.agsvpt.cn"],
+        "cspt" => &["tracker.cspt.cc"],
         _ => &[],
     }
+}
+
+/// 该站发布后会不会改写种子元信息，导致目标种 hash 与上传构造的 hash 不同。
+///
+/// 只认实机验证过的站：1ptba 的 takeupload.php 会把 `info.source` 改成
+/// `[1ptba.com] 1PTBA.COM`；cspt、dubhe 实测也出现 hash 差异，pieces 和 `info.name`
+/// 未变，但具体被改写的字段没有逐字节核对。挂回时按分片+标题校验放行，
+/// 仍拒绝分片不一致的种。不能把它推广成「hash 不一致就放行」，否则会把别的版本塞进 qB。
+pub fn allows_target_hash_rewrite(site_id: &str) -> bool {
+    matches!(site_id, "ptba" | "cspt" | "dubhe")
 }
 
 /// tracker host 是否属于这个站点：相等，或 tracker 在站点域名的子域上。
 /// NexusPHP 站的 announce 常在 `tracker.xxx.com` 而页面在 `xxx.com`——
 /// 精确相等会把这类站全部漏判（已在做种预筛、源站优先排序都靠它）。
+/// `www.` 只是页面前缀，不属于站点身份：`www.tjupt.org` 与 `tjupt.org`、
+/// `tracker-public.tjupt.org` 应视为同一站，先剥掉再比。
 pub fn host_matches(tracker_host: &str, site_host: &str) -> bool {
     if tracker_host.is_empty() || site_host.is_empty() {
         return false;
     }
+    let tracker_host = tracker_host.strip_prefix("www.").unwrap_or(tracker_host);
+    let site_host = site_host.strip_prefix("www.").unwrap_or(site_host);
     tracker_host == site_host || tracker_host.ends_with(&format!(".{site_host}"))
 }
 
@@ -1236,11 +1264,27 @@ mod tests {
 
     #[test]
     fn extra_announce_hosts_cover_real_aliases() {
-        // 实机 41,882 条种子统计出的两处差异，别删（删了预筛会漏 693 条种子）
+        // 实机 42,190 条种子统计出的真实差异，别删（删了预筛会把已做种当缺口）
         assert!(extra_announce_hosts("luckpt").contains(&"tracker.luckpt.de"));
         assert!(extra_announce_hosts("chdbits").contains(&"chdbits.xyz"));
         assert!(extra_announce_hosts("qilin").contains(&"tracker.hdkyl.in"));
+        assert!(extra_announce_hosts("baozi").contains(&"tracker.t-baozi.cc"));
+        assert!(extra_announce_hosts("novahd").contains(&"tracker.novahd.top"));
+        assert!(extra_announce_hosts("xingyunge").contains(&"tracker.xingyungept.org"));
+        assert!(extra_announce_hosts("ptlgs").contains(&"ptl.gs"));
+        assert!(extra_announce_hosts("pthome").contains(&"t.pthome.org"));
+        assert!(extra_announce_hosts("agsvpt").contains(&"tracker.agsvpt.cn"));
+        assert!(extra_announce_hosts("cspt").contains(&"tracker.cspt.cc"));
         assert!(extra_announce_hosts("hdsky").is_empty());
+    }
+
+    #[test]
+    fn only_verified_sites_allow_hash_rewrite() {
+        assert!(allows_target_hash_rewrite("ptba"));
+        assert!(allows_target_hash_rewrite("cspt"));
+        assert!(allows_target_hash_rewrite("dubhe"));
+        assert!(!allows_target_hash_rewrite("hdvideo"));
+        assert!(!allows_target_hash_rewrite("qilin"));
     }
 
     #[test]
@@ -1257,6 +1301,10 @@ mod tests {
         // tracker 在子域（NexusPHP 常见：tracker.xxx.com / t.xxx.org）
         assert!(host_matches("tracker.pterclub.com", "pterclub.com"));
         assert!(host_matches("t.abc.org", "abc.org"));
+        // `www.` 不改变站点身份：页面带 www，announce 在裸域或另一子域都算同站
+        assert!(host_matches("tracker-public.tjupt.org", "www.tjupt.org"));
+        assert!(host_matches("www.tjupt.org", "tjupt.org"));
+        assert!(host_matches("www.oshen.win", "oshen.win"));
         // 跨域不算；反方向（页面域是 tracker 的「父」才对，反过来不成立）
         assert!(!host_matches("tracker.pterclub.com", "pterclub.net"));
         assert!(!host_matches("pterclub.com", "tracker.pterclub.com"));

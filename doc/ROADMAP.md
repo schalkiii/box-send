@@ -21,6 +21,7 @@
 - `bsend status` 的单站表改成“已有 / 缺口 / 覆盖率”三列，直接看 qB 里的实际情况。
 - `bsend report` 的主表也加了这三列，旧的“已判记录 / 判定覆盖 / 全库覆盖”保留作历史对比。
 - 有单元测试覆盖：qB 里有 tracker 就算已有，子域名也算；没有记录也能算出覆盖率；全库为空不会出现除零或 NaN。
+- 2026-11-23 补齐 7 个 announce 别名：`baozi`、`novahd`、`xingyunge`、`ptlgs`、`pthome`、`agsvpt`、`cspt`，并把 `www.` 与裸域归一化（`tjupt`）。qB 覆盖率不再把已做种的内容算成缺口；例如 agsvpt 从 0 → 757、baozi 0 → 569、novahd 0 → 601、xingyunge 0 → 566、pthome 0 → 566、ptlgs 0 → 584，cspt、tjupt 也补回真实值。
 
 ### 2.2 待发清单
 
@@ -55,11 +56,11 @@
 - 写入目标站专属的 `info.source`；
 - 计算新 hash，确认不在 qB 现有集合里；
 - 上传后只从回包正文或最终跳转提取下载链接；
-- 从目标站下载种子，先核对 `info hash`（新发种必须等于上传构造的新 hash）和 pieces（必须与本地源种一致），再独立添加回 qB；
+- 从目标站下载种子，先核对 `info hash`（新发种默认必须等于上传构造的新 hash；ptba/cspt/dubhe 这类站会改写 `info.source`，只在 pieces 和 `info.name` 都一致时放行）和 pieces（必须与本地源种一致），再独立添加回 qB；
 - 站点侧已发布、但下载目标种或挂回 qB 失败时，记 `ReviewPending`、note 前缀 `posted_unresolved` / `existed_unresolved`，不记失败、不进退避、不占发布额度；
 - 新增 `bsend reattach --site <id> --url <详情页>` 手工补挂：拉详情页/下载目标种（站点拒绝下载时可用 `--file` 给本地 `.torrent`），按 pieces 找本地内容后走同一条挂回逻辑。
 
-已通过：`coverage_e2e` 26 条全部通过；真实发种 luckpt、sbpt 各一条并挂回校验；hdvideo 78856、panda 141276、qilin 479362 三条历史种子已补挂，qB 校验 100%、tracker 正常。
+已通过：`coverage_e2e` 26 条全部通过；真实发种 luckpt、sbpt 各一条并挂回校验；hdvideo 78856、panda 141276、qilin 479362 三条历史种子已补挂，qB 校验 100%、tracker 正常。2026-11-23 又首次向 `ptba`、`cspt`、`dubhe` 各发 1 条，三站都出现“站上 hash 与构造 hash 不同”，已按 pieces/标题校验补挂成功，并把三站加入 hash 改写白名单。
 
 还没完成：
 
@@ -72,7 +73,7 @@
 
 ## 4. 还没做的
 
-### 4.1 发布前再确认一次（代码已接，命中路径待实测）
+### 4.1 发布前再确认一次（代码已接，e2e 已覆盖，真实命中样本待跑）
 
 真要发某一条之前，程序的 `reseed.rs` 第 2.5 步会先查一次目标站：
 
@@ -81,21 +82,23 @@
 - 查到站上已有，不重复上传，改为下载目标种子挂回 qB；
 - 搜索本身失败（网络、登录、限流）就中止这条并退避，不盲发。
 
-还需要用真实小批量确认：命中后下载目标种、pieces 比对、挂回 qB 都能走通；历史三条补挂只验证了挂回段，不走“发布前搜索命中”分支。
+`e2e_duplicate_hit_pushes_target_torrent_to_downloader` 已经覆盖“命中后下载目标种、pieces 比对、挂回 qB”这条路径。真实站点这边还没碰到一次完全相同的命中样本：本轮 ptba/cspt/dubhe 都是“站上已有其他版本”或“没有同条目”，走的是继续上传分支。下一步找一个目标站已有同条目的种子，跑一次只读判重确认，不再重复上传。
 
-### 4.2 上传额度按结果分开算
+### 4.2 上传额度按结果分开算（已完成 2026-11-23）
 
-现在“站上已有”“重复”“失败”也可能消耗当轮上传次数。热门站可能查 10 次全是重复，结果一条也没发出去。要改成：
+原问题：旧口径下“站上已有”“重复”“失败”也可能消耗当轮上传次数，热门站查 10 次全是重复，一条也发不出去。
 
-- 真正上传成功才算发布额度；
-- 重复、拦截、失败单独计数，不占发布额度；
-- 日限额仍然只统计 `posted`。
+现在 `autopost` 只在 `ReseedOutcome::Posted` 时 `posted_today += 1`；`blocked`、`duplicate`、`failed` 不计入 `posted`。`parse_audit` 也按 `posted` 天数统计，日限额只算真正上传成功。文档之前写成“还在修”，已按代码实际行为改正。
+
+注意：这里的“额度”是**发布额度**，不是上传请求总预算；全局 `roundBudget/uploadBudget` 仍会拦截所有真正的上传动作，两者不冲突。
 
 ### 4.3 判重和发后定位
 
 - 上传回包里的详情页 id 不可信，已经出过“站上已发、本地判失败”。
 - 发后定位缺陷已修（2026-11-23）：`extract_posted_links` 不再取第一条链接，而是按 id 配对详情/下载；最终跳转是详情页时优先用它；多个链接对不上时两个都不用，转 `posted_unresolved`；`userdetails.php` 不再被当成种子详情。
-- 挂回前校验已补（2026-11-23）：新发种下载回来的 `.torrent` 必须与上传构造的新 hash 相同，pieces 必须与本地源种一致，否则拒绝挂回；下载/挂回失败不再记失败，落 `posted_unresolved`，判重路径落 `existed_unresolved`。
+- 挂回前校验已补（2026-11-23）：新发种下载回来的 `.torrent` 默认必须与上传构造的新 hash 相同，pieces 必须与本地源种一致，否则拒绝挂回；下载/挂回失败不再记失败，落 `posted_unresolved`，判重路径落 `existed_unresolved`。
+- 站点改写种子元信息的例外（2026-11-23）：ptba、cspt、dubhe 实机确认站上 hash 与构造 hash 不同，pieces 和 `info.name` 一致；三站加入白名单后自动放行，其他站仍严格拒绝。ptba 已确认被改写的是 `info.source`，cspt/dubhe 的具体改写字段未逐字节核对。
+- announce 别名已补（2026-11-23）：baozi、novahd、xingyunge、ptlgs、pthome、agsvpt、cspt 加了站点别名，`www.` 与裸域也归一化；cspt 的 `tracker.cspt.cc` 是第一例“页面域和 tracker 域后缀不同”导致补挂失败。
 - 手工补挂入口已补：`bsend reattach --site <id> --url <详情页>`，可用 `--key` 指定内容、`--file` 给本地构造的 `.torrent`。
 - hdvideo 78856、qilin 479362、panda 141276 三条历史结果已补挂完成，qB 校验 100%；qilin 站点仍显示审核不通过（缺图），不影响做种。
 
@@ -131,6 +134,9 @@ reseed/coverage_io.rs  覆盖记录读写
 - **haitang**：只有曲艺、有声书类目，和影视范围不匹配，已移出白名单。
 - **haoxue**：Next.js/Flux 单页应用，静态上传页拿不到，需要按前端接口重做，已移出白名单。
 - **agsvpt**：提交域和登录域不一致，返回“你没有该权限”，建议剔除。
+- **ptba / cspt / dubhe**：2026-11-23 首次实发各 1 条并挂回成功；三站都会改写 `info.source`，站上 hash 与构造 hash 不同，已加入 hash 改写白名单。cspt 另有 `tracker.cspt.cc` 别名，dubhe 判重搜索偶发 30 秒超时。
+- **oshen**：`formcheck` 能拿到表单，但实际发种时判重搜索超时，重试后上传页返回“没有可解析的静态上传表单”；同一条命令再跑 `formcheck` 又正常，属于站点侧抖动/限流，暂未实发。
+- **ptsbao**：`source_sel[1]` 不是片源而是二级分类（剧集-美剧/电影-1080），当前审阅留 0；先不提交，下一步按分类字段单独填。
 - **tey、hdbao**：发布检查报媒介或音频编码没选，补站点规则后再试。
 
 ### 5.2 工程

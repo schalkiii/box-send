@@ -2062,6 +2062,20 @@ fn fill_selects(fields: &mut Vec<Field>, page: &str, info: &ReleaseInfo) -> Vec<
             if picked.is_none() && reencoded && hdtv_source && !is_remux && !has_hdtv_option {
                 picked = match_option(&options, "Encode");
             }
+            // WEB-DL/WEBRip 重编码：站点没有 WEB-DL 选项但有 Encode 时归 Encode
+            // （oshen 实测：媒介只有 Track/CD/DVDR/HDTV/MiniBD/Encode/Remux/HD DVD/Blu-ray，
+            //  WEB-DL 4K 留空会被发布检查拦成「medium_sel 未选」）。
+            if picked.is_none() && *prefix == "medium_sel" && !is_remux {
+                let web_source = tokens
+                    .iter()
+                    .any(|t| t.to_ascii_lowercase().starts_with("web"));
+                let has_web_option = options
+                    .iter()
+                    .any(|(_, l)| l.to_ascii_lowercase().contains("web"));
+                if web_source && !has_web_option {
+                    picked = match_option(&options, "Encode");
+                }
+            }
             'tok: for t in &tokens {
                 if picked.is_some() {
                     break 'tok;
@@ -5401,16 +5415,12 @@ fn push_target_torrent(
     log: &mut dyn FnMut(&str),
 ) -> Result<CoverageStatus> {
     let (rep_hash, meta_save_path, category) = matched_member;
-    // 挂回前先核对：下载回来的必须就是刚上传的新种（hash 对得上），
+    // 挂回前先核对：下载回来的必须就是刚上传的新种（默认 hash 对得上），
     // 分片结构也必须和本地源种一致；否则宁可落人工，不往 qB 里塞错种。
+    // 部分站会在上传阶段改写种子元信息（ptba 已确认改写 info.source），hash 必然不同；
+    // 它们只在上传时改写，分片和标题不变，所以按「站点白名单 + 标题一致 + 分片一致」
+    // 放行，仍不放松其他站。
     let target_hash = bencode::info_hash_v1(tdata).context("目标种缺少 v1 info hash")?;
-    if let Some(expected) = expected_hash {
-        if target_hash != expected {
-            bail!(
-                "下载回的目标种 hash 与上传时构造的新 hash 不一致（期望 {expected}，实际 {target_hash}），拒绝挂回 qB"
-            );
-        }
-    }
     let target_pieces = bencode::pieces_hash(tdata).context("目标种缺少 pieces，无法确认分片")?;
     let local = qb
         .export_torrent(&rep_hash)
@@ -5418,6 +5428,21 @@ fn push_target_torrent(
     let local_pieces = bencode::pieces_hash(&local).context("本地源种缺少 pieces，无法核对分片")?;
     if target_pieces != local_pieces {
         bail!("目标种分片与本地源种不一致，无法跨种做种，拒绝挂回 qB");
+    }
+    if let Some(expected) = expected_hash {
+        if target_hash != expected {
+            let site_rewrites = crate::sites::allows_target_hash_rewrite(&req.target_site);
+            let same_name = bencode::info_name(tdata).as_deref() == Some(name);
+            if site_rewrites && same_name {
+                log(&format!(
+                    "站点改写了种子元信息（如 info.source）：目标种 hash {target_hash} 与上传构造 {expected} 不同；分片和标题一致，按该站白名单放行"
+                ));
+            } else {
+                bail!(
+                    "下载回的目标种 hash 与上传时构造的新 hash 不一致（期望 {expected}，实际 {target_hash}），拒绝挂回 qB"
+                );
+            }
+        }
     }
     // 同 hash 绝不碰原种子：qB 不允许同 hash 两条，提前判掉，连 add 请求都不发
     if matches!(qb.torrent_progress(&target_hash), Ok(Some(_))) {
@@ -6907,6 +6932,25 @@ Language : Chinese"));
         };
         let (fs, _p, _n) = build_upload_fields(&remux, form, &[]);
         assert_eq!(field_lookup(&fs, "medium_sel"), Some("1"));
+    }
+
+    #[test]
+    fn webdl_maps_to_encode_when_no_web_option() {
+        // oshen 实测：没有 WEB-DL，只有 HDTV/Encode/Blu-ray；留空会被发布检查拦。
+        let form = r#"<select name="medium_sel[4]"><option value="0">请选择</option><option value="5">HDTV</option><option value="7">Encode</option><option value="3">Remux</option><option value="1">Blu-ray</option></select>"#;
+        let info = ReleaseInfo {
+            name: "Show.WEB-DL.4k.H265.60fps.10bit.AAC-GRP".into(),
+            ..Default::default()
+        };
+        let (fs, _p, notes) = build_upload_fields(&info, form, &[]);
+        assert_eq!(field_lookup(&fs, "medium_sel"), Some("7"), "{notes:?}");
+        // REMUX 仍按原盘归类，不改判 Encode
+        let remux = ReleaseInfo {
+            name: "Show.WEB-DL.REMUX.4k.H265-GRP".into(),
+            ..Default::default()
+        };
+        let (fs, _p, _n) = build_upload_fields(&remux, form, &[]);
+        assert_eq!(field_lookup(&fs, "medium_sel"), Some("3"));
     }
 
     #[test]
