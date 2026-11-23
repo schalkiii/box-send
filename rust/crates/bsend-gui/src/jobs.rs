@@ -10,6 +10,7 @@ use bsend::config::Config;
 use bsend::cookiecloud::CookieCloud;
 use bsend::coverage::{now_unix, prefetch_files, run_round, Event, RoundOptions};
 use bsend::index::ContentIndex;
+use bsend::index::CoverageStatus;
 use bsend::qbittorrent::QBittorrent;
 use bsend::report::CoverageReport;
 
@@ -29,11 +30,21 @@ pub(crate) fn snapshot(cfg: &Config) -> Result<Snapshot> {
         .sites
         .into_iter()
         .map(|s| SiteRow {
+            // qB 真值口径：已有 = qB 里带该站 tracker 的内容数，缺口与覆盖率同源派生
+            have: s.qb_covered,
+            gap: s.qb_missing,
+            ratio: s.qb_ratio,
+            drafts: report
+                .drafts
+                .iter()
+                .filter(|d| d.target_site.eq_ignore_ascii_case(&s.site_id))
+                .count(),
+            skipped: s
+                .by_status
+                .get(&CoverageStatus::Skipped)
+                .copied()
+                .unwrap_or(0),
             site: s.site_id,
-            cells: s.cells,
-            covered: s.covered,
-            pending: s.pending,
-            ratio: s.covered_ratio,
             chips: s
                 .by_status
                 .into_iter()

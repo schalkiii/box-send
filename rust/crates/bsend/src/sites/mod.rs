@@ -46,7 +46,7 @@ impl Framework {
     }
 
     /// v1 检索臂只认 NexusPHP 通用端点（`torrents.php?search=`）。
-    /// 其余框架的检索在 Swift 版里各有实现，Rust 版按流量逐步搬（见 RUST-ANALYSIS.md R4）。
+    /// 其余框架的检索在 Swift 版里各有实现，Rust 版按流量逐步搬（框架覆盖现状见 `doc/SITES.md`）。
     pub fn search_capable(&self) -> bool {
         matches!(self, Framework::NexusPHP)
     }
@@ -1188,7 +1188,9 @@ pub fn build_adapters(
         )
         .with_context(|| format!("站点配置不合法：{}", s.id))?;
         adapter.user_agent = cfg.user_agent.clone();
-        adapter = adapter.with_announce_hosts(s.announce_hosts.clone());
+        adapter = adapter
+            .with_announce_hosts(s.announce_hosts.clone())
+            .with_announce_url(s.announce_url.clone());
         out.push(std::sync::Arc::new(adapter));
     }
     if out.is_empty() {

@@ -105,7 +105,10 @@ pub enum JudgeLevel {
     SameHash { hash: String },
     /// hash 不同但逐文件清单完全一致：站点重新打包（改了 source/private 标记），可以辅
     SameFiles,
-    /// 只有名字像，清单对不上：不动下载器，交人工
+    /// 名字像但总大小/清单完全不同（分集 vs 全集、1080p vs 2160p、不同压制组）：
+    /// 这是另一个版本，补不了，直接判「其他版本」，不占人工确认队列
+    Different,
+    /// 只有名字像、总大小却相等，清单仍拼不上：信息不足，交人工
     NameOnly { site_name: String },
     /// 站内没检索到，或这条根本没法辅（原因给人看）
     Skip { why: String },

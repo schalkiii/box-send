@@ -11,7 +11,7 @@
 //! bsend status                   # 看索引现状
 //! ```
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -23,7 +23,9 @@ use bsend::cookiecloud::CookieCloud;
 use bsend::coverage::{prefetch_files, run_round, Event, RoundOptions, RoundReport};
 use bsend::index::{ContentIndex, CoverageStatus};
 use bsend::qbittorrent::QBittorrent;
-use bsend::report::CoverageReport;
+use bsend::report::{
+    draft_count_for_site, split_drafts_by_allow, whitelist_without_drafts, CoverageReport,
+};
 use bsend::sites::nexusphp::NexusPhp;
 
 #[derive(Parser)]
@@ -74,7 +76,7 @@ enum Cmd {
         #[arg(long)]
         only: Option<String>,
     },
-    /// 只做基线：把「已在做种」的格子标好并落盘，零站点请求（先看清家底）
+    /// 只做基线：把「已在做种」的覆盖记录标好并落盘，零站点请求（先看清家底）
     Prime,
     /// 看 cookie 现状：逐站条目数、最早过期、有没有鉴权字段（不打印 cookie 值）
     Cookies {
@@ -117,7 +119,7 @@ enum Cmd {
         #[arg(long, value_delimiter = ',')]
         sites: Option<Vec<String>>,
     },
-    /// 全站门禁演练（只读）：构造上传字段 + 官方预审 + 门禁矩阵，绝不上传种子
+    /// 全站发布检查演练（只读）：构造上传字段 + 官方预审 + 发布检查矩阵，绝不上传种子
     Gatecheck {
         /// 只演练这些站（逗号分隔站点 id）
         #[arg(long, value_delimiter = ',')]
@@ -126,18 +128,39 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// 发种审计周报（只读）：按天 × 站点聚合 auto-audit.jsonl，不写覆盖记录不发请求
+    Audit {
+        /// 统计最近多少天（含今天，北京时间日界）
+        #[arg(long, default_value_t = 7)]
+        days: usize,
+        /// 只看这个目标站 id
+        #[arg(long)]
+        site: Option<String>,
+        /// 输出 camelCase JSON（到 stdout，不写文件）
+        #[arg(long)]
+        json: bool,
+    },
 
-    /// 自动发种：草稿 → 审阅 → 门禁 → 发布（白名单 + 日限额 + 审计）；--dry-run 只跑门禁
+    /// 自动发种：草稿 → 审阅 → 发布检查 → 发布（白名单 + 日限额 + 审计）；--dry-run 只跑发布检查
     Autopost {
-        /// 只跑门禁与审阅，不发布
+        /// 只跑发布检查与审阅，不发布
         #[arg(long)]
         dry_run: bool,
-        /// 本次最多发布多少条
+        /// 每轮最多发布多少条（--loop 时按轮计，每轮各自受此限额约束）
         #[arg(long)]
         limit: Option<usize>,
         /// 只处理这些目标站的草稿（逗号分隔站点 id）
         #[arg(long, value_delimiter = ',')]
         sites: Option<Vec<String>>,
+        /// 关闭草稿对账（下载器已挂目标站完成种子的草稿覆盖记录自动改写 Seeding）；只关对账
+        #[arg(long)]
+        no_reconcile: bool,
+        /// 串行循环跑多轮：每轮都是一次完整自动发种（退避/日限额/白名单/锁复用单轮逻辑）
+        #[arg(long)]
+        loop_mode: bool,
+        /// 循环模式轮间间隔秒数（默认 1800）
+        #[arg(long, default_value_t = 1800)]
+        interval_secs: u64,
     },
 
     /// 站点档案汇总：配置开关 + 最近一次实测结论 + pieces 支持 + cookie 概况
@@ -193,11 +216,23 @@ fn main() -> Result<()> {
         Cmd::Layoutcheck { limit, only } => cmd_layoutcheck(&cfg, limit, only),
         Cmd::Sites { json, md } => cmd_sites(&cfg, json, md),
         Cmd::Gatecheck { sites, json } => cmd_gatecheck(&cfg, sites, json),
+        Cmd::Audit { days, site, json } => cmd_audit(&cfg, days, site, json),
         Cmd::Autopost {
             dry_run,
             limit,
             sites,
-        } => cmd_autopost(&cfg, dry_run, limit, sites),
+            no_reconcile,
+            loop_mode,
+            interval_secs,
+        } => cmd_autopost(
+            &cfg,
+            dry_run,
+            limit,
+            sites,
+            no_reconcile,
+            loop_mode,
+            interval_secs,
+        ),
     }
 }
 
@@ -391,9 +426,8 @@ fn cmd_status(cfg: &Config) -> Result<()> {
     let mut member_torrents = 0usize;
     let mut gone = 0usize;
     let mut resolved_sources = 0usize;
-    let mut wait_source = Vec::new();
     let mut drafts = Vec::new();
-    let mut pending_cells = 0usize;
+    let mut pending_by_status: BTreeMap<CoverageStatus, usize> = BTreeMap::new();
     for e in index.contents.values() {
         member_torrents += e.torrents.len();
         if e.torrents.is_empty() {
@@ -408,10 +442,12 @@ fn cmd_status(cfg: &Config) -> Result<()> {
                 CoverageStatus::ReseedDraft => {
                     drafts.push(format!("「{}」→ {}", e.name, site));
                 }
-                CoverageStatus::WaitSource => {
-                    wait_source.push(e.name.clone());
+                // Listed from `report.wait_source` below (deduped by name);
+                // keep it out of the pending bucket, same as before.
+                CoverageStatus::WaitSource => {}
+                st if !st.is_settled() => {
+                    *pending_by_status.entry(st).or_insert(0) += 1;
                 }
-                st if !st.is_settled() => pending_cells += 1,
                 _ => {}
             }
         }
@@ -426,16 +462,134 @@ fn cmd_status(cfg: &Config) -> Result<()> {
         println!("  归档倒计时中（下载器里已消失）：{gone}");
     }
     println!("  源种已定位：{resolved_sources}");
+
+    // Per-site numbers come from the shared report builder, so `status` and
+    // `report` stay on the same coverage counting rules.
+    let path_text = cfg.coverage_state_path().display().to_string();
+    let mut report = CoverageReport::build(
+        &index,
+        &cfg.sites,
+        0,
+        bsend::coverage::now_unix(),
+        &path_text,
+    );
+    // 待发清单按 qB 里最后一次扫描到的 tracker 派生，与 autopost 的实时口径一致；
+    // 这样 status 不会再显示只有旧记录才有的草稿。
+    let allow: HashSet<String> = cfg.coverage.auto_reseed_sites.iter().cloned().collect();
+    let mut limits: HashMap<String, usize> = HashMap::new();
+    for site in &cfg.sites {
+        let rules = cfg
+            .coverage
+            .reseed_rules
+            .get(&site.id)
+            .cloned()
+            .unwrap_or_default();
+        limits.insert(site.id.clone(), rules.daily_limit() as usize);
+    }
+    report.derive_qb_gap_drafts_from_index(&index, &cfg.sites, &allow, &limits);
+
+    // Whitelisted sites without a draft: call this out even on a fresh index,
+    // because listing a site in the whitelist on its own never produces drafts.
+    let no_draft = whitelist_without_drafts(&report, &cfg.coverage.auto_reseed_sites);
+    if !no_draft.is_empty() {
+        let names: Vec<String> = no_draft
+            .iter()
+            .map(|id| {
+                report
+                    .sites
+                    .iter()
+                    .find(|s| s.site_id == *id)
+                    .map(|s| {
+                        if s.name.is_empty() {
+                            id.clone()
+                        } else {
+                            format!("{}（{}）", s.name, id)
+                        }
+                    })
+                    .unwrap_or_else(|| id.clone())
+            })
+            .collect();
+        println!("\n白名单站点暂无草稿：{}", names.join("、"));
+        println!(
+            "  以上站点本轮没有可发条目：qB 里没有缺口，或源种子未定位、内容已消失。待发由 `bsend autopost` 每轮按 qB 实时缺口生成；`bsend scan` 只刷新索引。"
+        );
+    }
+
     if by_status.is_empty() {
-        println!("还没有任何覆盖结论（先跑 bsend scan / bsend run）");
+        println!("还没有任何处理记录：先 `bsend scan` 建索引；辅种或发种成功后才会写处理记录。");
         return Ok(());
     }
     println!("覆盖分布：");
     for (st, n) in &by_status {
         println!("  {} {}", st.label(), n);
     }
-    if pending_cells > 0 {
-        println!("待办格子：{pending_cells}（下一轮会接着处理）");
+
+    // 草稿按白名单拆分：未启用组只计数、不改覆盖记录，不算待发
+    let allow: std::collections::HashSet<String> =
+        cfg.coverage.auto_reseed_sites.iter().cloned().collect();
+    let (enabled_drafts, disabled_drafts) = split_drafts_by_allow(&report, &allow);
+
+    println!("\n单站覆盖（按 qB 里是否已有该站 tracker 计算）：");
+    let header = [
+        pad_right("站点", 14),
+        pad_left("已有", 6),
+        pad_left("缺口", 6),
+        pad_left("覆盖率", 8),
+        pad_left("草稿", 6),
+        pad_left("已跳过", 6),
+    ];
+    println!("  {}", header.join(" "));
+    for s in &report.sites {
+        let label = if s.name.is_empty() {
+            s.site_id.as_str()
+        } else {
+            s.name.as_str()
+        };
+        let skipped = s
+            .by_status
+            .get(&CoverageStatus::Skipped)
+            .copied()
+            .unwrap_or(0);
+        let row = [
+            pad_right(label, 14),
+            pad_left(&commas(s.qb_covered as i64), 6),
+            pad_left(&commas(s.qb_missing as i64), 6),
+            pad_left(&format!("{:.1}%", s.qb_ratio * 100.0), 8),
+            pad_left(&commas(draft_count_for_site(&report, &s.site_id) as i64), 6),
+            pad_left(&commas(skipped as i64), 6),
+        ];
+        println!("  {}", row.join(" "));
+    }
+    println!(
+        "  已有 = qB 里有该站 tracker 的内容数；缺口 = 全库内容数 − 已有；覆盖率 = 已有 / 全库内容数（当前 {} 条）",
+        commas(report.totals.contents as i64)
+    );
+    println!("  已跳过 = 命中内容类型黑名单等按策略不再自动发的草稿（第二轮起不再入队）");
+    println!("\n待发草稿 {} 条", enabled_drafts.len());
+    if !disabled_drafts.is_empty() {
+        let mut disabled_sites: Vec<&str> = disabled_drafts
+            .iter()
+            .map(|d| d.target_site.as_str())
+            .collect();
+        disabled_sites.sort_unstable();
+        disabled_sites.dedup();
+        println!(
+            "目标站未启用 {} 条（{}）—— 不在自动发种白名单，不算待发；以后加白名单仍可用",
+            disabled_drafts.len(),
+            disabled_sites.join("、")
+        );
+    }
+
+    if !pending_by_status.is_empty() {
+        let total: usize = pending_by_status.values().sum();
+        let parts: Vec<String> = pending_by_status
+            .iter()
+            .map(|(st, n)| format!("{} {n}", st.label()))
+            .collect();
+        println!(
+            "\n待办覆盖记录（共 {total}）：{}（下一轮会接着处理）",
+            parts.join("、")
+        );
     }
     if !drafts.is_empty() {
         println!("\n转种草稿（{}）：", drafts.len());
@@ -446,13 +600,15 @@ fn cmd_status(cfg: &Config) -> Result<()> {
             println!("  … 共 {} 条", drafts.len());
         }
     }
-    if !wait_source.is_empty() {
-        println!("\n待找源（{}）：", wait_source.len());
-        for n in wait_source.iter().take(20) {
+    // Reuse the report's wait-source list: per-site cells would count the same
+    // content name once per site, while the report dedupes by content name.
+    if !report.wait_source.is_empty() {
+        println!("\n待找源（{}）：", report.wait_source.len());
+        for n in report.wait_source.iter().take(20) {
             println!("  {n}");
         }
-        if wait_source.len() > 20 {
-            println!("  … 共 {} 条", wait_source.len());
+        if report.wait_source.len() > 20 {
+            println!("  … 共 {} 条", report.wait_source.len());
         }
     }
     Ok(())
@@ -465,23 +621,35 @@ fn cmd_reseed(cfg: &Config, draft: Option<usize>, yes: bool) -> Result<()> {
     }
     let mut index = ContentIndex::load(&cfg.coverage_state_path());
     let path_text = cfg.coverage_state_path().display().to_string();
-    let report = CoverageReport::build(
+    let mut report = CoverageReport::build(
         &index,
         &cfg.sites,
         20,
         bsend::coverage::now_unix(),
         &path_text,
     );
+    let allow: HashSet<String> = cfg.coverage.auto_reseed_sites.iter().cloned().collect();
+    let mut limits: HashMap<String, usize> = HashMap::new();
+    for site in &cfg.sites {
+        let rules = cfg
+            .coverage
+            .reseed_rules
+            .get(&site.id)
+            .cloned()
+            .unwrap_or_default();
+        limits.insert(site.id.clone(), rules.daily_limit() as usize);
+    }
+    report.derive_qb_gap_drafts_from_index(&index, &cfg.sites, &allow, &limits);
     if report.drafts.is_empty() {
-        println!("没有转种草稿。先 `bsend run` 跑一轮，站里没有的段落定位到源种后会出草稿。");
+        println!("没有可发条目：qB 里没有目标站缺口，或源种子还没定位。先 `bsend scan` 刷新索引。");
         return Ok(());
     }
     let Some(n) = draft else {
+        let total = report.drafts.len();
         println!(
-            "转种草稿（{} 条）。`bsend reseed --draft N` 审阅第 N 条，加 `--yes` 真提交：",
-            report.drafts.len()
+            "可发条目（{total} 条，按 qB 缺口现场生成）。`bsend reseed --draft N` 审阅第 N 条，加 `--yes` 真提交："
         );
-        for (i, d) in report.drafts.iter().enumerate() {
+        for (i, d) in report.drafts.iter().take(200).enumerate() {
             println!(
                 "  #{} 「{}」{} → {}（源：{}）",
                 i + 1,
@@ -490,6 +658,9 @@ fn cmd_reseed(cfg: &Config, draft: Option<usize>, yes: bool) -> Result<()> {
                 d.target_site,
                 d.source_url
             );
+        }
+        if total > 200 {
+            println!("  ……只显示前 200 条，共 {total} 条。");
         }
         return Ok(());
     };
@@ -516,6 +687,39 @@ fn cmd_reseed(cfg: &Config, draft: Option<usize>, yes: bool) -> Result<()> {
     let outcome = bsend::reseed::run_reseed(cfg, &qb, &req, &mut index, &mut log, None)?;
     println!("{}", outcome.display());
     Ok(())
+}
+
+/// 单站 formcheck 落盘记录。旧字段（site/verdict/fields/selects/core/soft/error/at）
+/// 保持不变以兼容 sites 总账与 scripts/site-matrix.ps1；新增 action（绝对提交地址）
+/// 与 selectOptions（下拉名 -> [[value, label], …] 选项表）。
+fn formcheck_fact(
+    d: &bsend::reseed::FormDrill,
+    core: &[String],
+    soft: &[String],
+) -> serde_json::Value {
+    let select_options: serde_json::Map<String, serde_json::Value> = d
+        .select_options
+        .iter()
+        .map(|(name, opts)| {
+            let pairs: Vec<serde_json::Value> = opts
+                .iter()
+                .map(|(v, l)| serde_json::json!([v, l]))
+                .collect();
+            (name.clone(), serde_json::Value::Array(pairs))
+        })
+        .collect();
+    serde_json::json!({
+        "site": d.site_id,
+        "verdict": if d.error.is_some() { "fail" } else if core.is_empty() { "ok" } else { "gap" },
+        "fields": d.field_count,
+        "selects": d.select_count,
+        "core": core,
+        "soft": soft,
+        "error": d.error,
+        "action": d.action,
+        "selectOptions": serde_json::Value::Object(select_options),
+        "at": bsend::coverage::now_unix(),
+    })
 }
 
 /// 发种表格演练（只审不发）：逐站拉 upload.php 跑与真实转种同一套字段构造，
@@ -582,16 +786,7 @@ fn cmd_formcheck(cfg: &Config, sites: Option<Vec<String>>) -> Result<()> {
         for g in core.iter().chain(soft.iter()) {
             println!("     · {g}");
         }
-        facts.push(serde_json::json!({
-            "site": d.site_id,
-            "verdict": if d.error.is_some() { "fail" } else if core.is_empty() { "ok" } else { "gap" },
-            "fields": d.field_count,
-            "selects": d.select_count,
-            "core": &core,
-            "soft": &soft,
-            "error": d.error,
-            "at": bsend::coverage::now_unix(),
-        }));
+        facts.push(formcheck_fact(&d, &core, &soft));
     }
     println!(
         "\n汇总：{} 站｜表单齐 {}｜有缺口 {}｜不可发种/失败 {}（权限/登录/限流）",
@@ -757,13 +952,25 @@ fn cmd_report(
         .cloned()
         .collect();
     let path_text = cfg.coverage_state_path().display().to_string();
-    let report = CoverageReport::build(
+    let mut report = CoverageReport::build(
         &index,
         &picked,
         top,
         bsend::coverage::now_unix(),
         &path_text,
     );
+    let allowed: HashSet<String> = cfg.coverage.auto_reseed_sites.iter().cloned().collect();
+    let mut limits: HashMap<String, usize> = HashMap::new();
+    for site in &picked {
+        let rules = cfg
+            .coverage
+            .reseed_rules
+            .get(&site.id)
+            .cloned()
+            .unwrap_or_default();
+        limits.insert(site.id.clone(), rules.daily_limit() as usize);
+    }
+    report.derive_qb_gap_drafts_from_index(&index, &picked, &allowed, &limits);
     if report.totals.contents == 0 {
         println!("索引是空的（{path_text}）：先跑 bsend scan");
         return Ok(());
@@ -787,10 +994,10 @@ fn cmd_report(
     );
     println!();
     // 表头与数据行都按「终端显示宽度」补齐：中文是 2 列，用 {:<12} 会错位
-    const COLS: [(&str, usize, bool); 12] = [
+    const COLS: [(&str, usize, bool); 14] = [
         ("站点", 12, false),
-        ("格子", 8, true),
-        ("已覆盖", 8, true),
+        ("历史已判", 8, true),
+        ("历史已覆盖", 10, true),
         ("做种", 8, true),
         ("辅种", 6, true),
         ("转种", 6, true),
@@ -798,8 +1005,10 @@ fn cmd_report(
         ("待找源", 7, true),
         ("待人工", 7, true),
         ("失败", 6, true),
-        ("未判定", 9, true),
-        ("覆盖率", 8, true),
+        ("已跳过", 6, true),
+        ("qB已有", 8, true),
+        ("qB缺口", 8, true),
+        ("qB覆盖率", 9, true),
     ];
     let header: Vec<String> = COLS
         .iter()
@@ -817,7 +1026,7 @@ fn cmd_report(
         let cells = [
             pad_right(&s.site_id, 12),
             pad_left(&commas(s.cells as i64), 8),
-            pad_left(&commas(s.covered as i64), 8),
+            pad_left(&commas(s.covered as i64), 10),
             pad_left(&commas(n(CoverageStatus::Seeding)), 8),
             pad_left(&commas(n(CoverageStatus::Assisted)), 6),
             pad_left(&commas(n(CoverageStatus::Reseeded)), 6),
@@ -825,11 +1034,17 @@ fn cmd_report(
             pad_left(&commas(n(CoverageStatus::WaitSource)), 7),
             pad_left(&commas(n(CoverageStatus::ReviewPending)), 7),
             pad_left(&commas(n(CoverageStatus::Failed)), 6),
-            pad_left(&commas(s.pending as i64), 9),
-            pad_left(&format!("{:.1}%", s.covered_ratio * 100.0), 8),
+            pad_left(&commas(n(CoverageStatus::Skipped)), 6),
+            pad_left(&commas(s.qb_covered as i64), 8),
+            pad_left(&commas(s.qb_missing as i64), 8),
+            pad_left(&format!("{:.1}%", s.qb_ratio * 100.0), 9),
         ];
         println!("{}", cells.join(" "));
     }
+    println!(
+        "历史已判/历史已覆盖是旧记录口径，仅供历史对比；qB 已有 = qB 里有该站 tracker 的内容数，缺口 = 全库内容数 − 已有，覆盖率 = 已有 / 全库内容数（{} 条）。",
+        commas(report.totals.contents as i64)
+    );
 
     if !report.uncovered.is_empty() {
         println!(
@@ -856,6 +1071,118 @@ fn cmd_report(
         report.write_json(p)?;
         println!("\nJSON 已写入 {}", p.display());
     }
+    Ok(())
+}
+
+/// 发种审计周报（只读）：聚合 auto-audit.jsonl，按天 × 站点出计数；不写覆盖记录、不发请求。
+fn cmd_audit(cfg: &Config, days: usize, site: Option<String>, as_json: bool) -> Result<()> {
+    let path = bsend::autopost::audit_path_of(cfg);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            println!(
+                "没有审计记录（{}）：先跑 bsend autopost 产生审计。",
+                path.display()
+            );
+            return Ok(());
+        }
+        Err(e) => return Err(e).with_context(|| format!("读审计文件 {} 失败", path.display())),
+    };
+    let report =
+        bsend::report::audit_daily(&text, bsend::coverage::now_unix(), days, site.as_deref());
+
+    if as_json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
+    }
+
+    let when = chrono::DateTime::from_timestamp(report.generated_at, 0)
+        .map(|d| {
+            d.with_timezone(&chrono::Local)
+                .format("%Y-%m-%d %H:%M")
+                .to_string()
+        })
+        .unwrap_or_else(|| report.generated_at.to_string());
+    let site_note = site
+        .as_deref()
+        .map(|s| format!("｜站点 {s}"))
+        .unwrap_or_default();
+    println!("发种审计周报（最近 {days} 天，北京时间日界）{site_note}");
+    println!("审计文件 {}｜生成时间 {when}", path.display());
+    println!();
+
+    if report.days.is_empty() {
+        println!("窗口内没有审计记录。");
+        if report.totals.malformed > 0 {
+            println!("其中畸形行 {} 条（已跳过）。", report.totals.malformed);
+        }
+        return Ok(());
+    }
+
+    const COLS: [(&str, usize, bool); 7] = [
+        ("站点", 14, false),
+        ("发布", 8, true),
+        ("拦截", 8, true),
+        ("失败", 8, true),
+        ("重复", 8, true),
+        ("其他版本", 9, true),
+        ("其他", 8, true),
+    ];
+    let header: Vec<String> = COLS
+        .iter()
+        .map(|(t, w, right)| {
+            if *right {
+                pad_left(t, *w)
+            } else {
+                pad_right(t, *w)
+            }
+        })
+        .collect();
+
+    for day in &report.days {
+        println!("{}", day.date);
+        println!("  {}", header.join(" "));
+        let mut sub = (0usize, 0usize, 0usize, 0usize, 0usize, 0usize);
+        for (sid, c) in &day.by_site {
+            let row = [
+                pad_right(sid, 14),
+                pad_left(&commas(c.posted as i64), 8),
+                pad_left(&commas(c.blocked as i64), 8),
+                pad_left(&commas(c.failed as i64), 8),
+                pad_left(&commas(c.duplicate as i64), 8),
+                pad_left(&commas(c.other_version as i64), 9),
+                pad_left(&commas(c.other as i64), 8),
+            ];
+            println!("  {}", row.join(" "));
+            sub.0 += c.posted;
+            sub.1 += c.blocked;
+            sub.2 += c.failed;
+            sub.3 += c.duplicate;
+            sub.4 += c.other_version;
+            sub.5 += c.other;
+        }
+        let sub_row = [
+            pad_right("当日小计", 14),
+            pad_left(&commas(sub.0 as i64), 8),
+            pad_left(&commas(sub.1 as i64), 8),
+            pad_left(&commas(sub.2 as i64), 8),
+            pad_left(&commas(sub.3 as i64), 8),
+            pad_left(&commas(sub.4 as i64), 9),
+            pad_left(&commas(sub.5 as i64), 8),
+        ];
+        println!("  {}", sub_row.join(" "));
+        println!();
+    }
+
+    let t = &report.totals;
+    println!(
+        "合计：发布 {}｜拦截 {}｜失败 {}｜重复 {}｜其他版本 {}｜其他 {}",
+        t.posted, t.blocked, t.failed, t.duplicate, t.other_version, t.other
+    );
+    println!(
+        "计入记录 {} 条；畸形行 {} 条（跳过未计入）。",
+        t.records, t.malformed
+    );
     Ok(())
 }
 
@@ -1275,14 +1602,21 @@ fn cmd_autopost(
     dry_run: bool,
     limit: Option<usize>,
     sites: Option<Vec<String>>,
+    no_reconcile: bool,
+    loop_mode: bool,
+    interval_secs: u64,
 ) -> Result<()> {
+    use anyhow::Context as _;
     use bsend::autopost::{run_autopost, AutopostEvent, AutopostOptions};
     let opts = AutopostOptions {
         dry_run,
         limit,
         sites,
+        reconcile: !no_reconcile,
+        loop_mode,
+        interval_secs,
     };
-    run_autopost(cfg, &opts, &mut |ev| match ev {
+    let mut emit = |ev: AutopostEvent| match ev {
         AutopostEvent::Log(line) => println!("{line}"),
         AutopostEvent::DraftStart {
             name,
@@ -1298,17 +1632,44 @@ fn cmd_autopost(
             result, url, error, ..
         } => match result {
             "review_failed" => println!("   审阅失败：{}", error.unwrap_or_default()),
-            "blocked" => println!("   → 门禁拦截，转人工\n"),
+            "blocked" => println!("   → 发布检查拦截，转人工\n"),
             "skipped_duplicate" => println!("   → 已跳过：目标站已有同条目，未上传\n"),
             "posted" => println!("   → 已发布：{}\n", url.unwrap_or_default()),
+            "posted_unresolved" => println!(
+                "   → 已上传但站内定位不到条目，待人工/下轮复核：{}\n",
+                url.unwrap_or_default()
+            ),
             "failed" => println!("   → 发布失败：{}\n", error.unwrap_or_default()),
             _ => {}
         },
-    })?;
-    Ok(())
+    };
+    if !loop_mode {
+        run_autopost(cfg, &opts, &mut emit)?;
+        return Ok(());
+    }
+    // 循环模式：单进程串行跑多轮，每轮都是一次完整 `run_autopost`。
+    // 退避 / 日限额 / 白名单 / 跨进程锁都在 `run_autopost` 内部，这里不重复实现。
+    // 退出语义：单轮返回 `Err` 属致命错误（连不上下载器、发布总闸未开、锁拿不到等），
+    // 打印后以非零退出；单条草稿级失败已在审计里记，不会让整轮 Err。
+    // `--limit` 按轮计：每轮各自受 limit 约束。Ctrl+C 走默认 SIGINT 终止，不装信号处理器。
+    let interval = std::time::Duration::from_secs(interval_secs.max(1));
+    let mut round = 1usize;
+    loop {
+        println!("====== 第 {round} 轮开始 ======");
+        run_autopost(cfg, &opts, &mut emit)
+            .with_context(|| format!("第 {round} 轮自动发种失败（致命，终止循环）"))?;
+        let next = chrono::Local::now() + chrono::Duration::seconds(interval.as_secs() as i64);
+        println!(
+            "第 {round} 轮结束；下次运行 {}，间隔 {} 秒\n",
+            next.format("%Y-%m-%d %H:%M:%S"),
+            interval.as_secs()
+        );
+        round += 1;
+        std::thread::sleep(interval);
+    }
 }
 
-/// 全站门禁演练：用演练样本逐站构造上传字段 → 官方预审（有则调，不上传种子）→ 门禁矩阵。
+/// 全站发布检查演练：用演练样本逐站构造上传字段 → 官方预审（有则调，不上传种子）→ 发布检查矩阵。
 /// 全程只 GET 上传页 / POST 官方预审接口，绝不调用 takeupload.php。
 #[derive(Debug, serde::Serialize)]
 struct GatecheckRow {
@@ -1327,7 +1688,7 @@ fn cmd_gatecheck(cfg: &Config, sites: Option<Vec<String>>, as_json: bool) -> Res
     let info = bsend::reseed::drill_release();
     let mut rows: Vec<GatecheckRow> = Vec::new();
     println!(
-        "全站门禁演练（只构造字段 + 官方预审，绝不上传种子）｜样本「{}」｜{} 站",
+        "全站发布检查演练（只构造字段 + 官方预审，绝不上传种子）｜样本「{}」｜{} 站",
         info.name,
         adapters.len()
     );
@@ -1390,6 +1751,7 @@ fn cmd_gatecheck(cfg: &Config, sites: Option<Vec<String>>, as_json: bool) -> Res
             has_links: info.has_media_links(),
             type_label: type_label.as_deref(),
             core_gaps: &core,
+            required_gaps: &prep.required_gaps,
             audit_passed,
         };
         let results = bsend::gates::evaluate(&input);
@@ -1427,7 +1789,7 @@ fn cmd_gatecheck(cfg: &Config, sites: Option<Vec<String>>, as_json: bool) -> Res
         .unwrap_or_else(|| PathBuf::from("gatecheck.json"));
     let payload = serde_json::to_string_pretty(&rows)?;
     if let Err(e) = bsend::atomic_write(&save_path, payload.as_bytes()) {
-        println!("门禁结果落盘失败（不影响演练）：{e}");
+        println!("发布检查结果落盘失败（不影响演练）：{e}");
     }
     if as_json {
         println!("{payload}");
@@ -1435,7 +1797,7 @@ fn cmd_gatecheck(cfg: &Config, sites: Option<Vec<String>>, as_json: bool) -> Res
     }
     println!(
         "{:<14}{:<10}{:<8}{:<44}阻断项",
-        "站点", "名称", "门禁", "官方预审"
+        "站点", "名称", "发布检查", "官方预审"
     );
     for r in &rows {
         let blockers: Vec<String> = r
@@ -1455,7 +1817,7 @@ fn cmd_gatecheck(cfg: &Config, sites: Option<Vec<String>>, as_json: bool) -> Res
     }
     let ok = rows.iter().filter(|r| r.verdict == "pass").count();
     println!(
-        "\n汇总：{} 站｜门禁通过 {}｜阻断 {}｜错误 {}",
+        "\n汇总：{} 站｜发布检查通过 {}｜阻断 {}｜错误 {}",
         rows.len(),
         ok,
         rows.iter().filter(|r| r.verdict == "block").count(),
@@ -1490,5 +1852,30 @@ mod tests {
         let old = vec![serde_json::json!({"site": "a"})];
         let merged = merge_formcheck_results(&old, vec![serde_json::json!({"site": "b"})]);
         assert_eq!(merged.len(), 2);
+    }
+
+    #[test]
+    fn formcheck_fact_keeps_legacy_fields_and_adds_action_options() {
+        let mut d = bsend::reseed::FormDrill::default();
+        d.site_id = "kufei".into();
+        d.field_count = 16;
+        d.select_count = 9;
+        d.action = Some("https://kufei.example/takeupload.php".into());
+        d.select_options = vec![("type".into(), vec![("404".into(), "剧集".into())])];
+        let fact = formcheck_fact(&d, &[], &["team_sel[4] 未选".into()]);
+        // 旧字段原样保留（sites 总账 / site-matrix.ps1 依赖）
+        assert_eq!(fact["site"], "kufei");
+        assert_eq!(fact["fields"], 16);
+        assert_eq!(fact["selects"], 9);
+        assert_eq!(fact["verdict"], "ok");
+        assert!(fact["core"].as_array().unwrap().is_empty());
+        assert_eq!(fact["soft"][0], "team_sel[4] 未选");
+        assert!(fact.get("at").is_some());
+        // 新增字段：绝对提交地址 + 下拉选项表
+        assert_eq!(fact["action"], "https://kufei.example/takeupload.php");
+        assert_eq!(
+            fact["selectOptions"]["type"][0],
+            serde_json::json!(["404", "剧集"])
+        );
     }
 }

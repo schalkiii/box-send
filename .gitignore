@@ -2,7 +2,7 @@
 .build/
 .swiftpm/
 
-# 本地运行状态（默认在 ~/.boxsend；防止有人把 dataDir 指进仓库）
+# 本地运行状态（未配 dataDir 时退到配置文件所在目录；防止有人把 dataDir 指进仓库）
 .boxsend/
 *.log
 

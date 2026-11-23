@@ -8,6 +8,8 @@
 .\windows\build.ps1 -Setup     # 再打成 windows\installer\Output\BoxSend-x.y.z-Setup.exe
 ```
 
+脚本开关：`-Cfg debug` 出调试构建；`-SkipCore` 跳过核心库重建；`-FrameworkDependent` 换回框架依赖（见下面第 3 条）。
+
 ## 前置
 
 | 用途 | 装什么 |
@@ -42,6 +44,9 @@ CI 里这两样由 workflow 负责：`SDKROOT` 从注册表读出来写进 `GITH
    csproj 里那份 `None Include="native\**\*"` 带 `Link` 把目录拍平：这些 DLL 之间的依赖是运行期
    动态加载的，Windows 只在「exe 所在目录 + PATH」里找，留在 `native\` 子目录里的表现是
    「装上了但起不来」。
+   首启报缺 DLL 时，`dumpbin /dependents boxsend-core.dll` 是权威依赖清单；Swift 运行时分家在
+   工具链的 `Toolchains\…\usr\bin` 与 `Runtimes\…\usr\bin` 两处，按提示名补进
+   `BoxSend.Windows\native\` 再跑。
 3. `dotnet publish -c Release -r win-x64 --self-contained true`
    默认**自带 .NET 运行时**，用户机器上什么都不用装。CI 上实测 `publish\` 188 MB / 480 个文件
    （含 Swift 运行时；大头是 PresentationFramework / System.Private.CoreLib / WinForms 那几块），
@@ -54,6 +59,9 @@ CI 里这两样由 workflow 负责：`SDKROOT` 从注册表读出来写进 `GITH
    安装向导是简体中文：语言文件已随仓库带在 `installer/Languages/ChineseSimplified.isl`
    （抄自 `jrsoftware/issrc` 标签 `is-6_7_1` 的 `Unofficial/`，补了 UTF-8 BOM——没 BOM 时编译器按机器
    ANSI 码页读，英文 runner 上中文全成问号）。`.iss` 里带 `#if FileExists`，文件不在就退回英文。
+
+分发前签名：`boxsend-core.dll` 与 `BoxSend.exe` 都要签名，未签名会被 SmartScreen 与杀软各拦一道；
+脚本本身不做签名，签名在打包后另行处理。
 
 安装完的数据在 `%APPDATA%\BoxSend`（配置、cookies、状态），卸载时保留，重装自动接着用。
 

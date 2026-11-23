@@ -722,7 +722,63 @@ fn prefetch_keyed(
     keyed
 }
 
+/// Normalize a tracker announce / host string for comparison only.
+///
+/// This normalization is comparison-only: it never rewrites the value stored in the
+/// index or sent to any site. It trims surrounding whitespace, lowercases, drops the
+/// URL scheme (`http://`, `https://`, `udp://`, ...), drops path/query/fragment,
+/// strips a numeric port suffix, and removes FQDN trailing dots.
+///
+/// - Userinfo (`user:pass@host`) is stripped: the credentials before `@` must not
+///   participate in host comparison.
+/// - Port stripping is skipped for bracketed IPv6 literals and for bare IPv6
+///   literals (two or more colons, no brackets), so address colons are not mistaken
+///   for a port separator. The bare-IPv6 branch is defensive: no bare IPv6 announce
+///   showed up in the local qB sample; it keeps an address like `2001:db8::1` from
+///   being truncated at its last colon segment.
+/// - No IDNA / punycode conversion is performed: a Unicode domain and its `xn--`
+///   ASCII form are not translated into each other. Site configs must write the
+///   ASCII (punycode) host; introducing an IDNA crate is deliberately avoided.
+fn normalize_tracker_host(raw: &str) -> String {
+    let s = raw.trim().to_lowercase();
+    // Drop scheme: keep everything after the first `://` if one is present.
+    let s = match s.split_once("://") {
+        Some((_, rest)) => rest,
+        None => s.as_str(),
+    };
+    // Cut the authority off before the first path / query / fragment delimiter.
+    let authority = match s.find(|c| c == '/' || c == '?' || c == '#') {
+        Some(idx) => &s[..idx],
+        None => s,
+    };
+    // Drop userinfo (`user:pass@host`): credentials must not reach host comparison.
+    let authority = match authority.rfind('@') {
+        Some(at) => &authority[at + 1..],
+        None => authority,
+    };
+    // Strip a numeric port suffix. Bracketed IPv6 literals and bare IPv6 literals
+    // (>= 2 colons) are left untouched here.
+    let host = if authority.contains('[')
+        || authority.contains(']')
+        || authority.chars().filter(|c| *c == ':').count() >= 2
+    {
+        authority.to_string()
+    } else {
+        match authority.rfind(':') {
+            Some(idx) if authority[idx + 1..].chars().all(|c| c.is_ascii_digit()) => {
+                authority[..idx].to_string()
+            }
+            _ => authority.to_string(),
+        }
+    };
+    // Remove one or more FQDN trailing dots.
+    host.trim_end_matches('.').to_string()
+}
+
 /// qB tracker 与站点 base/announce host 的匹配（用于源站定向）。
+///
+/// Both sides go through [`normalize_tracker_host`] before the loose subdomain check;
+/// the normalization is comparison-only and does not affect persisted data.
 fn adapter_matches_tracker(a: &NexusPhp, tracker_hosts: &[String]) -> bool {
     if tracker_hosts.is_empty() {
         return true;
@@ -731,12 +787,12 @@ fn adapter_matches_tracker(a: &NexusPhp, tracker_hosts: &[String]) -> bool {
     if let Some(h) = a.base.host_str() {
         hosts.push(h.to_string());
     }
+    let hosts: Vec<String> = hosts.iter().map(|h| normalize_tracker_host(h)).collect();
     tracker_hosts.iter().any(|t| {
-        let t = t.to_lowercase();
-        hosts.iter().any(|h| {
-            let h = h.to_lowercase();
-            t == h || t.ends_with(&format!(".{h}")) || h.ends_with(&format!(".{t}"))
-        })
+        let t = normalize_tracker_host(t);
+        hosts
+            .iter()
+            .any(|h| t == *h || t.ends_with(&format!(".{h}")) || h.ends_with(&format!(".{t}")))
     })
 }
 
@@ -957,9 +1013,14 @@ fn process_item(
 /// 内容名常是合集/目录名，站点标题却可能是某个成员种子的名字；只挑一个，
 /// 避免为不可控数量的成员名反复消耗检索预算。
 fn pick_member_fallback(content_name: &str, members: &[(String, i64)]) -> Option<String> {
+    let content = content_name.trim();
     members
         .iter()
-        .filter(|(n, _)| !n.trim().is_empty() && n != content_name)
+        .filter(|(n, _)| {
+            // Equality is compared after trimming both sides; case is left as-is.
+            let trimmed = n.trim();
+            !trimmed.is_empty() && trimmed != content
+        })
         .max_by_key(|(_, size)| *size)
         .map(|(n, _)| n.clone())
 }
@@ -982,9 +1043,16 @@ fn finish_judged(
     done_url: impl Fn(CoverageStatus, String, String) -> Event,
 ) -> Event {
     match level {
+        // 名字像但总大小/文件数完全不同：分集 vs 全集、不同分辨率/压制组。
+        // 这不是「待人工确认」，补不了，直接落其他版本。
+        JudgeLevel::Different => done_url(
+            CoverageStatus::OtherVersion,
+            format!("同名但内容不是同一段文件（{why}），未加入下载器"),
+            detail_url.to_string(),
+        ),
         JudgeLevel::NameOnly { .. } => done_url(
             CoverageStatus::ReviewPending,
-            format!("名字对得上但文件清单对不上：{why}"),
+            format!("名字对得上、总大小一致但文件清单拼不上：{why}"),
             detail_url.to_string(),
         ),
         JudgeLevel::Skip { why } => done(CoverageStatus::Rejected, why),
@@ -1584,5 +1652,316 @@ mod tests {
             .collect();
         let keyed = prefetch_keyed(&many, |h, _| Some(format!("ph-{h}")));
         assert_eq!(keyed.len(), 100, "至多 100 段内容");
+    }
+
+    // ---------- pick_member_fallback edge cases ----------
+
+    #[test]
+    fn member_fallback_empty_or_same_name_returns_none() {
+        // No candidates at all: nothing to search with.
+        assert_eq!(pick_member_fallback("content", &[]), None);
+        // The only member shares the content name: filtered out, no fallback.
+        assert_eq!(
+            pick_member_fallback("content", &[("content".to_string(), 100)]),
+            None
+        );
+        // Whitespace-only names count as empty candidates.
+        assert_eq!(
+            pick_member_fallback("content", &[("   ".to_string(), 100)]),
+            None
+        );
+    }
+
+    #[test]
+    fn member_fallback_tie_keeps_last_member_in_order() {
+        // Equal sizes: max_by_key returns the last maximal element, so the choice is
+        // deterministic and follows the member order returned by the downloader.
+        let members = vec![
+            ("first.mkv".to_string(), 100),
+            ("second.mkv".to_string(), 100),
+        ];
+        assert_eq!(
+            pick_member_fallback("content", &members).as_deref(),
+            Some("second.mkv")
+        );
+    }
+
+    #[test]
+    fn member_fallback_exact_name_excluded_smaller_other_name_kept() {
+        // The exact content-name member is excluded even when it is by far the largest;
+        // a different-named member is still picked as the fallback.
+        let members = vec![("content".to_string(), 900), ("alt.mkv".to_string(), 10)];
+        assert_eq!(
+            pick_member_fallback("content", &members).as_deref(),
+            Some("alt.mkv")
+        );
+    }
+
+    #[test]
+    fn member_fallback_equality_trims_whitespace() {
+        // Equality against content_name is compared after trimming both sides: a member
+        // padded with surrounding whitespace still counts as the content name and is
+        // excluded, leaving no fallback when it is the only member.
+        let members = vec![(" content ".to_string(), 100)];
+        assert_eq!(pick_member_fallback("content", &members), None);
+    }
+
+    #[test]
+    fn member_fallback_trimmed_same_name_excluded_picks_real_other() {
+        // The whitespace-padded same-name member (by far the largest) is excluded; the
+        // genuinely different-named member is still picked as the fallback.
+        let members = vec![
+            (" Show.S01 ".to_string(), 900),
+            ("Show.S01.E01.mkv".to_string(), 100),
+        ];
+        assert_eq!(
+            pick_member_fallback("Show.S01", &members).as_deref(),
+            Some("Show.S01.E01.mkv")
+        );
+    }
+
+    // ---------- adapter_matches_tracker edge cases ----------
+
+    fn adapter_with_announce(id: &str, url: &str, announce: &[&str]) -> Arc<NexusPhp> {
+        Arc::new(
+            NexusPhp::new(id, id, url, None, None)
+                .unwrap()
+                .with_announce_hosts(announce.iter().map(|s| s.to_string()).collect()),
+        )
+    }
+
+    #[test]
+    fn tracker_match_is_case_insensitive() {
+        let a = adapter("sbpt", "https://sbpt.link/");
+        // Both sides are lowercased before comparison, so mixed/upper case hits.
+        assert!(adapter_matches_tracker(&a, &["SBPT.LINK".to_string()]));
+        assert!(adapter_matches_tracker(&a, &["Sbpt.Link".to_string()]));
+    }
+
+    #[test]
+    fn tracker_match_ignores_base_url_scheme() {
+        // host_str() strips the scheme, so http vs https on the site base does not matter.
+        let http = adapter("a", "http://host.example/");
+        let https = adapter("b", "https://host.example/");
+        let hosts = vec!["host.example".to_string()];
+        assert!(adapter_matches_tracker(&http, &hosts));
+        assert!(adapter_matches_tracker(&https, &hosts));
+    }
+
+    #[test]
+    fn tracker_match_hits_second_entry_when_first_is_foreign() {
+        let a = adapter("sbpt", "https://sbpt.link/");
+        let hosts = vec!["unrelated.example".to_string(), "sbpt.link".to_string()];
+        assert!(adapter_matches_tracker(&a, &hosts));
+    }
+
+    #[test]
+    fn tracker_match_rejects_foreign_host() {
+        let a = adapter("sbpt", "https://sbpt.link/");
+        assert!(!adapter_matches_tracker(
+            &a,
+            &["foreign-tracker.example".to_string()]
+        ));
+    }
+
+    #[test]
+    fn tracker_match_empty_host_list_matches_every_adapter() {
+        // No tracker info on record: caller falls back to asking every source site.
+        let a = adapter("sbpt", "https://sbpt.link/");
+        assert!(adapter_matches_tracker(&a, &[]));
+    }
+
+    #[test]
+    fn tracker_match_accepts_reverse_subdomain_and_announce_alias() {
+        // Reverse direction: the site host is a subdomain of the tracker host.
+        let parent = adapter("luckpt", "https://pt.luckpt.de/");
+        assert!(adapter_matches_tracker(&parent, &["luckpt.de".to_string()]));
+        // Announce aliases configured for the site also participate in matching.
+        let alias =
+            adapter_with_announce("luckpt", "https://pt.luckpt.de/", &["tracker.luckpt.de"]);
+        assert!(adapter_matches_tracker(
+            &alias,
+            &["tracker.luckpt.de".to_string()]
+        ));
+    }
+
+    #[test]
+    fn tracker_match_ignores_port_and_trailing_dot() {
+        // Comparison-only normalization strips the port suffix and the FQDN trailing
+        // dot, so raw announce strings match the plain site host.
+        let a = adapter("sbpt", "https://tracker.example/");
+        assert!(adapter_matches_tracker(
+            &a,
+            &["tracker.example:8080".to_string()]
+        ));
+        assert!(adapter_matches_tracker(
+            &a,
+            &["tracker.example.".to_string()]
+        ));
+    }
+
+    #[test]
+    fn normalize_tracker_host_strips_scheme_port_path_case_whitespace_and_dot() {
+        assert_eq!(
+            normalize_tracker_host("tracker.example:8080"),
+            "tracker.example"
+        );
+        assert_eq!(
+            normalize_tracker_host("tracker.example."),
+            "tracker.example"
+        );
+        assert_eq!(
+            normalize_tracker_host("tracker.example.."),
+            "tracker.example"
+        );
+        assert_eq!(
+            normalize_tracker_host("udp://tracker.example:6969/announce"),
+            "tracker.example"
+        );
+        assert_eq!(
+            normalize_tracker_host("https://TRACKER.example/announce.php?passkey=x"),
+            "tracker.example"
+        );
+        assert_eq!(
+            normalize_tracker_host("  tracker.example  "),
+            "tracker.example"
+        );
+        assert_eq!(normalize_tracker_host("tracker.example"), "tracker.example");
+        // Bracketed IPv6 literals skip the port strip; the trailing port suffix is kept.
+        assert_eq!(
+            normalize_tracker_host("[2001:db8::1]:8080"),
+            "[2001:db8::1]:8080"
+        );
+    }
+
+    #[test]
+    fn normalize_tracker_host_strips_userinfo() {
+        // `user:pass@host`：@ 前的凭据剥离后再比 host，端口一并正常剥掉。
+        assert_eq!(
+            normalize_tracker_host("user:pass@tracker.example:8080/announce"),
+            "tracker.example"
+        );
+        assert_eq!(
+            normalize_tracker_host("https://name:secret@tracker.example/announce.php?passkey=x"),
+            "tracker.example"
+        );
+        // 没有 userinfo 时行为不变（回归）。
+        assert_eq!(
+            normalize_tracker_host("https://tracker.example/announce.php?passkey=x"),
+            "tracker.example"
+        );
+    }
+
+    #[test]
+    fn normalize_tracker_host_skips_port_strip_for_ipv6_literals() {
+        // 裸 IPv6（无方括号、多个冒号）：跳过端口剥离，地址末段不会被误当端口砍掉。
+        assert_eq!(normalize_tracker_host("2001:db8::1"), "2001:db8::1");
+        assert_eq!(
+            normalize_tracker_host("2001:db8::1:8080"),
+            "2001:db8::1:8080"
+        );
+        // 带方括号的 IPv6 维持既有行为：端口后缀保留（既有断言钉住）。
+        assert_eq!(
+            normalize_tracker_host("[2001:db8::1]:8080"),
+            "[2001:db8::1]:8080"
+        );
+        assert_eq!(
+            normalize_tracker_host("http://[2001:db8::1]:8080/announce"),
+            "[2001:db8::1]:8080"
+        );
+    }
+
+    #[test]
+    fn tracker_match_strips_userinfo_before_matching() {
+        // adapter 级回归：带 userinfo 的 announce 归一后仍命中站点 host。
+        let a = adapter("sbpt", "https://tracker.example/");
+        assert!(adapter_matches_tracker(
+            &a,
+            &["user:pass@tracker.example:8080/announce".to_string()]
+        ));
+        // 端口与尾点回归（既有形态照样命中）。
+        assert!(adapter_matches_tracker(
+            &a,
+            &["tracker.example:8080".to_string()]
+        ));
+        assert!(adapter_matches_tracker(
+            &a,
+            &["tracker.example.".to_string()]
+        ));
+    }
+
+    #[test]
+    fn tracker_match_normalizes_announce_url_forms() {
+        let a = adapter("sbpt", "https://tracker.example/");
+        // Full announce URL with udp scheme, port and path hits the plain host.
+        assert!(adapter_matches_tracker(
+            &a,
+            &["udp://tracker.example:6969/announce".to_string()]
+        ));
+        assert!(adapter_matches_tracker(
+            &a,
+            &["tracker.example.".to_string()]
+        ));
+        assert!(adapter_matches_tracker(
+            &a,
+            &["tracker.example:8080".to_string()]
+        ));
+        // A foreign host with a port still does not match.
+        assert!(!adapter_matches_tracker(
+            &a,
+            &["tracker.other:8080".to_string()]
+        ));
+        // Reverse subdomain still matches (regression).
+        let parent = adapter("luckpt", "https://pt.luckpt.de/");
+        assert!(adapter_matches_tracker(&parent, &["luckpt.de".to_string()]));
+    }
+
+    // ---------- is_checking edge cases ----------
+
+    #[test]
+    fn is_checking_recognizes_qb_checking_states() {
+        for state in [
+            "checking",
+            "checkingFiles",
+            "checkingResumeData",
+            "checkingDL",
+            "checkingUP",
+            "queuedForChecking",
+            "allocating",
+            "metadownload",
+            "metaDL",
+        ] {
+            assert!(is_checking(state), "expected checking state: {state}");
+        }
+    }
+
+    #[test]
+    fn is_checking_rejects_download_queue_and_settled_states() {
+        for state in [
+            "",
+            "queuedDL",
+            "queuedUP",
+            "downloading",
+            "uploading",
+            "stalledDL",
+            "stalledUP",
+            "pausedDL",
+            "pausedUP",
+            "seeding",
+            "completed",
+        ] {
+            assert!(!is_checking(state), "expected non-checking state: {state}");
+        }
+    }
+
+    #[test]
+    fn is_checking_is_exact_case_sensitive_match_currently() {
+        // Current behavior (pinned by this test): exact camelCase match; case variants
+        // and surrounding whitespace do not hit.
+        assert!(!is_checking("CHECKINGDL"));
+        assert!(!is_checking("checkingdl"));
+        assert!(!is_checking("MetaDL"));
+        assert!(!is_checking("metaDL "));
+        assert!(!is_checking(" metaDL"));
     }
 }

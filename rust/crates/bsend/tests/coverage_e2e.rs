@@ -28,7 +28,7 @@ use bsend::sites::Framework;
 
 type Handler = Arc<dyn Fn(&str, &str, &[u8]) -> (u16, &'static str, Vec<u8>) + Send + Sync>;
 
-/// 收下的请求（路径 + 请求体）——409 补挂场景断言 addTrackers 带了什么
+/// 收下的请求（路径 + 请求体）——409 场景断言不出现 addTrackers / addTags
 type CapturedRequests = Arc<Mutex<Vec<(String, Vec<u8>)>>>;
 
 struct MockServer {
@@ -256,13 +256,13 @@ fn qb_server_ex(
         if path.starts_with("/api/v2/torrents/start") || path.starts_with("/api/v2/torrents/stop") {
             return (404, "text/plain", Vec::new());
         }
-        // pause / resume / delete / addTrackers / setTrackers
+        // pause / resume / delete 等写操作兜底 200
         (200, "text/plain", Vec::new())
     }))
 }
 
-/// add 永远回 409（同 hash 种子已在下载器）：现有 tracker 是「另一家」的，
-/// addTrackers 的请求体收进 captured——钉住「已存在 → 补挂本站 tracker」整条路。
+/// add 永远回 409（同 hash 种子已在下载器）：单 tracker 策略下不补挂、不改标签，
+/// addTrackers / addTags 请求体收进 captured，断言侧要求这两类请求零出现。
 fn qb_server_409(torrent_hash: String, captured: CapturedRequests) -> MockServer {
     let torrent_hash = Arc::new(torrent_hash);
     MockServer::start(Arc::new(move |_method, path, body| {
@@ -293,7 +293,7 @@ fn qb_server_409(torrent_hash: String, captured: CapturedRequests) -> MockServer
             let json = r#"[{"name":"Pack/a.mkv","size":100,"index":0},{"name":"Pack/s/ch.srt","size":5,"index":1}]"#;
             return (200, "application/json", json.as_bytes().to_vec());
         }
-        // addTrackers 要排在 add 前面（前缀会撞上）
+        // addTrackers 要排在 add 前面（前缀会撞上）；仅记录，断言要求零请求
         if path.starts_with("/api/v2/torrents/addTrackers") {
             captured
                 .lock()
@@ -301,7 +301,7 @@ fn qb_server_409(torrent_hash: String, captured: CapturedRequests) -> MockServer
                 .push((path.to_string(), body.to_vec()));
             return (200, "text/plain", Vec::new());
         }
-        // addTags 同样会被 `/add` 前缀命中；排在前面并记为成功
+        // addTags 同样会被 `/add` 前缀命中；排在前面仅记录，断言要求零请求
         if path.starts_with("/api/v2/torrents/addTags") {
             captured
                 .lock()
@@ -406,6 +406,9 @@ fn test_config(qb_port: u16, pter_port: u16, hdsky_port: u16, dir: &std::path::P
                 search_url: None,
                 api_key: None,
                 announce_hosts: vec!["127.0.0.1".into()],
+                announce_url: Some(format!(
+                    "http://127.0.0.1:{pter_port}/announce?passkey=test"
+                )),
             },
             SiteConf {
                 id: "hdsky".into(),
@@ -415,6 +418,9 @@ fn test_config(qb_port: u16, pter_port: u16, hdsky_port: u16, dir: &std::path::P
                 search_url: None,
                 api_key: None,
                 announce_hosts: vec!["localhost".into()],
+                announce_url: Some(format!(
+                    "http://localhost:{hdsky_port}/announce?passkey=test"
+                )),
             },
         ],
         coverage: CoverageSettings {
@@ -711,13 +717,14 @@ fn e2e_plan_dry_run() {
     assert!(!cfg.coverage_state_path().exists(), "plan 不落盘");
 }
 
-/// 场景四：C 级（清单对不上）→ 待人工确认，绝不动下载器。
+/// 场景四：C 级（同名、总大小一致但清单拼不上）→ 待人工确认，绝不动下载器。
 #[test]
 fn e2e_name_only_goes_to_review() {
     let dir = temp_dir("review");
+    // 总大小必须与本地一致（105）：总大小不同已属「其他版本」，不再进人工队列
     let t_site = Arc::new(torrent_bytes(
         "Pack",
-        &[("a.mkv", 100), ("s/ch.srt", 5), ("extra.nfo", 1)],
+        &[("a.mkv", 100), ("s/ch.srt", 4), ("extra.nfo", 1)],
     ));
     let hash = bencode::info_hash_v1(&torrent_bytes("Pack", FILES)).unwrap();
 
@@ -760,9 +767,60 @@ fn e2e_name_only_goes_to_review() {
     );
 }
 
-/// 场景五：add 回 409（同 hash 种子已在下载器）→ 不算失败，补挂本站 tracker 后记已辅。
+/// 场景四之二：同名但总大小不同（分集 vs 全集、1080p vs 2160p）→ 其他版本，
+/// 不进人工确认队列，也不动下载器。
 #[test]
-fn e2e_already_exists_attaches_tracker() {
+fn e2e_size_diff_goes_to_other_version() {
+    let dir = temp_dir("size_diff");
+    let t_site = Arc::new(torrent_bytes(
+        "Pack",
+        &[("a.mkv", 100), ("s/ch.srt", 5), ("extra.nfo", 1)],
+    ));
+    let hash = bencode::info_hash_v1(&torrent_bytes("Pack", FILES)).unwrap();
+
+    let qb = qb_server(hash, Vec::new());
+    let pter = nexus_site_server("hit", t_site.clone());
+    let hdsky = nexus_site_server("miss", t_site.clone());
+    let cfg = test_config(qb.port, pter.port, hdsky.port, &dir);
+
+    let qb_client = Arc::new(QBittorrent::new(&cfg.downloader.url, "admin", "pass").unwrap());
+    let ads = adapters(&cfg);
+    let mut index = ContentIndex::load(&cfg.coverage_state_path());
+    let _ = run_round(
+        &cfg,
+        qb_client,
+        &ads,
+        &mut index,
+        |_| {},
+        RoundOptions {
+            persist: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    let entry = index.contents.values().next().unwrap();
+    assert_eq!(
+        entry.coverage["pter"].status,
+        CoverageStatus::OtherVersion,
+        "总大小不同应判其他版本"
+    );
+    assert!(entry.coverage["pter"]
+        .note
+        .as_deref()
+        .unwrap()
+        .contains("不是同一段文件"));
+    assert_eq!(
+        qb.requests("POST /api/v2/torrents/add").len(),
+        0,
+        "其他版本绝不动下载器"
+    );
+}
+
+/// 场景五：add 回 409（同 hash 种子已在下载器）→ 不算失败；单 tracker 策略下
+/// 不改动原种子、不补挂任何 tracker，只记「已存在、已由外部工具覆盖」。
+#[test]
+fn e2e_already_exists_does_not_touch_original_torrent() {
     let dir = temp_dir("exists409");
     let t = Arc::new(torrent_bytes("Pack", FILES));
     let hash = bencode::info_hash_v1(&t).unwrap();
@@ -797,21 +855,16 @@ fn e2e_already_exists_attaches_tracker() {
     );
     let note = entry.coverage["pter"].note.as_deref().unwrap();
     assert!(note.contains("已存在"), "note = {note}");
-    assert!(note.contains("补挂"), "note = {note}");
-    // 补挂请求真发出去了，带的正是本站 announce（tracker.example）
+    assert!(note.contains("单 tracker"), "note = {note}");
+    // 单 tracker 策略：不补挂、不改标签，原种子保持原样
     let adds = captured.lock().unwrap();
     let tracker_reqs: Vec<_> = adds
         .iter()
         .filter(|(p, _)| p.contains("addTrackers"))
         .collect();
     let tag_reqs: Vec<_> = adds.iter().filter(|(p, _)| p.contains("addTags")).collect();
-    assert_eq!(tracker_reqs.len(), 1, "只补挂一次");
-    let body = String::from_utf8_lossy(&tracker_reqs[0].1).to_string();
-    assert!(body.contains("tracker.example"), "body = {body}");
-    // 接管旧种同时补 Boxsend 标签（append 语义，不覆盖原标签）
-    assert_eq!(tag_reqs.len(), 1, "接管路径必须补标签");
-    let tag_body = String::from_utf8_lossy(&tag_reqs[0].1).to_string();
-    assert!(tag_body.contains("Boxsend"), "tags body = {tag_body}");
+    assert_eq!(tracker_reqs.len(), 0, "不允许 addTrackers");
+    assert_eq!(tag_reqs.len(), 0, "不允许改原种子标签");
     drop(adds);
     // 已存在路径不动启停：那条种子本来就在跑
     assert_eq!(
@@ -1648,9 +1701,16 @@ fn qb_server_for_reseed(
                 return (200, "application/json", json.into_bytes());
             }
             let json = format!(
-                r#"[{{"hash":"{lh}","infohash_v2":"","name":"Pack","save_path":"/data/","category":"","tags":"","size":105,"progress":1.0,"tracker_hosts":[]}}]"#
+                r#"[{{"hash":"{lh}","infohash_v2":"","name":"Pack","save_path":"/data/","category":"","tags":"","size":105,"progress":1.0,"tracker":"http://localhost/announce?passkey=ZZZ","tracker_hosts":[]}}]"#
             );
             return (200, "application/json", json.into_bytes());
+        }
+        if path.starts_with("/api/v2/torrents/trackers") {
+            return (
+                200,
+                "application/json",
+                br#"[{"url":"http://localhost/announce?passkey=ZZZ"}]"#.to_vec(),
+            );
         }
         if path.starts_with("/api/v2/torrents/export") {
             return (
@@ -1924,7 +1984,12 @@ fn reseed_site_server_upload_existed(torrent: Arc<Vec<u8>>) -> MockServer {
         }
         if path.starts_with("/takeupload.php") {
             uploaded.store(true, Ordering::SeqCst);
-            return (200, "text/html", "<p>种子已存在</p>".as_bytes().to_vec());
+            return (
+                200,
+                "text/html",
+                format!(r#"<p>种子已存在</p><a href="details.php?id=1002">{NAME}</a>"#)
+                    .into_bytes(),
+            );
         }
         if path.starts_with("/torrents.php") {
             if uploaded.load(Ordering::SeqCst) {

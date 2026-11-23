@@ -91,6 +91,7 @@
       "framework": "NexusPHP",
       "enabled": true,
       "overrides": {
+        "announceURL": "",
         "uploadActionPath": "takeupload.php",
         "titleField": "name",
         "imdbField": "url",
@@ -687,6 +688,8 @@
     "siteIntervals": {},
     "reseedRules": {},
     "autoReseedSites": [],
+    "allowOtherVersion": true,
+    "skipKeywords": [],
     "publishEnabled": false,
     "skipPostCheck": false,
     "skipHashCheck": false

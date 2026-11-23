@@ -14,7 +14,7 @@
   boxsend.json 路径。缺省 %LOCALAPPDATA%\BoxSend\boxsend.json，其次仓库根 boxsend.json。
 
 .PARAMETER OutFile
-  输出 Markdown 路径。缺省 doc/SITE-ADAPTATION-MATRIX.md。
+  输出 Markdown 路径。缺省打印到 stdout（不再默认覆盖 doc/ 下的文件）。
 
 .PARAMETER Print
   同时把 Markdown 打到 stdout（默认写文件后只打印一行摘要）。
@@ -88,7 +88,7 @@ if (-not $ConfigPath) {
     throw "找不到配置：$ConfigPath"
 }
 
-if (-not $OutFile) { $OutFile = Join-Path $repoRoot 'doc\SITE-ADAPTATION-MATRIX.md' }
+$toStdout = -not $OutFile
 
 $argv = @('--config', (Resolve-Path -LiteralPath $ConfigPath).Path, 'sites', '--json')
 $raw = (& $Binary @argv 2>&1 | Out-String)
@@ -271,11 +271,14 @@ if ($untested.Count -eq 0) {
 [void]$sb.AppendLine('- **cookie**：`cookies.json` 中该 host 的 cookie 条数（只显示数量，不显示值）。')
 $text = $sb.ToString()
 
-$parent = Split-Path -Parent $OutFile
-if ($parent -and -not (Test-Path -LiteralPath $parent)) {
-    New-Item -ItemType Directory -Path $parent -Force | Out-Null
+if ($OutFile) {
+    $parent = Split-Path -Parent $OutFile
+    if ($parent -and -not (Test-Path -LiteralPath $parent)) {
+        New-Item -ItemType Directory -Path $parent -Force | Out-Null
+    }
+    Set-Content -LiteralPath $OutFile -Value $text -Encoding utf8
 }
-Set-Content -LiteralPath $OutFile -Value $text -Encoding utf8
-if ($Print) { Write-Output $text }
+if ($Print -or $toStdout) { Write-Output $text }
+$target = if ($OutFile) { $OutFile } else { 'stdout' }
 Write-Output ("站点矩阵已生成：{0} 个站点（启用 {1}，实测 ok {2}，fail {3}，未测 {4}）→ {5}" -f `
-        $rows.Count, $enabled, $drillOk, $drillFail, $drillUntested, $OutFile)
+        $rows.Count, $enabled, $drillOk, $drillFail, $drillUntested, $target)

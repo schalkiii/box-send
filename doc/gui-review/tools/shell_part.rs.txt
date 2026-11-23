@@ -1,0 +1,206 @@
+impl Render for BsendGui {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let header = self.render_header();
+        let toolbar = self.render_toolbar(cx);
+        let body = match self.tab {
+            Tab::Overview => self.render_overview(cx),
+            Tab::Drafts => self.render_drafts(cx),
+            Tab::Autopost => self.render_autopost(cx),
+            Tab::Config => self.render_config(cx),
+            Tab::Diag => self.render_diag(cx),
+            Tab::Help => views::help::render_help(),
+        };
+        let log_panel = self.render_log(cx);
+
+        // 三段式外壳：固定头部 / 固定工具栏 / 可伸缩主体 / 固定状态栏。
+        // 只有主体允许收缩（min_h(0)），所以窗口再小也不会把头部和工具栏压成重叠。
+        div()
+            .flex()
+            .flex_col()
+            .size_full()
+            .bg(rgb(theme::BG))
+            .text_color(rgb(theme::TEXT))
+            .text_sm()
+            .child(header)
+            .child(toolbar)
+            .child(
+                div()
+                    .flex()
+                    .flex_1()
+                    .min_h(px(0.))
+                    .gap_2()
+                    .px_3()
+                    .pb_2()
+                    .child(body)
+                    .child(log_panel),
+            )
+            .child(self.render_status_bar())
+    }
+}
+
+impl BsendGui {
+    /// 头部：产品名 + 一句话定位 + 索引摘要（截断）+ 运行中徽标
+    fn render_header(&self) -> impl IntoElement {
+        div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap_3()
+            .px_4()
+            .h(theme::HEADER_H)
+            .bg(rgb(theme::BG))
+            .child(
+                div()
+                    .flex_none()
+                    .text_xl()
+                    .font_weight(FontWeight(600.0))
+                    .text_color(rgb(theme::ACCENT))
+                    .child("BoxSend"),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .text_xs()
+                    .text_color(rgb(theme::TEXT_FAINT))
+                    .child("PT 辅种引擎"),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.))
+                    .text_xs()
+                    .text_color(rgb(theme::TEXT_FAINT))
+                    .truncate()
+                    .child(self.stats.clone()),
+            )
+            .when(self.busy, |d| {
+                d.child(div().flex_none().child(widgets::badge(
+                    format!("运行中 · 已处理 {} 格", self.cells_done),
+                    theme::WARN,
+                )))
+            })
+    }
+
+    /// 工具栏：左侧 tab（不能被压缩），右侧常驻任务按钮
+    fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let tabs: [(&str, &str, Tab); 6] = [
+            ("tab-overview", "概览", Tab::Overview),
+            ("tab-drafts", "转种草稿", Tab::Drafts),
+            ("tab-autopost", "自动发种", Tab::Autopost),
+            ("tab-config", "配置", Tab::Config),
+            ("tab-diag", "诊断", Tab::Diag),
+            ("tab-help", "说明", Tab::Help),
+        ];
+        let mut strip = div().flex().flex_none().items_center().gap_1();
+        for (id, label, target) in tabs {
+            strip = strip.child(widgets::tab(
+                id,
+                label,
+                self.tab == target,
+                cx.listener(move |this: &mut Self, _, _, cx| {
+                    this.tab = target;
+                    cx.notify();
+                }),
+            ));
+        }
+
+        div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap_2()
+            .px_3()
+            .h(theme::TOOLBAR_H)
+            .bg(rgb(theme::SURFACE))
+            .border_b_1()
+            .border_color(rgb(theme::BORDER_SUBTLE))
+            .child(strip)
+            .child(div().flex_1().min_w(px(0.)))
+            .child(widgets::button(
+                "job-refresh",
+                "刷新",
+                cx.listener(|this, _, _, cx| this.start_job(Job::Refresh, cx)),
+            ))
+            .child(widgets::button(
+                "job-scan",
+                "扫描",
+                cx.listener(|this, _, _, cx| this.start_job(Job::Scan, cx)),
+            ))
+            .child(widgets::button(
+                "job-prime",
+                "基线",
+                cx.listener(|this, _, _, cx| this.start_job(Job::Prime, cx)),
+            ))
+            .child(widgets::button_accent(
+                "job-round",
+                "跑一轮",
+                cx.listener(|this, _, _, cx| this.start_job(Job::Round, cx)),
+            ))
+    }
+
+    /// 底部状态栏：运行状态 / 统计 / 最近一条日志 / 配置路径（固定高度，永远可见）
+    fn render_status_bar(&self) -> impl IntoElement {
+        let last = self.log.last().cloned().unwrap_or_else(|| "尚无日志".into());
+        div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap_3()
+            .px_3()
+            .h(theme::STATUS_H)
+            .bg(rgb(theme::SURFACE))
+            .border_t_1()
+            .border_color(rgb(theme::BORDER_SUBTLE))
+            .text_xs()
+            .child(
+                div()
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .child(
+                        div()
+                            .size(px(7.))
+                            .rounded_full()
+                            .bg(rgb(if self.busy { theme::WARN } else { theme::SUCCESS })),
+                    )
+                    .child(
+                        div()
+                            .text_color(rgb(theme::TEXT_DIM))
+                            .child(if self.busy {
+                                format!("运行中 · 已处理 {} 格", self.cells_done)
+                            } else {
+                                "空闲".to_string()
+                            }),
+                    ),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .text_color(rgb(theme::TEXT_FAINT))
+                    .child(format!(
+                        "站点 {} · 草稿 {} · 日志 {}",
+                        self.sites.len(),
+                        self.drafts.len(),
+                        self.log.len()
+                    )),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.))
+                    .text_color(rgb(theme::TEXT_FAINT))
+                    .truncate()
+                    .child(last),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .w(px(360.))
+                    .text_right()
+                    .text_color(rgb(theme::TEXT_FAINT))
+                    .truncate()
+                    .child(self.config_path.display().to_string()),
+            )
+    }
+}

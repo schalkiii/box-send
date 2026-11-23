@@ -287,6 +287,9 @@ mod tests {
             Ok(TorrentPage {
                 name: format!("{}.1080p-GROUP", self.id),
                 download_url: format!("https://{}/download.php?id=1", self.id),
+                size_bytes: None,
+                uploader_uid: None,
+                uploader_name: None,
             })
         }
 

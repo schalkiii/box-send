@@ -33,6 +33,9 @@ pub struct SiteConf {
     pub api_key: Option<String>,
     /// 站点 announce 的 host 列表（小写，首个是页面 host）＝判断「这份文件已经在哪个站做种」
     pub announce_hosts: Vec<String>,
+    /// 该站完整 tracker 地址（含个人 passkey）。第一次在该站发种前必须配置：
+    /// 此时 qB 里还没有任何该站种子，无法从现有 tracker 里采集 passkey。
+    pub announce_url: Option<String>,
 }
 
 impl SiteConf {
@@ -86,6 +89,11 @@ pub struct CoverageSettings {
     pub min_size_gb: f64,
     pub max_size_gb: f64,
     pub categories: Vec<String>,
+    /// 站点已有同名「其他版本」时照样发（默认 true）：分集/全集、不同压制组都发；
+    /// 画质高低交给站点自己的发布规则，工具不自行比较。
+    pub allow_other_version: bool,
+    /// 内容类型黑名单：标题命中即跳过（教育、成人等不参与自动发种）
+    pub skip_keywords: Vec<String>,
     pub verify_wait_sec: u64,
     pub verify_poll_sec: u64,
     /// 站内严格查重没命中时换宽松查询词再问一次
@@ -143,6 +151,8 @@ impl Default for CoverageSettings {
             min_size_gb: 0.0,
             max_size_gb: 0.0,
             categories: Vec::new(),
+            allow_other_version: true,
+            skip_keywords: Vec::new(),
             verify_wait_sec: 600,
             verify_poll_sec: 10,
             relaxed_retry_search: true,
@@ -341,6 +351,8 @@ impl Config {
             min_size_gb: v_f64(&assist, "minSizeGB", d.min_size_gb),
             max_size_gb: v_f64(&assist, "maxSizeGB", d.max_size_gb),
             categories: v_str_list(&assist, "categories"),
+            allow_other_version: v_bool(&assist, "allowOtherVersion", d.allow_other_version),
+            skip_keywords: v_str_list(&assist, "skipKeywords"),
             // 负值钳成 0：as u64 回绕成巨值会让 push_tail 的轮询 sleep 数年，整轮无声挂死
             verify_wait_sec: v_i64(&assist, "verifyWaitSec", d.verify_wait_sec as i64).max(0)
                 as u64,
@@ -462,8 +474,13 @@ impl Config {
             }
             announce_hosts.retain(|h| !h.is_empty());
             announce_hosts.dedup();
+            let announce_url = s
+                .get("overrides")
+                .and_then(|o| v_str(o, "announceURL"))
+                .filter(|u| !u.is_empty());
             sites.push(SiteConf {
                 announce_hosts,
+                announce_url,
                 id,
                 name: v_str(s, "name").unwrap_or_default(),
                 url,
@@ -811,6 +828,32 @@ mod tests {
         let sky = by_id("hdsky");
         assert!(sky.matches_tracker("tracker.hdsky.me"));
         assert!(!sky.matches_tracker("chdbits.xyz"));
+    }
+
+    #[test]
+    fn announce_url_is_loaded_for_first_upload() {
+        // 第一次向新站发种时 qB 里没有该站 tracker，只能靠配置里的完整地址
+        let p = write_temp_isolated(
+            "announce-url",
+            "boxsend.json",
+            r#"{
+          "sourceSites": [
+            {"id": "hdsky", "name": "天空", "url": "https://hdsky.me/", "framework": "NexusPHP", "enabled": true,
+             "overrides": {"announceURL": "https://tracker.hdsky.me/announce.php?passkey=abc"}},
+            {"id": "pter", "name": "猫站", "url": "https://pterclub.com/", "framework": "NexusPHP", "enabled": true}
+          ],
+          "downloader": {"url": "http://x"}
+        }"#,
+        );
+        let cfg = Config::load(&p).unwrap();
+        let sky = cfg.sites.iter().find(|s| s.id == "hdsky").unwrap();
+        assert_eq!(
+            sky.announce_url.as_deref(),
+            Some("https://tracker.hdsky.me/announce.php?passkey=abc")
+        );
+        // 没配的站保持空，运行时才会回退到从 qB 现有 tracker 里找
+        let pter = cfg.sites.iter().find(|s| s.id == "pter").unwrap();
+        assert!(pter.announce_url.is_none());
     }
 
     #[test]

@@ -2,9 +2,9 @@
 //!
 //! 与 Swift 版 `BoxSendKit` 的关系：判定口径（`matcher`）、bencode 语义（`bencode`）、
 //! qB 字段兼容（`qbittorrent`）、NexusPHP 检索启发式（`sites::nexusphp`）全部逐函数对齐；
-//! 编排层（`coverage`）按 `COVERAGE-PLAN.md` 重写：内容级索引、站点 worker 并发、
+//! 编排层（`coverage`）：内容级索引、站点 worker 并发、
 //! 辅种真推下载器、转种出草稿并经 `autopost` 门禁发布。
-//! 设计文档见仓库根目录 `COVERAGE-PLAN.md` 与 `RUST-ANALYSIS.md`。
+//! 设计与审计文档见 `doc/ARCHITECTURE.md` 与 `doc/ROADMAP.md`。
 
 pub mod autopost;
 pub mod bencode;
@@ -26,6 +26,7 @@ pub mod reseed;
 pub mod resolver;
 pub mod sites;
 pub mod throttle;
+pub mod torrent_rewrite;
 
 pub use config::{Config, CookieEntry, CoverageSettings, DownloaderSettings, ReseedMode, SiteConf};
 pub use cookiecloud::{CookieCloud, CookieCloudSettings};

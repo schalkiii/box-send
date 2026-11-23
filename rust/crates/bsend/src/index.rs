@@ -45,6 +45,8 @@ pub enum CoverageStatus {
     Failed,
     /// 转种臂生成的待发草稿（v1 默认：转种只出报告）
     ReseedDraft,
+    /// 命中内容类型黑名单（教育/成人等）等按策略不再自动发的草稿：终态，第二轮起不再入队
+    Skipped,
 }
 
 impl CoverageStatus {
@@ -62,6 +64,7 @@ impl CoverageStatus {
             CoverageStatus::WaitSource => "待找源",
             CoverageStatus::Failed => "失败",
             CoverageStatus::ReseedDraft => "转种草稿",
+            CoverageStatus::Skipped => "已跳过（内容类型）",
         }
     }
 
@@ -81,6 +84,7 @@ impl CoverageStatus {
                 | CoverageStatus::ReseedDraft
                 | CoverageStatus::OtherVersion
                 | CoverageStatus::SameHashSkip
+                | CoverageStatus::Skipped
         )
     }
 }

@@ -41,6 +41,8 @@ pub struct NexusPhp {
     pub cookie: Option<String>,
     /// 该站 announce 的 host 列表（判断「已在做种」用；默认就是页面 host）
     pub announce_hosts: Vec<String>,
+    /// 该站完整 announce 地址（含 passkey）。第一次发种时使用；为空则从 qB 现有 tracker 取。
+    pub announce_url: Option<String>,
     pub user_agent: String,
     client: Client,
 }
@@ -52,11 +54,18 @@ pub struct SearchHit {
     pub title: String,
 }
 
-/// 详情页解析结果：发布名 + 下载链接
+/// 详情页解析结果：发布名 + 下载链接 + 发后定位核对字段（大小/上传者）。
+/// 核对字段解析不出时为 `None`：比对时该弱维度跳过，不算冲突，也不靠缺字段放行。
 #[derive(Debug, Clone)]
 pub struct TorrentPage {
     pub name: String,
     pub download_url: String,
+    /// 页面解析出的总大小（字节）；解析不出为 None
+    pub size_bytes: Option<i64>,
+    /// 上传者 uid（`usercp.php?id=` / `userdetails.php?id=` / `details.php?uploader=`）；解析不出为 None
+    pub uploader_uid: Option<String>,
+    /// 上传者展示名
+    pub uploader_name: Option<String>,
 }
 
 /// 上传表单 multipart 提交的响应（转种流水线用）
@@ -66,6 +75,8 @@ pub struct UploadResponse {
     pub body: String,
     /// 跟随后的最终 URL
     pub final_url: String,
+    /// 响应头快照（已剔除 Cookie/Set-Cookie，调试落盘用，不含会话凭据）
+    pub headers: Vec<(String, String)>,
 }
 
 /// 检索结果。必须区分「站内没有」与「预算不够没查完」——后者绝不能落负缓存。
@@ -106,6 +117,7 @@ impl NexusPhp {
             site_name: site_name.to_string(),
             base,
             announce_hosts,
+            announce_url: None,
             search_url_tmpl: search_url_tmpl
                 .filter(|s| !s.is_empty())
                 .map(|s| s.to_string()),
@@ -113,6 +125,13 @@ impl NexusPhp {
             user_agent: DEFAULT_UA.to_string(),
             client,
         })
+    }
+
+    /// 设置该站完整 announce 地址（含 passkey）。第一次在该站发种前必须提供，
+    /// 否则无法构造只带目标站 tracker 的上传种子。
+    pub fn with_announce_url(mut self, url: Option<String>) -> Self {
+        self.announce_url = url.filter(|u| !u.trim().is_empty());
+        self
     }
 
     /// 设置 announce host 列表（页面 host 之外还有别名的站：luckpt / chdbits）
@@ -203,11 +222,28 @@ impl NexusPhp {
             .with_context(|| format!("上传请求没通：{action}"))?;
         let status = resp.status().as_u16();
         let final_url = resp.url().as_str().to_string();
+        // 调试落盘用的头快照：会话凭据类头一律不进快照，避免回包被写进审计/排查目录。
+        // 必须在 `resp.text()` 取走响应体之前快照（text 拿走 self 所有权）。
+        let headers = resp
+            .headers()
+            .iter()
+            .filter(|(k, _)| {
+                let k = k.as_str().to_ascii_lowercase();
+                k != "cookie" && k != "set-cookie"
+            })
+            .map(|(k, v)| {
+                (
+                    k.as_str().to_string(),
+                    v.to_str().unwrap_or_default().to_string(),
+                )
+            })
+            .collect();
         let body = resp.text().unwrap_or_default();
         Ok(UploadResponse {
             status,
             body,
             final_url,
+            headers,
         })
     }
 
@@ -371,6 +407,9 @@ impl NexusPhp {
         let page = TorrentPage {
             name: String::new(),
             download_url: url.to_string(),
+            size_bytes: None,
+            uploader_uid: None,
+            uploader_name: None,
         };
         self.download_torrent(&page, referer)
     }
@@ -986,7 +1025,125 @@ pub fn parse_torrent_page(html: &str, detail_url: &str, base: &Url) -> Option<To
     if name.is_empty() {
         return None;
     }
-    Some(TorrentPage { name, download_url })
+    let (uploader_uid, uploader_name) = page_uploader(&html);
+    let size_bytes = page_size_bytes(&html);
+    Some(TorrentPage {
+        name,
+        download_url,
+        size_bytes,
+        uploader_uid,
+        uploader_name,
+    })
+}
+
+/// 人类可读大小 → 字节。支持 B / KiB / KB / MiB / MB / GiB / GB / TiB / TB（1024 进制）；
+/// 解析不出返回 None。站点详情页大小文本形如 `12.34 GiB` / `1,024 MB`。
+pub fn parse_human_size(text: &str) -> Option<i64> {
+    let cleaned = text.replace(',', "");
+    let tokens: Vec<&str> = cleaned.split_whitespace().collect();
+    let mut i = 0;
+    while i < tokens.len() {
+        let num: f64 = tokens[i].parse().ok()?;
+        let unit = tokens
+            .get(i + 1)
+            .map(|u| u.trim_end_matches('.'))
+            .unwrap_or("B")
+            .to_ascii_lowercase();
+        let factor: f64 = match unit.as_str() {
+            "b" => 1.0,
+            "kib" | "kb" => 1024.0,
+            "mib" | "mb" => 1024.0f64.powi(2),
+            "gib" | "gb" => 1024.0f64.powi(3),
+            "tib" | "tb" => 1024.0f64.powi(4),
+            _ => {
+                i += 1;
+                continue;
+            }
+        };
+        let bytes = (num * factor).round() as i64;
+        if bytes > 0 {
+            return Some(bytes);
+        }
+        i += 1;
+    }
+    None
+}
+
+/// 从详情页 HTML 提取总大小（字节）。只认带单位的大小文本；纯数字不当大小。
+pub fn page_size_bytes(html: &str) -> Option<i64> {
+    let doc = Html::parse_document(html);
+    let sel = Selector::parse("td,th,span,div").ok()?;
+    for el in doc.select(&sel) {
+        let t: String = el.text().collect::<String>();
+        let t = t.trim();
+        if t.is_empty() || t.chars().count() > 40 {
+            continue;
+        }
+        if parse_human_size(t).is_some() {
+            return parse_human_size(t);
+        }
+    }
+    None
+}
+
+/// 从详情页 HTML 提取上传者 `(uid, 展示名)`。排除种子详情锚点本身：
+/// 只认用户主页链接（`usercp.php?id=` / `userdetails.php?id=` / `details.php?uploader=`）。
+pub fn page_uploader(html: &str) -> (Option<String>, Option<String>) {
+    let doc = Html::parse_document(html);
+    let sel = Selector::parse("a").unwrap();
+    for el in doc.select(&sel) {
+        let Some(href) = el.value().attr("href") else {
+            continue;
+        };
+        let uid = uploader_uid_from_href(href);
+        if let Some(uid) = uid {
+            let name: String = el.text().collect::<String>().trim().to_string();
+            return (Some(uid), (!name.is_empty()).then_some(name));
+        }
+    }
+    (None, None)
+}
+
+/// 从链接 href 里取上传者 uid；种子详情锚（`details.php?id=`）与导航链接不参与。
+fn uploader_uid_from_href(href: &str) -> Option<String> {
+    const PATTERNS: &[&str] = &[
+        "usercp.php?id=",
+        "userdetails.php?id=",
+        "user.php?id=",
+        "details.php?uploader=",
+    ];
+    for pat in PATTERNS {
+        if let Some(p) = href.find(pat) {
+            let after = &href[p + pat.len()..];
+            let digits: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
+            if !digits.is_empty() {
+                return Some(digits);
+            }
+        }
+    }
+    None
+}
+
+/// 从 Cookie 头提取当前账号 uid：NexusPHP 家族常见 `c_secure_uid=` / `uid=` / `myuid=`。
+/// 提取不到返回 None（上传者维度跳过核对，不算冲突）。
+pub fn current_uid_from_cookie(cookie: &str) -> Option<String> {
+    for pair in cookie.split(';') {
+        let Some((k, v)) = pair.split_once('=') else {
+            continue;
+        };
+        let k = k.trim().to_ascii_lowercase();
+        if matches!(k.as_str(), "c_secure_uid" | "uid" | "myuid") {
+            let digits: String = v
+                .trim()
+                .chars()
+                .take_while(|c| c.is_ascii_digit())
+                .collect();
+            if !digits.is_empty() {
+                return Some(digits);
+            }
+        }
+    }
+    None
 }
 
 fn collapse_spaces(s: &str) -> String {

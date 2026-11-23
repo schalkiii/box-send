@@ -2,11 +2,12 @@
 //! 保留它的全部兼容性补丁（同一条注释里写明为什么）：
 //! - 登录 200+"Ok." 或 204（qB 5.2+ 已有会话）都算成功；
 //! - `/torrents/files` 参数名 `hashes`→`hash` 两版都试，响应可能是 `[file]` 或 `[[file]]`；
-//! - `/torrents/trackers` 参数名 `hash`→`infohash` 两版都试（qB 5.x 只认前者）；
-//! - add 回 409 = 种子已在下载器（跨站转种同 hash 太常见），要补挂目标站 tracker 才算落地；
-//! - addTrackers 带 `hash`+`hashes` 两份参数，老版本回退 setTrackers 整表重写。
+//! - `/torrents/trackers` 参数名 `hash`→`infohash` 两版都试（qB 5.x 只认前者）。
+//!
+//! 单 tracker 策略（`doc/ARCHITECTURE.md` §3.3）：本客户端**没有**任何写 tracker
+//! 的接口；同 hash 已存在的种子一律跳过、不改动。
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
@@ -350,8 +351,95 @@ impl QBittorrent {
         Ok(self.torrent_info(hash).and_then(|v| parse_torrent(&v)))
     }
 
+    /// 全部种子的 v1 info hash 集合（小写）。上传前断言新种 hash 不在下载器里用。
+    pub fn existing_hashes(&self) -> Result<HashSet<String>> {
+        self.login()?;
+        let arr = self
+            .get_json("/api/v2/torrents/info?limit=50000")?
+            .as_array()
+            .cloned()
+            .ok_or_else(|| anyhow!("torrents/info 回包不是数组"))?;
+        Ok(arr
+            .iter()
+            .filter_map(|t| t.get("hash")?.as_str())
+            .map(|h| h.to_lowercase())
+            .filter(|h| !h.is_empty())
+            .collect())
+    }
+
+    /// 一条种子当前的 http(s) tracker URL 列表。qB 的 trackers 接口会带
+    /// `** [DHT] **` / `** [PeX] **` / `** [LSD] **` 伪条目，按 scheme 过滤后再计数。
+    pub fn trackers(&self, hash: &str) -> Result<Vec<String>> {
+        self.login()?;
+        for param in ["hash", "infohash"] {
+            let Ok(resp) = self
+                .client
+                .get(format!(
+                    "{}/api/v2/torrents/trackers?{}={}",
+                    self.base_url, param, hash
+                ))
+                .headers(self.referer_headers())
+                .send()
+            else {
+                continue;
+            };
+            let st = resp.status().as_u16();
+            if st != 200 {
+                self.session_died(st);
+                continue;
+            }
+            let Ok(text) = resp.text() else { continue };
+            let Ok(Value::Array(arr)) = serde_json::from_str::<Value>(&text) else {
+                continue;
+            };
+            return Ok(arr
+                .into_iter()
+                .filter_map(|t| t.get("url").and_then(|v| v.as_str()).map(|s| s.to_string()))
+                .filter(|u| {
+                    let u = u.trim();
+                    u.starts_with("http://") || u.starts_with("https://")
+                })
+                .collect());
+        }
+        Err(anyhow!("读不到 {hash} 的 tracker 列表"))
+    }
+
+    /// 一条种子的 http(s) tracker 条数（单 tracker 策略挂种后必须 == 1）。
+    pub fn tracker_count(&self, hash: &str) -> Result<usize> {
+        Ok(self.trackers(hash)?.len())
+    }
+
+    /// 从下载器现有种子里，按站点 announce host 取一条完整 announce URL（带 passkey）。
+    /// 用于把源种 announce 改写为目标站唯一一条；本地没有该站任何种子时返回 `None`。
+    pub fn announce_for_hosts(&self, hosts: &[String]) -> Option<String> {
+        self.login().ok()?;
+        let arr = self
+            .get_json("/api/v2/torrents/info?limit=50000")
+            .ok()?
+            .as_array()
+            .cloned()?;
+        let want: Vec<String> = hosts.iter().map(|h| h.to_lowercase()).collect();
+        for t in arr {
+            let Some(u) = t.get("tracker").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            let u = u.trim();
+            if !u.starts_with("http://") && !u.starts_with("https://") {
+                continue;
+            }
+            let host = url::Url::parse(u).ok()?.host_str()?.to_lowercase();
+            if want
+                .iter()
+                .any(|w| &host == w || host.ends_with(&format!(".{w}")))
+            {
+                return Some(u.to_string());
+            }
+        }
+        None
+    }
+
     /// 导出种子原始 .torrent（/api/v2/torrents/export；qB 4.6+）。
-    /// 用途：算 pieces_hash（`sha1(info.pieces)`）供站内 pieces-hash 批量查询。
+    /// 用途：P2 单 tracker 流程的源种取自 qB 导出；也算 pieces_hash 供站内查询。
     pub fn export_torrent(&self, hash: &str) -> Result<Vec<u8>> {
         self.login()?;
         let resp = self
@@ -532,22 +620,10 @@ impl QBittorrent {
         Ok(())
     }
 
-    /// 给已有种子**追加**标签（qB `torrents/addTags` 是追加语义，不会覆盖原标签）。
-    /// 用于「种子早已在下载器」的接管路径：新加种由 `torrents/add` 的 tags 字段直接带上。
-    pub fn add_tags(&self, hashes: &[&str], tags: &[&str]) -> Result<()> {
-        if hashes.is_empty() || tags.is_empty() {
-            return Ok(());
-        }
-        self.login()?;
-        let fields = [("hashes", hashes.join("|")), ("tags", tags.join(","))];
-        match self.post_form_status("/api/v2/torrents/addTags", &fields) {
-            Some(200) => Ok(()),
-            Some(st) => Err(anyhow!("HTTP {st} POST torrents/addTags")),
-            None => Err(anyhow!("POST torrents/addTags 没通")),
-        }
-    }
-
-    /// 推种。`paused=true` 是辅种安全网：先暂停挂上，校验通过再恢复（Swift `AssistPipeline.push` 同款）
+    /// 推种。`paused=true` 是辅种安全网：先暂停挂上，校验通过再恢复。
+    ///
+    /// 单 tracker 策略：同 hash 已存在时**绝不**补挂/改写 tracker，也不接管原种子；
+    /// 只回执「已存在」，由上层记 SameHashSkip/外部工具覆盖备注。
     #[allow(clippy::too_many_arguments)]
     pub fn add_torrent(
         &self,
@@ -569,12 +645,10 @@ impl QBittorrent {
             up_limit,
             paused,
             content_layout,
-            true,
         )
     }
 
-    /// 同 `add_torrent`，但**绝不接管已有种子**：同 hash 已存在时不补挂 tracker、
-    /// 不打标签，只回执「已存在」——用于「同 hash 不改动原种子」的转种策略。
+    /// 兼容别名：本仓库统一走「不接管已有种子」语义（见 `add_torrent` 注释）。
     #[allow(clippy::too_many_arguments)]
     pub fn add_torrent_new_only(
         &self,
@@ -587,7 +661,7 @@ impl QBittorrent {
         paused: bool,
         content_layout: Option<&str>,
     ) -> Result<AddTorrentResult> {
-        self.add_torrent_ex(
+        self.add_torrent(
             data,
             filename,
             save_path,
@@ -596,7 +670,6 @@ impl QBittorrent {
             up_limit,
             paused,
             content_layout,
-            false,
         )
     }
 
@@ -611,7 +684,6 @@ impl QBittorrent {
         up_limit: i64,
         paused: bool,
         content_layout: Option<&str>,
-        adopt_existing: bool,
     ) -> Result<AddTorrentResult> {
         self.login()?;
 
@@ -645,9 +717,9 @@ impl QBittorrent {
         let hash = bencode::info_hash_v1(data).unwrap_or_default();
 
         if status == 409 {
-            // 5.2+: 未新增任何种子时返回 409 Conflict（典型场景：种子已存在于下载器）
-            // 视为已添加，保证重复执行幂等；明确提示「已存在」
-            return Ok(self.verify(&hash, up_limit, true, data, adopt_existing));
+            // 5.2+: 未新增任何种子时返回 409 Conflict（典型场景：种子已存在于下载器）。
+            // 单 tracker 策略：不补挂 tracker、不接管原种子，只回执已存在。
+            return Ok(self.verify(&hash, up_limit, true));
         }
         if status != 200 {
             self.session_died(status);
@@ -670,18 +742,11 @@ impl QBittorrent {
                 }
             }
         }
-        Ok(self.verify(&hash, up_limit, false, data, true))
+        Ok(self.verify(&hash, up_limit, false))
     }
 
     /// 添加后回查：确认种子存在、限速是否生效（限速端点被隧道挡住时给用户可见提示）
-    fn verify(
-        &self,
-        hash: &str,
-        up_limit: i64,
-        already: bool,
-        torrent_data: &[u8],
-        adopt_existing: bool,
-    ) -> AddTorrentResult {
+    fn verify(&self, hash: &str, up_limit: i64, already: bool) -> AddTorrentResult {
         if already {
             if hash.is_empty() {
                 return AddTorrentResult {
@@ -690,22 +755,13 @@ impl QBittorrent {
                     already: true,
                 };
             }
-            // 「同 hash 不改动原种子」策略：只回执，不补挂 tracker、不打标签
-            if !adopt_existing {
-                return AddTorrentResult {
-                    id: hash.to_string(),
-                    note: "已存在于下载器（同 hash），按策略不改动原种子".into(),
-                    already: true,
-                };
-            }
-            let mut note = self.attach_site_tracker(hash, torrent_data);
-            // 接管旧种也打标签：后续在下载器里能按 Boxsend 统一筛选/批量操作
-            if let Err(e) = self.add_tags(&[hash], &[BOXSEND_TAG]) {
-                note = format!("{note}；打 {BOXSEND_TAG} 标签失败：{e:#}");
-            }
+            // 单 tracker 策略：同 hash 原种子一律不改动（不补挂 tracker、不改标签），
+            // 视为已由外部工具覆盖，跳过本站 tracker 写入。
             return AddTorrentResult {
                 id: hash.to_string(),
-                note,
+                note:
+                    "已存在于下载器（同 hash）；按单 tracker 策略不改动原种子，视为已由外部工具覆盖"
+                        .into(),
                 already: true,
             };
         }
@@ -744,131 +800,6 @@ impl QBittorrent {
             id: hash.to_string(),
             note: notes.join("；"),
             already: false,
-        }
-    }
-
-    /// 同 hash 的种子已在下载器（跨站转种太常见：很多站不改 info 段，源站和目标站的 .torrent
-    /// 算出来是同一个 hash，qB 直接回 409 什么也不加）。这时目标站的 tracker 根本没挂上，
-    /// 站内等于没做种——把本站 announce 补进那条种子，推送才算真落地。
-    fn attach_site_tracker(&self, hash: &str, torrent_data: &[u8]) -> String {
-        let announce = bencode::announce_urls(torrent_data);
-        if announce.is_empty() {
-            return "已存在于下载器（种子文件里没有 tracker，无法补挂）".to_string();
-        }
-        let hosts: Vec<String> = announce
-            .iter()
-            .filter_map(|u| url::Url::parse(u).ok())
-            .filter_map(|u| u.host_str().map(|h| h.to_string()))
-            .collect();
-        let hosts_text = hosts.join("、");
-        let Some(existing) = self.tracker_urls(hash) else {
-            return format!(
-                "已存在于下载器，本站 tracker（{hosts_text}）补挂失败：读不到该种子现有的 tracker"
-            );
-        };
-        // 同一 host 视为同一个 tracker（换 passkey 重推不该重复挂）
-        let host_of = |u: &str| {
-            url::Url::parse(u)
-                .ok()
-                .and_then(|p| p.host_str().map(|h| h.to_lowercase()))
-                .unwrap_or_else(|| u.to_lowercase())
-        };
-        let existing_hosts: Vec<String> = existing.iter().map(|u| host_of(u)).collect();
-        let missing: Vec<String> = announce
-            .iter()
-            .filter(|a| !existing_hosts.contains(&host_of(a)))
-            .cloned()
-            .collect();
-        if missing.is_empty() {
-            return "已存在于下载器，本站 tracker 已在种子中，跨种已生效".to_string();
-        }
-        match self.patch_trackers(hash, &existing, &missing) {
-            Some(err) => format!("已存在于下载器，本站 tracker（{hosts_text}）补挂失败：{err}"),
-            None => format!("已存在于下载器，已补挂本站 tracker（{hosts_text}），跨种已生效"),
-        }
-    }
-
-    /// 读现有 tracker 用的参数名：qB 5.x（WebAPI 2.11+）只认 hash，
-    /// 用旧的 hashes 会回 400「缺少必需参数：hash」；4.x 用 infohash，两个都试一次
-    fn tracker_urls(&self, hash: &str) -> Option<Vec<String>> {
-        for param in ["hash", "infohash"] {
-            let Ok(resp) = self
-                .client
-                .get(format!(
-                    "{}/api/v2/torrents/trackers?{}={}",
-                    self.base_url, param, hash
-                ))
-                .headers(self.referer_headers())
-                .send()
-            else {
-                continue;
-            };
-            let st = resp.status().as_u16();
-            if st != 200 {
-                self.session_died(st);
-                continue;
-            }
-            let Ok(text) = resp.text() else { continue };
-            let Ok(Value::Array(arr)) = serde_json::from_str(&text) else {
-                continue;
-            };
-            return Some(
-                arr.into_iter()
-                    .filter_map(|t| t.get("url").and_then(|v| v.as_str()).map(|s| s.to_string()))
-                    .collect(),
-            );
-        }
-        None
-    }
-
-    /// tracker 改写接口的参数：hash（qB 5.x）+ hashes（4.x），多出来的那一份会被忽略
-    fn tracker_patch_fields(hash: &str, add: &[String]) -> Vec<(&'static str, String)> {
-        vec![
-            ("hash", hash.to_string()),
-            ("hashes", hash.to_string()),
-            ("urls", add.join("\n")),
-        ]
-    }
-
-    /// 4.3+ 用 addTrackers（只追加）；老版本只有 setTrackers（整表重写，得把原有的带上）
-    fn patch_trackers(&self, hash: &str, existing: &[String], add: &[String]) -> Option<String> {
-        let fields = Self::tracker_patch_fields(hash, add);
-        let resp = self
-            .client
-            .post(format!("{}/api/v2/torrents/addTrackers", self.base_url))
-            .headers(self.referer_headers())
-            .form(&fields)
-            .send();
-        if let Ok(resp) = resp {
-            let s = resp.status().as_u16();
-            if s == 200 || s == 204 {
-                return None;
-            }
-            self.session_died(s);
-            if !(s == 404 || s == 400 || s == 405) {
-                return Some(format!("HTTP {s}"));
-            }
-        } else {
-            return Some("补挂请求没通".to_string());
-        }
-        // qB 5.x 已删掉 setTrackers（404），只有 4.x 会走到这里
-        let mut merged = existing.to_vec();
-        merged.extend_from_slice(add);
-        let fields = Self::tracker_patch_fields(hash, &merged);
-        let Ok(resp) = self
-            .client
-            .post(format!("{}/api/v2/torrents/setTrackers", self.base_url))
-            .headers(self.referer_headers())
-            .form(&fields)
-            .send()
-        else {
-            return Some("补挂请求没通（setTrackers）".to_string());
-        };
-        let s = resp.status().as_u16();
-        if s == 200 || s == 204 {
-            None
-        } else {
-            Some(format!("HTTP {s}"))
         }
     }
 }

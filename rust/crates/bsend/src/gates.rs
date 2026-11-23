@@ -49,6 +49,14 @@ pub struct SiteRules {
     /// 逐站显式选档覆盖：字段前缀 → 选项 value（实测取证后配置，消歧用）
     #[serde(default)]
     pub select_picks: std::collections::BTreeMap<String, String>,
+    /// 复选框/多选组显式勾选：字段前缀（如 `style_sel`）→ 要勾选的标签文案列表
+    /// （如 `["中字","国语"]`）。按页面真实标签归一匹配；匹配不到不臆造、保持未选。
+    #[serde(default)]
+    pub multi_picks: std::collections::BTreeMap<String, Vec<String>>,
+    /// 必填字段名前缀（如 `["region_sel","style_sel"]`）：任一前缀下没有已选值
+    /// 即判核心缺口并阻断发布；未配置的站点行为不变。
+    #[serde(default)]
+    pub required_fields: Vec<String>,
     /// 提交前剪掉简介里无法访问的图片（站点官方预审会逐图校验）
     pub prune_dead_images: Option<bool>,
     /// 每日自动发种上限（缺省 2）
@@ -81,6 +89,8 @@ pub struct GateInput<'a> {
     pub type_label: Option<&'a str>,
     /// 核心缺口（来自 analyze_form：type/medium/codec/standard/audiocodec 未选）
     pub core_gaps: &'a [String],
+    /// 规则判定的必填字段缺口（`apply_site_rules` 写入；每条文案含「必填缺失」）；非空即 Block
+    pub required_gaps: &'a [String],
     /// 官方预审结论：None = 站点无预审；Some(false) = 未通过
     pub audit_passed: Option<bool>,
 }
@@ -155,6 +165,19 @@ pub fn evaluate(input: &GateInput<'_>) -> Vec<GateResult> {
             )
         },
     );
+
+    // G3 必填字段（规则配置的单选/复选组；未配置 requiredFields 不参与判定）
+    if !input.rules.required_fields.is_empty() {
+        add(
+            "G3 必填字段",
+            input.required_gaps.is_empty(),
+            if input.required_gaps.is_empty() {
+                "必填字段均已选中".into()
+            } else {
+                input.required_gaps.join("；")
+            },
+        );
+    }
 
     // G3 必填：简介
     add(
@@ -259,6 +282,7 @@ mod tests {
             has_links: true,
             type_label: Some("剧集"),
             core_gaps: &[],
+            required_gaps: &[],
             audit_passed: Some(true),
         }
     }
@@ -337,6 +361,56 @@ mod tests {
         assert!(out
             .iter()
             .any(|r| r.gate == "G4 禁发词" && r.verdict == Verdict::Block));
+    }
+
+    #[test]
+    fn required_field_gap_blocks_with_message() {
+        let rules = SiteRules {
+            required_fields: vec!["region_sel".into(), "style_sel".into()],
+            ..Default::default()
+        };
+        let gaps = vec![
+            "必填缺失：region_sel[4]".into(),
+            "必填缺失：style_sel[4][]（配置标签未命中：中字）".into(),
+        ];
+        let mut input = base_input(&rules);
+        input.required_gaps = &gaps;
+        let out = evaluate(&input);
+        let gate = out
+            .iter()
+            .find(|r| r.gate == "G3 必填字段")
+            .expect("应出现必填字段门禁");
+        assert_eq!(gate.verdict, Verdict::Block);
+        assert!(gate.message.contains("必填缺失"));
+        assert!(gate.message.contains("style_sel[4][]"));
+        assert!(!all_passed(&out));
+    }
+
+    #[test]
+    fn required_field_gate_absent_when_unconfigured() {
+        // 旧配置不配 requiredFields：即使外部塞了缺口，门禁不出现、行为不变
+        let rules = SiteRules::default();
+        let gaps = vec!["必填缺失：region_sel[4]".into()];
+        let mut input = base_input(&rules);
+        input.required_gaps = &gaps;
+        let out = evaluate(&input);
+        assert!(!out.iter().any(|r| r.gate == "G3 必填字段"));
+        assert!(all_passed(&out), "{out:?}");
+    }
+
+    #[test]
+    fn required_field_filled_passes() {
+        let rules = SiteRules {
+            required_fields: vec!["region_sel".into()],
+            ..Default::default()
+        };
+        let input = base_input(&rules);
+        let out = evaluate(&input);
+        let gate = out
+            .iter()
+            .find(|r| r.gate == "G3 必填字段")
+            .expect("应出现必填字段门禁");
+        assert_eq!(gate.verdict, Verdict::Pass);
     }
 
     #[test]

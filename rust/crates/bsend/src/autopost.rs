@@ -9,9 +9,10 @@ use anyhow::{Context as _, Result};
 use crate::config::Config;
 use crate::coverage::now_unix;
 use crate::gates::{self, GateResult};
-use crate::index::ContentIndex;
+use crate::index::{ContentIndex, CoverageStatus};
+use crate::models::LocalTorrent;
 use crate::qbittorrent::QBittorrent;
-use crate::report::CoverageReport;
+use crate::report::{reconcile_marks, CoverageReport};
 use crate::reseed;
 
 pub struct AutopostOptions {
@@ -21,6 +22,26 @@ pub struct AutopostOptions {
     pub limit: Option<usize>,
     /// 只处理这些目标站的草稿（大小写不敏感；None = 全部）
     pub sites: Option<Vec<String>>,
+    /// 真实发布前是否做草稿对账：下载器已挂目标站完成种子的草稿格子改写 Seeding。
+    /// `--no-reconcile` 关闭；只关对账，不影响其他流程。
+    pub reconcile: bool,
+    /// 是否串行循环跑多轮（`--loop`）；单轮模式为 false。
+    pub loop_mode: bool,
+    /// 循环模式轮间间隔秒数（`--interval-secs`，默认 1800）。
+    pub interval_secs: u64,
+}
+
+impl Default for AutopostOptions {
+    fn default() -> Self {
+        Self {
+            dry_run: false,
+            limit: None,
+            sites: None,
+            reconcile: true,
+            loop_mode: false,
+            interval_secs: 1800,
+        }
+    }
 }
 
 pub enum AutopostEvent {
@@ -92,10 +113,12 @@ pub fn run_autopost(
         .unwrap_or_default();
     let _lock = crate::lock::RunLock::acquire(&data_dir, "state")?;
     if opts.dry_run {
-        // 演练只跑审阅+门禁，不碰下载器：下载器停机/换机时也要能做门禁演练
+        // 演练只跑审阅+门禁，不碰下载器：下载器停机/换机时也要能做门禁演练。
+        // 演练不连下载器，对账跳过（拿不到种子列表）。
         return run_autopost_with(
             cfg,
             opts,
+            None,
             emit,
             &mut |cfg, req, log, throttle| reseed::review_reseed(cfg, req, log, throttle),
             &mut |_, _, _, _, _, _| anyhow::bail!("dry-run 不应调用发布器（内部错误）"),
@@ -110,9 +133,14 @@ pub fn run_autopost(
         "连不上下载器（boxsend.json 的 downloader/assistDownloaderID 指的那台）"
     })?;
     emit(AutopostEvent::Log(hello));
+    // 对账只用一次全量列表：`torrents/info` 一次拉全量，不逐 hash 打接口。
+    let torrents = qb
+        .list_torrents()
+        .with_context(|| "拉取下载器种子列表失败（对账/辅种都需要全量列表）")?;
     run_autopost_with(
         cfg,
         opts,
+        Some(&torrents),
         emit,
         &mut |cfg, req, log, throttle| reseed::review_reseed(cfg, req, log, throttle),
         &mut |cfg, req, index, log, throttle, reviewed| match reviewed {
@@ -128,25 +156,115 @@ pub fn run_autopost(
 pub fn run_autopost_with(
     cfg: &Config,
     opts: &AutopostOptions,
+    torrents: Option<&[LocalTorrent]>,
     emit: &mut impl FnMut(AutopostEvent),
     reviewer: &mut ReviewRunner<'_>,
     runner: &mut ReseedRunner<'_>,
 ) -> Result<AutopostSummary> {
     let mut summary = AutopostSummary::default();
     let mut index = ContentIndex::load(&cfg.coverage_state_path());
-    let report = CoverageReport::build(&index, &cfg.sites, 20, now_unix(), "");
-    if report.drafts.is_empty() {
+    let mut report = CoverageReport::build(&index, &cfg.sites, 20, now_unix(), "");
+    let allow: HashSet<String> = cfg.coverage.auto_reseed_sites.iter().cloned().collect();
+    // 草稿对账：下载器里已挂目标站完成种子的草稿，格子从 ReseedDraft 改写 Seeding。
+    // 纯判定在 `report::reconcile_marks`；这里只做落格 + save + 汇总日志，判定纯函数可单测。
+    match torrents {
+        Some(torrents) if opts.reconcile => {
+            let h2k = index.hash_to_key();
+            let marks = reconcile_marks(&report.drafts, torrents, &cfg.sites, &h2k, &index);
+            if !marks.is_empty() {
+                let now = now_unix();
+                for m in &marks {
+                    if let Some(entry) = index.contents.get_mut(&m.key) {
+                        if let Some(cell) = entry.coverage.get_mut(&m.site) {
+                            cell.status = CoverageStatus::Seeding;
+                            cell.at = now;
+                            cell.note = Some(m.note.clone());
+                        }
+                    }
+                }
+                index.save()?;
+                let mut per_site: HashMap<String, usize> = HashMap::new();
+                for m in &marks {
+                    *per_site.entry(m.site.clone()).or_insert(0) += 1;
+                }
+                let parts: Vec<String> = per_site.iter().map(|(s, n)| format!("{s} {n}")).collect();
+                emit(AutopostEvent::Log(format!(
+                    "对账：{} 条草稿已挂种 → 改写 Seeding（{}）",
+                    marks.len(),
+                    parts.join("、")
+                )));
+                // 重建报告：否则本轮 report.drafts 还是旧草稿，循环会重复处理已挂种条目
+                report = CoverageReport::build(&index, &cfg.sites, 20, now_unix(), "");
+            }
+        }
+        Some(_) => emit(AutopostEvent::Log("--no-reconcile：跳过草稿对账".into())),
+        None => {
+            if opts.dry_run {
+                emit(AutopostEvent::Log("演练不连下载器，跳过对账".into()));
+            } else {
+                emit(AutopostEvent::Log("未提供下载器种子列表，跳过对账".into()));
+            }
+        }
+    }
+    // 白名单只决定「哪些站可以发」，不再要求账本里先有草稿格。
+    // 草稿从 qB 缺口实时派生：qB 没有该站 tracker、源种已定位、内容还在下载器里。
+    let per_site_limit: HashMap<String, usize> = cfg
+        .sites
+        .iter()
+        .map(|site| {
+            let rules = cfg
+                .coverage
+                .reseed_rules
+                .get(&site.id)
+                .cloned()
+                .unwrap_or_default();
+            (site.id.clone(), rules.daily_limit() as usize)
+        })
+        .collect();
+    // 演练时白名单为空 = 全站预演（只审阅、不发布）；真实发布时白名单为空 =
+    // 不发任何站，避免配置漏填后把全部站点都发一遍。
+    let derive_allow: HashSet<String> = if opts.dry_run && allow.is_empty() {
+        cfg.sites.iter().map(|s| s.id.clone()).collect()
+    } else {
+        allow.clone()
+    };
+    let gap_drafts = match torrents {
+        Some(torrents) => report.derive_qb_gap_drafts(
+            &index,
+            &cfg.sites,
+            &derive_allow,
+            torrents,
+            &per_site_limit,
+        ),
+        None => report.derive_qb_gap_drafts_from_index(
+            &index,
+            &cfg.sites,
+            &derive_allow,
+            &per_site_limit,
+        ),
+    };
+    emit(AutopostEvent::Log(format!(
+        "草稿由 qB 缺口派生：{} 条（{}）",
+        gap_drafts,
+        if allow.is_empty() && opts.dry_run {
+            "未配置白名单，演练覆盖全部站点".to_string()
+        } else {
+            format!("白名单 {} 站，按每站每日额度截断", allow.len())
+        }
+    )));
+    if allow.is_empty() {
+        emit(AutopostEvent::Log(if opts.dry_run {
+            "未配置 assist.autoReseedSites（自动发种白名单）——本次只做门禁演练，不会发布任何东西。"
+                .into()
+        } else {
+            "未配置 assist.autoReseedSites（自动发种白名单）——真实发布不会发出任何东西。".into()
+        }));
+    }
+    if gap_drafts == 0 {
         emit(AutopostEvent::Log(
-            "没有转种草稿。先 `bsend run` 跑一轮，站里没有的段落定位到源种后会出草稿。".into(),
+            "没有转种草稿：qB 里没有可派生的缺口，或今日额度已经用完。".into(),
         ));
         return Ok(summary);
-    }
-    let allow: HashSet<String> = cfg.coverage.auto_reseed_sites.iter().cloned().collect();
-    if allow.is_empty() {
-        emit(AutopostEvent::Log(
-            "未配置 assist.autoReseedSites（自动发种白名单）——本次只做门禁演练，不会发布任何东西。"
-                .into(),
-        ));
     }
     let audit_path = audit_path_of(cfg);
     let now = now_unix();
@@ -183,6 +301,26 @@ pub fn run_autopost_with(
             if !ss.iter().any(|s| s.eq_ignore_ascii_case(site)) {
                 continue;
             }
+        }
+        // 内容类型黑名单：教育/成人等不进自动发种（只发影视、剧集、纪录片）。
+        // 终态化：真实路径下把格子改写 Skipped 落账，第二轮起不再入队；幂等——
+        // 已是 Skipped 的格子不会再出现在 report.drafts 里。dry-run 演练不落账本。
+        if let Some(hit) = skip_hit(&d.name, &cfg.coverage.skip_keywords) {
+            if !opts.dry_run {
+                if let Some(entry) = index.contents.get_mut(&d.content_key) {
+                    if let Some(cell) = entry.coverage.get_mut(site) {
+                        cell.status = CoverageStatus::Skipped;
+                        cell.at = now;
+                        cell.note = Some(format!("命中内容类型黑名单「{hit}」"));
+                    }
+                }
+                index.save()?;
+            }
+            emit(AutopostEvent::Log(format!(
+                "跳过 {}：命中内容类型黑名单「{}」",
+                d.name, hit
+            )));
+            continue;
         }
         // 白名单：真实发布永远要求；演练时空白名单 = 全站门禁演练，
         // 已配白名单则只演练「会真实发布的那部分」，与真发预览一致。
@@ -289,6 +427,7 @@ pub fn run_autopost_with(
                 has_links: rep.info.has_media_links(),
                 type_label: type_label.as_deref(),
                 core_gaps: &core,
+                required_gaps: &rep.prepared.required_gaps,
                 audit_passed: rep.audit.as_ref().map(|a| a.passed),
             };
             gates::evaluate(&input)
@@ -449,6 +588,29 @@ pub fn parse_audit(text: &str, now: i64) -> (PostedToday, LastBad) {
     (posted_today, last_bad)
 }
 
+/// 内容黑名单命中：ASCII 关键词按「词」比（`Adult` 不会命中 `Adulthood`），
+/// 中文关键词按子串比（中文没有空格分词）。名称先统一小写，非字母数字折成空格。
+fn skip_hit<'a>(name: &str, keywords: &'a [String]) -> Option<&'a str> {
+    let lower = name.to_lowercase();
+    let tokenized: String = lower
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { ' ' })
+        .collect();
+    for kw in keywords {
+        let k = kw.to_lowercase();
+        let ascii = k.chars().all(|c| c.is_ascii());
+        let hit = if ascii {
+            tokenized.split_whitespace().any(|t| t == k)
+        } else {
+            lower.contains(&k)
+        };
+        if hit {
+            return Some(kw.as_str());
+        }
+    }
+    None
+}
+
 /// 退避窗口：门禁拦截 24h、失败 6h 内不重试同草稿，避免连击白耗请求
 pub fn in_backoff(last: Option<(i64, bool)>, now: i64) -> bool {
     match last {
@@ -491,6 +653,16 @@ mod tests {
         // 失败：5h 内退避，7h 后放行
         assert!(in_backoff(Some((now - 5 * 3600, false)), now));
         assert!(!in_backoff(Some((now - 7 * 3600, false)), now));
+    }
+
+    #[test]
+    fn skip_hit_uses_token_boundaries_for_ascii() {
+        let kws: Vec<String> = vec!["adult".into(), "儿童".into(), "阿U".into()];
+        assert_eq!(skip_hit("Adult.World.2024", &kws), Some("adult"));
+        assert_eq!(skip_hit("Adulthood.2019", &kws), None);
+        assert_eq!(skip_hit("儿童画教材40套", &kws), Some("儿童"));
+        assert_eq!(skip_hit("阿U学英语.S01", &kws), Some("阿U"));
+        assert_eq!(skip_hit("Children.of.Men.2006", &kws), None);
     }
 
     #[test]
@@ -587,6 +759,7 @@ mod tests {
                 search_url: None,
                 api_key: None,
                 announce_hosts: vec!["sbpt.link".into()],
+                announce_url: None,
             }],
             coverage: crate::config::CoverageSettings {
                 auto_reseed_sites: vec!["sbpt".into()],
@@ -668,7 +841,7 @@ mod tests {
     }
 
     #[test]
-    fn autopost_skips_sites_outside_whitelist() {
+    fn empty_whitelist_real_run_publishes_nothing() {
         let dir = temp_dir("whitelist");
         let mut cfg = cfg_with_drafts(&dir, 2, 1);
         cfg.coverage.auto_reseed_sites.clear();
@@ -691,7 +864,9 @@ mod tests {
                 dry_run: false,
                 limit: None,
                 sites: None,
+                ..Default::default()
             },
+            None,
             &mut collect_logs(&mut logs),
             &mut no_review,
             &mut runner,
@@ -699,7 +874,10 @@ mod tests {
         .unwrap();
         assert_eq!(called, 0, "空白名单不能调用发布器");
         assert_eq!(summary.posted, 0);
-        assert!(logs.iter().any(|l| l.contains("不在自动发种白名单")));
+        assert!(logs
+            .iter()
+            .any(|l| l.contains("未配置 assist.autoReseedSites")));
+        assert!(logs.iter().any(|l| l.contains("没有转种草稿")));
     }
 
     #[test]
@@ -737,7 +915,9 @@ mod tests {
                 dry_run: false,
                 limit: None,
                 sites: None,
+                ..Default::default()
             },
+            None,
             &mut collect_logs(&mut logs),
             &mut no_review,
             &mut runner,
@@ -783,7 +963,9 @@ mod tests {
                 dry_run: false,
                 limit: None,
                 sites: None,
+                ..Default::default()
             },
+            None,
             &mut collect_logs(&mut logs),
             &mut no_review,
             &mut runner,
@@ -818,7 +1000,9 @@ mod tests {
                 dry_run: false,
                 limit: None,
                 sites: Some(vec!["luckpt".into()]),
+                ..Default::default()
             },
+            None,
             &mut |_| {},
             &mut no_review,
             &mut runner,
@@ -831,7 +1015,9 @@ mod tests {
                 dry_run: false,
                 limit: Some(0),
                 sites: None,
+                ..Default::default()
             },
+            None,
             &mut |_| {},
             &mut no_review,
             &mut runner,
@@ -902,6 +1088,7 @@ mod tests {
                 dry_run: true,
                 limit: None,
                 sites: None,
+                ..Default::default()
             },
             &mut collect_logs(&mut logs),
         )
@@ -933,6 +1120,7 @@ mod tests {
                 picked_tags: Vec::new(),
                 tag_warn: None,
                 select_notes: Vec::new(),
+                required_gaps: Vec::new(),
                 form_html: "<html><body><form></form></body></html>".into(),
             },
             info,
@@ -967,7 +1155,9 @@ mod tests {
                 dry_run: true,
                 limit: None,
                 sites: None,
+                ..Default::default()
             },
+            None,
             &mut collect_logs(&mut logs),
             &mut |_: &Config,
                   req: &reseed::ReseedRequest,
@@ -1007,7 +1197,9 @@ mod tests {
                 dry_run: true,
                 limit: None,
                 sites: None,
+                ..Default::default()
             },
+            None,
             &mut collect_logs(&mut logs),
             &mut |_: &Config,
                   _: &reseed::ReseedRequest,
@@ -1020,7 +1212,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(reviewed, 0);
-        assert!(logs.iter().any(|l| l.contains("不在自动发种白名单")));
+        assert!(logs.iter().any(|l| l.contains("没有转种草稿")));
     }
 
     #[test]
@@ -1043,7 +1235,9 @@ mod tests {
                 dry_run: true,
                 limit: Some(1),
                 sites: None,
+                ..Default::default()
             },
+            None,
             &mut |_| {},
             &mut |_: &Config,
                   req: &reseed::ReseedRequest,
@@ -1093,7 +1287,9 @@ mod tests {
                 dry_run: false,
                 limit: None,
                 sites: None,
+                ..Default::default()
             },
+            None,
             &mut collect_logs(&mut logs),
             &mut |_: &Config,
                   req: &reseed::ReseedRequest,
@@ -1134,5 +1330,78 @@ mod tests {
             .find(|v| v["result"] == "blocked")
             .expect("要有 blocked 记录");
         assert!(blocked["gates"].is_array(), "blocked 记录要带门禁明细");
+    }
+
+    #[test]
+    fn reconcile_rewrites_draft_cell_to_seeding() {
+        // 下载器已有目标站 100% 种子：对账把草稿格改写 Seeding，本轮不再入队
+        let dir = temp_dir("reconcile");
+        let cfg = cfg_with_drafts(&dir, 2, 1);
+        let torrents = vec![LocalTorrent::new(
+            &"a".repeat(40),
+            None,
+            "Draft 0",
+            "",
+            None,
+            vec![],
+            1,
+            1.0,
+            vec!["sbpt.link".to_string()],
+            0,
+        )];
+        let mut logs = Vec::new();
+        let summary = run_autopost_with(
+            &cfg,
+            &AutopostOptions::default(),
+            Some(&torrents),
+            &mut collect_logs(&mut logs),
+            &mut no_review,
+            &mut |_, _, _, _, _, _| Ok(reseed::ReseedOutcome::Posted("u".into())),
+        )
+        .unwrap();
+        assert_eq!(summary.posted, 0, "对账改写后草稿已不在本轮队列");
+        assert!(logs.iter().any(|l| l.contains("对账：1 条草稿已挂种")));
+        let idx = ContentIndex::load(&cfg.coverage_state_path());
+        let cell = idx
+            .contents
+            .get("m:test0000000000000000")
+            .unwrap()
+            .coverage
+            .get("sbpt")
+            .unwrap();
+        assert_eq!(cell.status, CoverageStatus::Seeding);
+        assert_eq!(cell.note.as_deref(), Some("下载器已挂该站 tracker"));
+    }
+
+    #[test]
+    fn skip_keyword_draft_cell_settles_to_skipped() {
+        // 命中黑名单：真实路径落 Skipped 终态格，第二轮起不再入队；审阅器不应被调用
+        let dir = temp_dir("skipped");
+        let mut cfg = cfg_with_drafts(&dir, 2, 1);
+        cfg.coverage.skip_keywords = vec!["draft".into()];
+        let mut logs = Vec::new();
+        let summary = run_autopost_with(
+            &cfg,
+            &AutopostOptions::default(),
+            None,
+            &mut collect_logs(&mut logs),
+            &mut no_review,
+            &mut |_, _, _, _, _, _| Ok(reseed::ReseedOutcome::Posted("u".into())),
+        )
+        .unwrap();
+        assert_eq!(summary.posted, 0);
+        assert!(logs
+            .iter()
+            .any(|l| l.contains("命中内容类型黑名单「draft」")));
+        let idx = ContentIndex::load(&cfg.coverage_state_path());
+        let cell = idx
+            .contents
+            .get("m:test0000000000000000")
+            .unwrap()
+            .coverage
+            .get("sbpt")
+            .unwrap();
+        assert_eq!(cell.status, CoverageStatus::Skipped);
+        assert!(cell.note.as_deref().unwrap().contains("draft"));
     }
 }

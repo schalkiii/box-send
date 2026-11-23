@@ -15,10 +15,12 @@
 //! 逐站 overrides（quality 下拉/mode 字段/两步上传）不在 v1 范围，遇到特殊站会
 //! 在预检里报「表单不认识的必填项」而不是硬着头皮提交。
 
+use std::path::Path;
 use std::thread;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
+use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE, REFERER};
 use url::Url;
 
 use crate::bencode;
@@ -27,9 +29,11 @@ use crate::coverage::now_unix;
 use crate::index::{ContentIndex, CoverageStatus, SiteCoverage};
 use crate::qbittorrent::QBittorrent;
 use crate::sites::nexusphp::{
-    decode_entities, decode_entities_once, resolve_url, strip_tags, NexusPhp, TorrentPage,
+    decode_entities, decode_entities_once, is_detail_href, resolve_url, strip_tags, NexusPhp,
+    TorrentPage,
 };
 use crate::throttle::{BudgetKind, SiteThrottle};
+use crate::torrent_rewrite;
 
 /// 从源站详情页解析出的发布要素（Swift `ReleaseInfo` 的通用子集）
 #[derive(Debug, Clone, Default)]
@@ -624,7 +628,16 @@ fn strip_promo_suffix(name: &str) -> String {
                     c.is_ascii_digit()
                         || matches!(
                             c,
-                            '天' | '时' | '時' | '小' | '分' | '钟' | '鐘' | '秒' | ' '
+                            '天' | '时'
+                                | '時'
+                                | '小'
+                                | '分'
+                                | '钟'
+                                | '鐘'
+                                | '秒'
+                                | '年'
+                                | '月'
+                                | ' '
                         )
                 });
             if is_countdown {
@@ -648,7 +661,10 @@ fn strip_promo_suffix(name: &str) -> String {
             .chars()
             .all(|c| c.is_ascii_digit() || c == '%' || c == '.')
             || low == "free"
-            || matches!(low.as_str(), "免费" | "免費" | "折扣" | "促销" | "半价")
+            || matches!(
+                low.as_str(),
+                "免费" | "免費" | "折扣" | "促销" | "半价" | "未审" | "未审核"
+            )
             || (low.ends_with('x')
                 && low.len() <= 4
                 && low[..low.len() - 1].chars().all(|c| c.is_ascii_digit()));
@@ -1047,6 +1063,7 @@ const AUDIO_KEYWORDS: &[&str] = &[
     "DD+",
     "DDP",
     "EAC3",
+    "EC3",
     "Atmos",
     "AC-3",
     "FLAC",
@@ -1182,10 +1199,30 @@ fn pair_option(options: &[(String, String)], token: &str) -> Pairing {
     if sub.len() == 1 {
         return Pairing::Hit(sub[0].0.clone());
     }
-    if sub.len() > 1 {
+    // 同名重复项（两个 AAC 一类）不猜
+    let dup_label = sub.iter().any(|o| {
+        sub.iter()
+            .any(|x| x.1 != o.1 && norm_token(x.1.as_str()) == norm_token(o.1.as_str()))
+    });
+    if dup_label {
         return Pairing::Ambiguous;
     }
-    Pairing::Miss
+    if sub.is_empty() {
+        return Pairing::Miss;
+    }
+    // 嵌套标签：一个规范化标签包含另一个（如「UHD Blu-ray」含「Blu-ray」），
+    // 取最具体的最长标签；互不包含的并列候选仍判歧义，不猜。
+    let nested = sub.iter().find(|o| {
+        let on = norm_token(o.1.as_str());
+        sub.iter().all(|x| {
+            let xn = norm_token(x.1.as_str());
+            x.1 == o.1 || (on != xn && on.contains(&xn))
+        })
+    });
+    match nested {
+        Some(o) => Pairing::Hit(o.0.clone()),
+        None => Pairing::Ambiguous,
+    }
 }
 
 fn match_option(options: &[(String, String)], token: &str) -> Option<String> {
@@ -1236,18 +1273,42 @@ fn token_aliases(token: &str) -> &'static [&'static str] {
         "480p" => &["480p", "480"],
         // aling/ptcafe 实测媒介选项写「TV」，繁体站写「電視」
         "hdtv" => &["TV", "TVRip", "HDTVRip", "Television", "电视", "電視"],
-        "eac3" | "ddp" | "dd+" | "dd" => &["DD+", "E-AC-3", "EAC3", "DDP", "DDP/E-AC3"],
+        "eac3" | "ddp" | "dd+" | "dd" | "ec3" => &[
+            "DD+",
+            "E-AC-3",
+            "EAC3",
+            "EC3",
+            "DDP",
+            "DDP/E-AC3",
+            "DDP/EAC3",
+            "DDP Atmos/EAC3",
+        ],
         // AC3 不能靠子串：会同时命中 DD/AC3 与 DDP/E-AC3
         "ac3" => &["DD/AC3", "DD/AC-3", "AC3"],
-        "dtshdma" => &["DTS-HD MA", "DTS-HD", "DTS"],
-        "dtshd" => &["DTS-HD", "DTS"],
+        "truehd" => &["TrueHD", "TrueHD Atmos", "TrueHD_Atmos"],
+        "dtshdma" => &["DTS-HD MA", "DTS-HD", "DTS_HD|MA", "DTS"],
+        "dtshd" => &["DTS-HD", "DTS_HD|HR", "DTS"],
         "webdl" => &["WEB-DL", "WEB"],
         "webrip" => &["WEBRip", "WEB"],
         "bluray" => &["BluRay", "Blu-ray"],
+        "uhdbluray" => &["UHD Blu-ray", "UHD BluRay"],
         // 原盘 REMUX：站点有 Remux 选项时归 Remux，不归 Blu-ray
         "blurayremux" | "remux" => &["Remux", "REMUX"],
         _ => &[],
     }
+}
+
+/// UHD + Blu-ray 同时出现时合成「UHD Blu-ray」复合词元，优先命中最具体的
+/// UHD 蓝光标签（而不是让 UHD/Blu-ray 各自子串命中多个标签判歧义留空）。
+fn compound_medium_token(tokens: &[String]) -> Option<String> {
+    let has_uhd = tokens
+        .iter()
+        .any(|t| t.to_ascii_lowercase().contains("uhd"));
+    let has_bd = tokens.iter().any(|t| {
+        let l = t.to_ascii_lowercase();
+        l.contains("bluray") || l.contains("blu-ray") || l.contains("bdrip") || l.contains("brrip")
+    });
+    (has_uhd && has_bd).then(|| "UHD Blu-ray".to_string())
 }
 
 /// `<select name=field>` 的全部 (value, label)；跳过 value 空/0 的占位项。
@@ -1295,6 +1356,19 @@ fn select_names(page: &str) -> Vec<String> {
         i = end;
     }
     out
+}
+
+/// 演练选项表：上传表单每个下拉的全量 (value, label)（供 formcheck.json 落盘）。
+/// 只看上传表单块；导航搜索表单的 search_area 一类不掺进来。
+pub fn drill_select_options(page: &str) -> Vec<(String, Vec<(String, String)>)> {
+    select_names(page)
+        .into_iter()
+        .map(|name| {
+            let opts = select_options(page, &name);
+            (name, opts)
+        })
+        .filter(|(_, opts)| !opts.is_empty())
+        .collect()
 }
 
 /// 前缀匹配 select 字段名：`medium_sel` 或 `medium_sel[4]`
@@ -1569,11 +1643,23 @@ fn fill_selects(fields: &mut Vec<Field>, page: &str, info: &ReleaseInfo) -> Vec<
         let title_tokens = find_keywords(&hay, kws);
         // 音频：标题里已有码（DTS/DD+/AAC…）就以标题为准；不要再把 MediaInfo
         // 的多音轨混进来，否则会因多个候选而留空（国际市场/玻璃樽实测）。
-        let tokens = if *prefix == "audiocodec_sel" && title_tokens.is_empty() {
+        let mut tokens = if *prefix == "audiocodec_sel" && title_tokens.is_empty() {
             find_keywords(&audio_hay, kws)
         } else {
             title_tokens
         };
+        if matches!(*prefix, "source_sel" | "medium_sel") {
+            if let Some(c) = compound_medium_token(&tokens) {
+                tokens.insert(0, c);
+                // 短语命中后重叠规则会吃掉独立部件词；补回 BluRay/UHD 部件，
+                // 便于站点没有「UHD Blu-ray」标签时回退到普通蓝光标签。
+                for part in ["BluRay", "UHD"] {
+                    if !tokens.iter().any(|t| t.eq_ignore_ascii_case(part)) {
+                        tokens.push(part.to_string());
+                    }
+                }
+            }
+        }
         let mut relevant_seen = false;
         let mut filled_seen = false;
         let mut ambiguous_tok: Option<String> = None;
@@ -1756,16 +1842,52 @@ fn select_summary(prep: &PreparedUpload) -> String {
     parts.join(" ")
 }
 
+/// 明显不是上传处理页的端点 basename：导航搜索/奖励/登录/索引/列表/详情一类。
+/// 命中即中止提交——绝不能把种子 POST 到错误接口（longpt 被解析到 bonusrain.php、
+/// tangpt 被解析到 search.php 就是这类误配）。
+const NON_UPLOAD_ENDPOINTS: &[&str] = &[
+    "search.php",
+    "bonusrain.php",
+    "login.php",
+    "index.php",
+    "torrents.php",
+    "browse.php",
+    "details.php",
+    "signup.php",
+    "register.php",
+    "user.php",
+    "usercp.php",
+    "rules.php",
+    "faq.php",
+];
+
+/// action 是否落在明显非上传端点上。站外绝对地址照收（城市类站点把种子 POST 到
+/// 独立域名）。返回命中的 basename 写进错误提示。
+fn non_upload_endpoint(action: &str, base: &Url) -> Option<&'static str> {
+    let url = Url::parse(action).ok()?;
+    if url.host_str() != base.host_str() {
+        return None;
+    }
+    let name = url.path().rsplit('/').next().unwrap_or("");
+    NON_UPLOAD_ENDPOINTS
+        .iter()
+        .find(|e| name.eq_ignore_ascii_case(e))
+        .copied()
+}
+
 /// 表单 action 绝对地址（站外绝对地址照收：城市等站把种子 POST 到独立域名；
-/// 相对路径按站点根解析成 takeupload.php 一类的提交地址）
+/// 相对路径按站点根解析成 takeupload.php 一类的提交地址）。
+/// 只在上传表单块内取 action：导航条的搜索/登录表单排在前面，整页取第一个
+/// 会把提交地址误配成 search.php / bonusrain.php 一类。
 fn form_action(page: &str, base: &Url) -> Option<String> {
-    let lower = page.to_ascii_lowercase();
+    let scope = upload_form_block(page).unwrap_or(page);
+    let lower = scope.to_ascii_lowercase();
     let p = lower.find("<form")?;
     let end = lower[p..]
         .find('>')
         .map(|j| p + j + 1)
-        .unwrap_or(page.len());
-    let tag = &page[p..end];
+        .unwrap_or(scope.len());
+    let tag = &scope[p..end];
     let action = attr(tag, "action")?;
     if action.is_empty() {
         return None;
@@ -1835,6 +1957,10 @@ pub struct UploadResult {
     pub message: String,
     /// 站点回「种子已存在」：视为已覆盖，不算本次转种
     pub duplicate: bool,
+    /// 回包正文原文（发后定位只从中提取自带链接，不做检索）
+    pub body: String,
+    /// 最终跳转 URL（跟随重定向后）
+    pub final_url: String,
 }
 
 /// 上传准备：抓 upload.php 表单 + 构造提交字段（不 POST）。
@@ -1849,6 +1975,8 @@ pub struct PreparedUpload {
     pub tag_warn: Option<String>,
     /// 选档映射提示（词元配不上选项、分类没把握等；只提示不阻断）
     pub select_notes: Vec<String>,
+    /// 规则判定的必填字段缺口（每条文案含「必填缺失」）；非空时门禁拒绝发布
+    pub required_gaps: Vec<String>,
     /// 表单页原文（官方预审要从中取 LUCK_AUDIT_USER / 选项文案）
     pub form_html: String,
 }
@@ -1884,26 +2012,163 @@ pub fn prune_dead_images_with(html: &str, probe: &mut dyn FnMut(&str) -> bool) -
     (out, removed)
 }
 
-fn prune_dead_images(html: &str) -> (String, usize) {
-    let Ok(client) = reqwest::blocking::Client::builder()
+/// 图片响应是否可当图床资源：2xx 且 content-type 是图片（或二进制流）。
+/// 防盗链图床常回 2xx 但正文是 text/html 验证页/418 页，只看状态码会误判成可达；
+/// 这里按最终响应的 content-type 排除 HTML/JSON 拦截页。CT 缺失时放行（部分图床不回 CT）。
+fn content_type_is_image(ct: Option<&str>) -> bool {
+    match ct.map(|s| s.trim().to_ascii_lowercase()) {
+        Some(c) => c.starts_with("image/") || c == "application/octet-stream",
+        None => true,
+    }
+}
+
+fn prune_dead_images(html: &str, referer: &str) -> (String, usize) {
+    let mut builder = reqwest::blocking::Client::builder()
         .user_agent(crate::sites::nexusphp::DEFAULT_UA)
         .no_proxy()
-        .timeout(std::time::Duration::from_secs(8))
-        .build()
-    else {
+        .timeout(std::time::Duration::from_secs(8));
+    // 防盗链图床（豆瓣图床实测裸请求 418 回 HTML，带 Referer 才出图）：
+    // 探测时带上目标站上传页 Referer，与浏览器从上传页插图的行为一致。
+    if !referer.is_empty() {
+        let mut headers = HeaderMap::new();
+        if let Ok(v) = HeaderValue::from_str(referer) {
+            headers.insert(REFERER, v);
+        }
+        builder = builder.default_headers(headers);
+    }
+    let Ok(client) = builder.build() else {
         return (html.to_string(), 0);
     };
     prune_dead_images_with(html, &mut |url| {
         client
             .get(url)
             .send()
-            .map(|r| r.status().is_success())
+            .map(|r| {
+                r.status().is_success()
+                    && content_type_is_image(
+                        r.headers().get(CONTENT_TYPE).and_then(|v| v.to_str().ok()),
+                    )
+            })
             .unwrap_or(false)
     })
 }
 
+/// 标签归一：小写、去空白与标点（保留中文等 Unicode 字母数字；与 `norm_token` 不同，后者只留 ASCII）
+fn norm_label(s: &str) -> String {
+    s.chars()
+        .filter(|c| c.is_alphanumeric())
+        .map(|c| c.to_ascii_lowercase())
+        .collect()
+}
+
+/// 标签同义词组：同一控件在不同站点的写法（中字/简中、国语/国配…）
+fn label_aliases(label: &str) -> &'static [&'static str] {
+    match norm_label(label).as_str() {
+        "中字" | "简中" | "简体" | "中文字幕" | "简繁中字" => {
+            &["中字", "简中", "简体", "中文字幕", "简繁中字"]
+        }
+        "国语" | "国配" | "普通话" | "国语配音" | "普通话配音" => {
+            &["国语", "国配", "普通话", "国语配音", "普通话配音"]
+        }
+        _ => &[],
+    }
+}
+
+/// 页面标签与配置标签归一匹配：大小写/全半角/空白标点不敏感；全等优先，其次双向子串，再走别名
+fn label_matches(page_label: &str, want: &str) -> bool {
+    let pl = norm_label(page_label);
+    let wl = norm_label(want);
+    if pl.is_empty() || wl.is_empty() {
+        return false;
+    }
+    if pl == wl || pl.contains(&wl) || wl.contains(&pl) {
+        return true;
+    }
+    label_aliases(want).iter().any(|a| {
+        let an = norm_label(a);
+        !an.is_empty() && (pl == an || pl.contains(&an) || an.contains(&pl))
+    })
+}
+
+/// 表单里某前缀下的 input 控件（radio/checkbox）：(name, value, 标签文案, 是否 checked)
+fn input_controls(page: &str, prefix: &str, kind: &str) -> Vec<(String, String, String, bool)> {
+    let page = upload_form_block(page).unwrap_or(page);
+    let lower = page.to_ascii_lowercase();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while let Some(p) = lower[i..].find("<input") {
+        let start = i + p;
+        let end = lower[start..]
+            .find('>')
+            .map(|j| start + j + 1)
+            .unwrap_or(page.len());
+        let tag = &page[start..end];
+        let tl = tag.to_ascii_lowercase();
+        let type_attr = format!("type=\"{kind}\"");
+        let type_attr_q = format!("type='{kind}'");
+        if !(tl.contains(&type_attr) || tl.contains(&type_attr_q)) {
+            i = end;
+            continue;
+        }
+        if let Some(name) = attr(tag, "name") {
+            if name == prefix || (name.starts_with(prefix) && name[prefix.len()..].starts_with('['))
+            {
+                let after = &page[end..floor_char_boundary(page, end + 80)];
+                let next = after
+                    .to_ascii_lowercase()
+                    .find("<input")
+                    .unwrap_or(after.len());
+                let label = strip_tags(&after[..next]).trim().to_string();
+                // 浏览器对无 value 的复选框/单选框默认提交 `on`；真实站点多带数字编码 value
+                let value = attr(tag, "value").unwrap_or_else(|| "on".into());
+                let checked = tl.contains("checked");
+                out.push((name, value, label, checked));
+            }
+        }
+        i = end;
+    }
+    out
+}
+
+/// 前缀下在页面上出现过的全部控件名（select + radio/checkbox），用于缺口点名
+fn prefix_control_names(page: &str, prefix: &str) -> Vec<String> {
+    let mut names: Vec<String> = select_names(page)
+        .into_iter()
+        .filter(|n| n == prefix || (n.starts_with(prefix) && n[prefix.len()..].starts_with('[')))
+        .collect();
+    for kind in ["radio", "checkbox"] {
+        for (n, _, _, _) in input_controls(page, prefix, kind) {
+            if !names.contains(&n) {
+                names.push(n);
+            }
+        }
+    }
+    names
+}
+
+/// 前缀下是否已有已选值：fields 里非空/非 0，或页面控件带 checked 且 value 非空
+fn prefix_selected(fields: &[Field], page: &str, prefix: &str) -> bool {
+    if select_field_names(fields, prefix).iter().any(|n| {
+        let v = field_lookup(fields, &n).unwrap_or("");
+        !v.is_empty() && v != "0"
+    }) {
+        return true;
+    }
+    for kind in ["radio", "checkbox"] {
+        if input_controls(page, prefix, kind)
+            .iter()
+            .any(|(_, v, _, c)| *c && !v.is_empty() && v != "0")
+        {
+            return true;
+        }
+    }
+    false
+}
+
 /// 应用逐站显式选档覆盖（`reseedRules.<site>.selectPicks`）：只在字段当前为空/0 时写入，
 /// 且 value 必须是该站表单真实存在的选项（防旧规则在新版表单上写无效值）。
+/// `multiPicks` 按页面标签勾选复选框/多选组；`requiredFields` 校验必填前缀，
+/// 未选即记 `required_gaps`，由门禁拒绝发布（不带空值 POST）。
 pub fn apply_site_rules(prep: &mut PreparedUpload, rules: &crate::gates::SiteRules) {
     if rules.prune_dead_images.unwrap_or(false) {
         if let Some(field) = ["descr", "release_desc", "description", "content"]
@@ -1912,7 +2177,7 @@ pub fn apply_site_rules(prep: &mut PreparedUpload, rules: &crate::gates::SiteRul
             .copied()
         {
             let cur = field_lookup(&prep.fields, field).unwrap_or("").to_string();
-            let (next, removed) = prune_dead_images(&cur);
+            let (next, removed) = prune_dead_images(&cur, &prep.form_url);
             if removed > 0 {
                 set_field(&mut prep.fields, field, next);
                 prep.select_notes.push(format!(
@@ -1936,6 +2201,49 @@ pub fn apply_site_rules(prep: &mut PreparedUpload, rules: &crate::gates::SiteRul
                     .push(format!("{name}：按站点显式规则选 value={want}"));
             }
         }
+    }
+
+    // multiPicks：复选框/多选组按页面真实标签勾选；匹配不到不臆造、保持未选
+    let mut unmatched: std::collections::BTreeMap<String, Vec<String>> = Default::default();
+    for (prefix, wants) in &rules.multi_picks {
+        let controls = input_controls(&prep.form_html, prefix, "checkbox");
+        let mut miss: Vec<String> = Vec::new();
+        for want in wants {
+            let hit = controls
+                .iter()
+                .find(|(_, _, label, _)| label_matches(label, want));
+            match hit {
+                Some((name, value, label, _)) => {
+                    if !prep.fields.iter().any(|(n, v)| n == name && v == value) {
+                        prep.fields.push((name.clone(), value.clone()));
+                    }
+                    prep.select_notes
+                        .push(format!("{name}：按规则勾选「{label}」（multiPicks）"));
+                }
+                None => miss.push(want.clone()),
+            }
+        }
+        if !miss.is_empty() {
+            unmatched.insert(prefix.clone(), miss);
+        }
+    }
+
+    // requiredFields：必填前缀任一未选即记缺口；门禁据此拒绝发布，绝不带空值 POST
+    for prefix in &rules.required_fields {
+        if prefix_selected(&prep.fields, &prep.form_html, prefix) {
+            continue;
+        }
+        let name = prefix_control_names(&prep.form_html, prefix)
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| prefix.clone());
+        let gap = match unmatched.get(prefix) {
+            Some(miss) if !miss.is_empty() => {
+                format!("必填缺失：{name}（配置标签未命中：{}）", miss.join("/"))
+            }
+            _ => format!("必填缺失：{name}"),
+        };
+        prep.required_gaps.push(gap);
     }
 }
 
@@ -1975,6 +2283,49 @@ fn matching_local_member(
     Ok(None)
 }
 
+/// Pick one completed local member, export its raw `.torrent` from qB.
+/// Source seed for the rewritten upload comes from here, never re-downloaded
+/// from the source site.
+fn pick_exported_member(
+    qb: &QBittorrent,
+    entry: &crate::index::ContentEntry,
+) -> Result<(MatchedMember, Vec<u8>)> {
+    for (hash, meta) in &entry.torrents {
+        let Some((progress, _)) = qb.torrent_progress(hash).ok().flatten() else {
+            continue;
+        };
+        if progress < 0.999 {
+            continue;
+        }
+        let Ok(data) = qb.export_torrent(hash) else {
+            continue;
+        };
+        if bencode::pieces_hash(&data).is_none() {
+            continue;
+        }
+        return Ok((
+            (hash.clone(), meta.save_path.clone(), meta.category.clone()),
+            data,
+        ));
+    }
+    bail!(
+        "本地 qB 中找不到已完成的内容成员（{}），拒绝上传",
+        entry.name
+    );
+}
+
+/// Derive the sibling `details.php?id=N` link from a `download.php?id=N` URL.
+fn detail_from_download(download_url: &str, base: &Url) -> Option<String> {
+    let marker = "download.php?id=";
+    let pos = download_url.find(marker)?;
+    let after = &download_url[pos + marker.len()..];
+    let digits: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if digits.is_empty() {
+        return None;
+    }
+    Some(resolve_url(&format!("details.php?id={digits}"), base))
+}
+
 pub fn prepare_upload(target: &NexusPhp, info: &ReleaseInfo) -> Result<PreparedUpload> {
     let form_url = resolve_url("upload.php", &target.base);
     let form_html = target
@@ -2005,6 +2356,9 @@ pub fn prepare_upload(target: &NexusPhp, info: &ReleaseInfo) -> Result<PreparedU
     };
 
     let action = form_action(&form_html, &target.base).unwrap_or_else(|| form_url.clone());
+    if let Some(bad) = non_upload_endpoint(&action, &target.base) {
+        bail!("上传表单 action 不是上传处理页：{action}（命中 {bad}），已中止提交");
+    }
     Ok(PreparedUpload {
         action,
         form_url,
@@ -2012,6 +2366,7 @@ pub fn prepare_upload(target: &NexusPhp, info: &ReleaseInfo) -> Result<PreparedU
         picked_tags,
         tag_warn,
         select_notes,
+        required_gaps: vec![],
         form_html,
     })
 }
@@ -2023,9 +2378,66 @@ pub fn upload_release(
     info: &ReleaseInfo,
     torrent_data: &[u8],
     filename: &str,
+    dump_dir: Option<&Path>,
 ) -> Result<UploadResult> {
     let prep = prepare_upload(target, info)?;
-    submit_upload(target, &prep, torrent_data, filename)
+    submit_upload(target, &prep, torrent_data, filename, dump_dir)
+}
+
+/// 上传回包调试落盘开关：仅 `BSEND_DUMP_UPLOAD=1/true/on` 时开启，默认关闭。
+/// 抽成纯函数便于单测，开关判定不直接读环境变量本身。
+fn dump_upload_enabled(env: Option<&str>) -> bool {
+    matches!(
+        env.map(|s| s.trim().to_ascii_lowercase()).as_deref(),
+        Some("1") | Some("true") | Some("on")
+    )
+}
+
+fn upload_dump_enabled() -> bool {
+    dump_upload_enabled(std::env::var("BSEND_DUMP_UPLOAD").ok().as_deref())
+}
+
+/// 把上传回包（状态 / 最终 URL / 非凭据响应头 / 提交字段名 / 正文）写到数据目录
+/// `upload-debug/<site>-<unix>-a<attempt>.html`。开关关闭或目录不可用时静默跳过，
+/// 不影响主流程；快照已剔除 Cookie/Set-Cookie，正文不含 passkey。
+fn dump_upload_response(
+    dump_dir: Option<&Path>,
+    site_id: &str,
+    resp: &crate::sites::nexusphp::UploadResponse,
+    action: &str,
+    fields: &[Field],
+    attempt: u8,
+) {
+    if !upload_dump_enabled() {
+        return;
+    }
+    let Some(dir) = dump_dir else { return };
+    let dir = dir.join("upload-debug");
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    let stamp = now_unix();
+    let file = dir.join(format!("{site_id}-{stamp}-a{attempt}.html"));
+    let field_names: Vec<&str> = fields.iter().map(|(n, _)| n.as_str()).collect();
+    let mut preamble = String::new();
+    preamble.push_str("<!-- BoxSend upload debug dump\n");
+    preamble.push_str(&format!("site: {site_id}\n"));
+    preamble.push_str(&format!("time_unix: {stamp}\n"));
+    preamble.push_str(&format!("attempt: {attempt}\n"));
+    preamble.push_str(&format!("action: {action}\n"));
+    preamble.push_str(&format!("status: {}\n", resp.status));
+    preamble.push_str(&format!("final_url: {}\n", resp.final_url));
+    preamble.push_str("headers:\n");
+    for (k, v) in &resp.headers {
+        preamble.push_str(&format!("  {k}: {v}\n"));
+    }
+    preamble.push_str(&format!(
+        "submitted_field_names: {}\n",
+        field_names.join(", ")
+    ));
+    preamble.push_str("-->\n");
+    let body = format!("{preamble}{}", resp.body);
+    let _ = std::fs::write(&file, body);
 }
 
 /// 用已构造好的字段提交（`prepare_upload` 的产出）。官方预审、审阅与
@@ -2035,6 +2447,7 @@ pub fn submit_upload(
     prep: &PreparedUpload,
     torrent_data: &[u8],
     filename: &str,
+    dump_dir: Option<&Path>,
 ) -> Result<UploadResult> {
     // 成功消息末尾追加标签警告（若有）
     let note_suffix = prep
@@ -2054,29 +2467,46 @@ pub fn submit_upload(
                 &prep.form_url,
             )
             .with_context(|| format!("提交上传失败（第 {} 次）", attempt + 1))?;
-        let body = resp.body;
-        // 「已存在」先判：站点常跳回已有种子详情页，先判成功会误报转种成功
-        if has_exist_marker(&body) {
-            let dup_url = sole_detail_url(&body, &resp.final_url, &prep.action);
+        dump_upload_response(
+            dump_dir,
+            &target.site_id,
+            &resp,
+            &prep.action,
+            &prep.fields,
+            attempt as u8,
+        );
+        let body = resp.body.clone();
+        let final_url = resp.final_url.clone();
+        // 「已存在」先判：站点常跳回已有种子详情页，先判成功会误报转种成功。
+        // 只认结构性证据（existed=1 跳转 / errorbox），整页自由文本不能当重复，
+        // 否则普通校验失败页里的模板措辞会被误判成「站点已有」。
+        if let Some(marker) = exist_marker(&final_url, &body) {
+            let dup_url = sole_detail_url(&body, &final_url, &prep.action);
             return Ok(UploadResult {
                 detail_url: dup_url,
-                message: format!("站点提示种子已存在（视为已覆盖，不算本次转种）{note_suffix}"),
+                message: format!(
+                    "站点提示种子已存在（证据：{marker}；视为已覆盖，不算本次转种）{note_suffix}"
+                ),
                 duplicate: true,
+                body,
+                final_url,
             });
         }
         // 成功：跳到详情页 / 发布成功提示
-        if let Some(u) = redirect_detail_url(&resp.final_url, &prep.action) {
+        if let Some(u) = redirect_detail_url(&final_url, &prep.action) {
             return Ok(UploadResult {
                 detail_url: Some(u),
                 message: format!("发布成功（跳转详情页）{note_suffix}"),
                 duplicate: false,
+                body,
+                final_url,
             });
         }
         if body.contains("发布成功")
             || body.contains("new torrent")
             || body.contains("Torrent added")
         {
-            let u = sole_detail_url(&body, &resp.final_url, &prep.action);
+            let u = sole_detail_url(&body, &final_url, &prep.action);
             return Ok(UploadResult {
                 detail_url: u.clone(),
                 message: if u.is_some() {
@@ -2085,6 +2515,21 @@ pub fn submit_upload(
                     format!("发布成功（响应页没找到详情链接，需手动确认新种）{note_suffix}")
                 },
                 duplicate: false,
+                body,
+                final_url,
+            });
+        }
+        // 部分站点成功后不发 Location 跳转，回包正文挂新种详情页链接（kufei 实测：
+        // 提交后 final_url 仍是上传页，正文带 details.php?id=）。回包不是上传表单
+        // 重填页、且正文只有唯一 details.php?id=N 时视为成功。这里只放宽「成功
+        // 识别方式」：existed 判定与判重口径不变。
+        if let Some(u) = body_detail_success_url(&body, &final_url, &prep.action) {
+            return Ok(UploadResult {
+                detail_url: Some(u),
+                message: format!("发布成功（回包正文详情链接）{note_suffix}"),
+                duplicate: false,
+                body,
+                final_url,
             });
         }
         last_err = extract_upload_error(&body, resp.status);
@@ -2123,16 +2568,43 @@ fn extract_upload_error(body: &str, status: u16) -> String {
     format!("HTTP {status} 未识别的返回")
 }
 
-fn has_exist_marker(s: &str) -> bool {
-    [
+/// 站点「种子已存在」判定。返回命中的证据描述（写进审计，便于回溯）。
+///
+/// 只认两类结构性证据：
+/// 1. 跳转落到 `details.php?id=…&existed=1`（NexusPHP 重复上传的标准动作）；
+/// 2. `errorbox` 里出现重复措辞。
+///
+/// 过去是整页 `contains`，结果把导航/表单说明/帮助文案里的「已存在」也算命中：
+/// 一旦上传页因必填项校验失败被原样返回，就会被记成「站点已有」，凭空造出一条
+/// 并不存在的详情页链接。注意：`existed=1` 也只证明「站点认为重复」，不证明
+/// 那个 id 是本次内容的条目——回包 id 在实测里 6/6 不可信，仍需逐条核对。
+fn exist_marker(final_url: &str, body: &str) -> Option<&'static str> {
+    if final_url.to_ascii_lowercase().contains("existed=1") {
+        return Some("跳转 URL 带 existed=1");
+    }
+    // 返回体还是上传表单（multipart）：这是校验失败重填，不是重复提示
+    if body.contains("multipart/form-data") {
+        return None;
+    }
+    const MARKERS: &[&str] = &[
         "已经上传",
         "已存在",
         "被人上传",
         "already exists",
         "Torrent already",
-    ]
-    .iter()
-    .any(|m| s.contains(m))
+    ];
+    if let Some(boxed) = div_inner(body, "errorbox") {
+        if let Some(m) = MARKERS.iter().find(|m| boxed.contains(**m)) {
+            return Some(*m);
+        }
+    }
+    // 提示页通常很短；长页面里的零散措辞多半是模板/简介文本
+    if body.len() <= 8192 {
+        if let Some(m) = MARKERS.iter().find(|m| body.contains(**m)) {
+            return Some(*m);
+        }
+    }
+    None
 }
 
 fn looks_like_lost_post(msg: &str) -> bool {
@@ -2152,6 +2624,15 @@ fn redirect_detail_url(final_url: &str, action: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// 成功但没跳转：从回包正文取唯一详情页链接。上传表单重填页（校验失败回显，
+/// multipart 或仍含文件上传框）不参与——侧边栏挂的旧种链接不能当新种证据。
+fn body_detail_success_url(body: &str, final_url: &str, action: &str) -> Option<String> {
+    if body.contains("multipart/form-data") || upload_form_block(body).is_some() {
+        return None;
+    }
+    sole_detail_url(body, final_url, action)
 }
 
 fn sole_detail_url(body: &str, final_url: &str, action: &str) -> Option<String> {
@@ -2226,6 +2707,9 @@ impl ReviewReport {
         }
         for n in &self.prepared.select_notes {
             out.push_str(&format!("  选档提示：{n}\n"));
+        }
+        for g in &self.prepared.required_gaps {
+            out.push_str(&format!("  阻断：{g}\n"));
         }
         match (&self.audit, &self.audit_note) {
             (Some(a), _) => {
@@ -2438,71 +2922,80 @@ fn target_has_imdb(
     Ok(None)
 }
 
-/// 发后校正：上传回包给的详情页可能是中转/错误 id（luckpt 实测回包 id=10230，
-/// 真实种子 61140）。按发布标题站内检索 + 逐条核对详情页标题定位真实链接。
-fn relocate_posted_detail(tgt: &NexusPhp, name: &str, log: &mut dyn FnMut(&str)) -> Option<String> {
-    let q = url::form_urlencoded::byte_serialize(name.as_bytes()).collect::<String>();
-    let base = tgt.base.as_str().trim_end_matches('/');
-    let url = format!("{base}/torrents.php?search={q}&search_area=0&incldead=1");
-    let html = match tgt.fetch_html(&url, tgt.base.as_str()) {
-        Ok(h) => h,
-        Err(e) => {
-            log(&format!("发后检索失败：{e:#}"));
-            return None;
-        }
-    };
-    let mut ids: Vec<String> = Vec::new();
-    let mut rest = html.as_str();
-    while let Some(pos) = rest.find("details.php?id=") {
-        let after = &rest[pos + "details.php?id=".len()..];
+// ---------------- 发后定位（只认上传回包自带链接，不做站内检索） ----------------
+
+/// 上传回包里解析出的链接：详情页与下载直链各取首条。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PostedLinks {
+    pub detail: Option<String>,
+    pub download: Option<String>,
+}
+
+fn collect_id_links(haystack: &str, base: &Url, marker: &str, out: &mut Vec<String>) {
+    let mut rest = haystack;
+    while let Some(p) = rest.find(marker) {
+        let after = &rest[p + marker.len()..];
         let digits: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
-        if !digits.is_empty() && !ids.contains(&digits) {
-            ids.push(digits);
+        if !digits.is_empty() {
+            let href = format!("{marker}{digits}");
+            // details 链接要躲过 userdetails.php?id= 这类用户主页锚（前缀守卫）
+            if marker == "details.php?id=" && !is_detail_href(&href) {
+                rest = after;
+                continue;
+            }
+            let u = resolve_url(&href, base);
+            if !out.contains(&u) {
+                out.push(u);
+            }
         }
         rest = after;
     }
-    ids.truncate(8);
-    log(&format!("发后检索到 {} 个候选详情页", ids.len()));
-    let want = norm_post_title(name);
-    for id in ids {
-        let u = format!("{base}/details.php?id={id}");
-        if let Ok(page) = tgt.fetch_torrent_page(&u) {
-            if norm_post_title(&page.name) == want {
-                return Some(u);
-            }
-        }
-    }
-    None
 }
 
-/// existed 回包的详情页不可全信（常是中转/跳转 id）：先核对标题，不符再按
-/// IMDb 区 / 标题检索找回真实条目。只做定位，不判重。
+/// 从上传回包正文与最终跳转 URL 提取 `details.php?id=` / `download.php?id=` 链接。
+/// 纯解析：不发检索请求、不读「我发布的列表」（QB-TRUTH-MODE §6）。
+pub fn extract_posted_links(body: &str, final_url: &str, base: &Url) -> PostedLinks {
+    let mut details: Vec<String> = Vec::new();
+    let mut downloads: Vec<String> = Vec::new();
+    for hay in [body, final_url] {
+        collect_id_links(hay, base, "details.php?id=", &mut details);
+        collect_id_links(hay, base, "download.php?id=", &mut downloads);
+    }
+    PostedLinks {
+        detail: details.into_iter().next(),
+        download: downloads.into_iter().next(),
+    }
+}
+
+/// existed 回包详情页标题核对：只采信回包给的 hint 页面，标题一致才返回。
+/// 不做站内检索校正（QB-TRUTH-MODE §6：发后定位只允许用回包自带链接）。
+/// 不用 IMDb 区兜底：IMDb 命中只说明同一部片子，不能说明同一条种子。
 fn locate_existing_target(
     tgt: &NexusPhp,
     info: &ReleaseInfo,
     hint: &str,
     log: &mut dyn FnMut(&str),
 ) -> Option<String> {
-    if !hint.is_empty() {
-        if let Ok(p) = tgt.fetch_torrent_page(hint) {
+    if hint.is_empty() {
+        return None;
+    }
+    match tgt.fetch_torrent_page(hint) {
+        Ok(p) => {
             if norm_post_title(&p.name) == norm_post_title(&info.name) {
-                return Some(hint.to_string());
+                Some(hint.to_string())
+            } else {
+                log(&format!(
+                    "existed 回包详情页标题不符（页面「{}」），弃用该线索",
+                    p.name
+                ));
+                None
             }
-            log(&format!(
-                "existed 回包详情页标题不符（页面「{}」），按 IMDb/标题校正…",
-                p.name
-            ));
+        }
+        Err(e) => {
+            log(&format!("existed 回包详情页打不开（{e:#}），弃用该线索"));
+            None
         }
     }
-    if let Ok(Some((u, title))) = target_has_imdb(tgt, info.imdb.as_deref(), log) {
-        log(&format!("existed 校正：IMDb 区找到「{title}」→ {u}"));
-        return Some(u);
-    }
-    let u = relocate_posted_detail(tgt, &info.name, log);
-    if let Some(u) = &u {
-        log(&format!("existed 校正：按标题找到 {u}"));
-    }
-    u
 }
 
 pub fn verify_posted(target: &NexusPhp, detail_url: &str, info: &ReleaseInfo) -> Vec<String> {
@@ -2589,6 +3082,10 @@ pub struct FormDrill {
     pub notes: Vec<String>,
     /// 上传页是否带官方预审面板（LuckAudit）
     pub audit_panel: bool,
+    /// 表单解析出的提交地址（绝对 URL）；构造失败时为 None
+    pub action: Option<String>,
+    /// 每个上传下拉的全量选项：(下拉名, [(value, label)])，供 formcheck 落盘核对缺口
+    pub select_options: Vec<(String, Vec<(String, String)>)>,
 }
 
 impl FormDrill {
@@ -2783,6 +3280,8 @@ fn analyze_form(
         );
     }
     d.audit_panel = pre_audit_supported(&prep.form_html);
+    d.action = Some(prep.action.clone());
+    d.select_options = drill_select_options(&prep.form_html);
     for name in select_names(&prep.form_html) {
         // BBCode 编辑器的 color/font/size 装饰下拉与发种完备性无关
         if matches!(name.as_str(), "color" | "font" | "size") {
@@ -3349,7 +3848,11 @@ pub struct DuplicateOutcome {
 }
 
 /// 一次转种的结果：发布成功带详情页，或判重命中带明确分类。
-/// 自动发种据此写审计（posted / skipped_duplicate / other_version / failed / existed_pending）。
+/// 自动发种据此写审计（posted / skipped_duplicate / other_version / failed /
+/// existed_pending / posted_unresolved）。
+///
+/// 「上传成功但回包定位不到新种」复用 `Duplicate(ReviewPending)`：note 以
+/// `posted_unresolved` 开头，审计词据此区分；它不记 failed、不进退避表、不计 posted 限额。
 #[derive(Debug, Clone)]
 pub enum ReseedOutcome {
     Posted(String),
@@ -3357,7 +3860,7 @@ pub enum ReseedOutcome {
 }
 
 impl ReseedOutcome {
-    /// 审计 result 词表（auto-audit.jsonl / DATA-FILES 同步）
+    /// 审计 result 词表（auto-audit.jsonl / OPERATIONS 同步）
     pub fn audit_result(&self) -> &'static str {
         match self {
             ReseedOutcome::Posted(_) => "posted",
@@ -3365,7 +3868,14 @@ impl ReseedOutcome {
                 CoverageStatus::Assisted | CoverageStatus::Seeding => "skipped_duplicate",
                 CoverageStatus::OtherVersion => "other_version",
                 CoverageStatus::SameHashSkip => "same_hash_skipped",
-                CoverageStatus::ReviewPending => "existed_pending",
+                CoverageStatus::ReviewPending => {
+                    if d.note.starts_with("posted_unresolved") {
+                        // 定位不到 ≠ 发种失败：不进 blocked/failed/review_failed 退避表
+                        "posted_unresolved"
+                    } else {
+                        "existed_pending"
+                    }
+                }
                 _ => "failed",
             },
         }
@@ -3799,24 +4309,31 @@ fn run_reseed_inner(
                 }
             }
             Ok(None) => {
-                let why = format!("目标站已有其他版本「{title}」；pieces 不一致，未上传");
-                log(&format!(
-                    "目标站判重命中：{title} → {detail_url}；不同版本，跳过"
-                ));
-                write_cell(
-                    index,
-                    &req.content_key,
-                    &req.target_site,
-                    CoverageStatus::OtherVersion,
-                    Some(detail_url.clone()),
-                    &why,
-                );
-                index.save()?;
-                return Ok(ReseedOutcome::Duplicate(DuplicateOutcome {
-                    status: CoverageStatus::OtherVersion,
-                    url: Some(detail_url),
-                    note: why,
-                }));
+                // 站点有同名「其他版本」：照样发（分集/全集、不同压制组都算）。
+                // 画质高低不由工具裁决——站点自己的门禁/审核会拦，工具多做一层判断
+                // 只会把能发的种挡在门外（实测一次 1080p/2160p 误判就废掉一条）。
+                if cfg.coverage.allow_other_version {
+                    log(&format!(
+                        "目标站已有其他版本「{title}」→ {detail_url}；按策略继续发布，画质交由站点门禁判断"
+                    ));
+                } else {
+                    let why = format!("目标站已有其他版本「{title}」；pieces 不一致，按配置不发");
+                    log(&format!("目标站判重命中：{title} → {detail_url}；{why}"));
+                    write_cell(
+                        index,
+                        &req.content_key,
+                        &req.target_site,
+                        CoverageStatus::OtherVersion,
+                        Some(detail_url.clone()),
+                        &why,
+                    );
+                    index.save()?;
+                    return Ok(ReseedOutcome::Duplicate(DuplicateOutcome {
+                        status: CoverageStatus::OtherVersion,
+                        url: Some(detail_url),
+                        note: why,
+                    }));
+                }
             }
             Err(e) => {
                 let why = format!("目标站已有条目「{title}」，但复核失败（{e:#}），不判其他版本");
@@ -3842,13 +4359,7 @@ fn run_reseed_inner(
     }
     log("目标站未找到同条目，继续上传");
 
-    let Released {
-        src,
-        tgt,
-        page,
-        info,
-        ..
-    } = rel;
+    let Released { tgt, info, .. } = rel;
 
     // ---- 3 上传字段：审阅产物直传；否则现场构造 + 官方预审 ----
     let prep = match prepared_from_review {
@@ -3889,28 +4400,70 @@ fn run_reseed_inner(
         }
     };
 
-    // ---- 4 下载源种 + 上传目标站 ----
-    let torrent_data = src.download_torrent(&page, &req.source_url)?;
-    // 程序化硬闸：源种分片结构必须与 qB 中一个已完成成员一致；只看内容组 hash
-    // 不够（同文件不同分片长度无法跨种，浪潮实测）。
+    // ---- 4 从 qB 导出源种 → 单 tracker 改写 → 上传目标站 ----
     let entry = index
         .contents
         .get(&req.content_key)
         .ok_or_else(|| anyhow!("索引里找不到内容 {}", req.content_key))?;
-    let matched_member = matching_local_member(qb, entry, &torrent_data)?.ok_or_else(|| {
-        anyhow!(
-            "源种分片结构与本地 qB 中任何已完成副本都不一致，拒绝上传（{}）",
-            req.name
-        )
-    })?;
+
+    // 4.1 选一个已完成本地成员，导出原始 .torrent（源种不回源站搜索/下载）
+    let (matched_member, src_data) = pick_exported_member(qb, entry)?;
     log(&format!(
-        "源种分片校验通过：本地成员 {}（savePath {}）",
+        "源种取自 qB 导出：本地成员 {}（savePath {}）",
         &matched_member.0[..12.min(matched_member.0.len())],
         matched_member.1
     ));
+
+    // 4.2 目标站 announce（带 passkey）：优先用站点配置（第一次在该站发种时必须配）；
+    // 没配则从下载器现有该站 tracker 里取一条。两者都没有就 fail-closed，
+    // 不构造无 passkey 的 announce。
+    let target_announce = match tgt.announce_url.clone() {
+        Some(u) => {
+            let host = Url::parse(&u)
+                .ok()
+                .and_then(|p| p.host_str().map(|h| h.to_lowercase()))
+                .unwrap_or_default();
+            let host_ok = tgt.announce_hosts.iter().any(|h| {
+                let h = h.to_lowercase();
+                host == h || host.ends_with(&format!(".{h}"))
+            });
+            if !host_ok {
+                bail!(
+                    "站点 {} 配置的 announceURL host（{host}）不在 announceHosts 里，拒绝上传到错误 tracker",
+                    tgt.site_id
+                );
+            }
+            u
+        }
+        None => qb.announce_for_hosts(&tgt.announce_hosts).ok_or_else(|| {
+            anyhow!(
+                "单 tracker 策略：本地找不到目标站 {} 的 announce（带 passkey）。第一次在该站发种时，请在 boxsend.json 的该站 overrides.announceURL 填入完整 tracker 地址",
+                tgt.site_id
+            )
+        })?,
+    };
+
+    // 4.3 字节级改写：换 announce、删 announce-list、注入 info.source（素材字节不动）
+    let rewritten = torrent_rewrite::rewrite_for_target(&src_data, &target_announce, &tgt.site_id)?;
+
+    // 4.4 上传前断言：新 hash 不在下载器；新旧 hash 不同；单 tracker
+    let existing = qb.existing_hashes()?;
+    if existing.contains(&rewritten.new_hash) {
+        bail!(
+            "单 tracker 策略：新种 info hash {} 已存在于 qB（{}），中止；不做 hash 冲突兜底、不改 piece length",
+            rewritten.new_hash,
+            req.target_site
+        );
+    }
+    if rewritten.new_hash == rewritten.old_hash {
+        bail!("实现错误：改写后 info hash 与源种相同，info.source 未生效");
+    }
+    torrent_rewrite::assert_single_tracker(&rewritten.data)?;
+
     log(&format!(
-        "源种已下载（{} bytes），提交到 {} 上传页…",
-        torrent_data.len(),
+        "源种已改写（{} bytes，新 hash {}），提交到 {} 上传页…",
+        rewritten.data.len(),
+        &rewritten.new_hash[..12.min(rewritten.new_hash.len())],
         req.target_site
     ));
     let filename = format!("{}.torrent", info.name);
@@ -3919,7 +4472,13 @@ fn run_reseed_inner(
     if !throttle.acquire(&tgt.site_id, BudgetKind::Upload) {
         bail!("上传预算用完（assist.roundBudget / uploadBudget），拒绝继续上传");
     }
-    let up = submit_upload(&tgt, &prep, &torrent_data, &filename)?;
+    let up = submit_upload(
+        &tgt,
+        &prep,
+        &rewritten.data,
+        &filename,
+        cfg.data_dir.as_deref(),
+    )?;
     log(&format!("上传结果：{}", up.message));
 
     // 站点回包带 duplicate 标志时，回包链接可能只是 existed 跳转（不可信），
@@ -3928,8 +4487,16 @@ fn run_reseed_inner(
     if up.duplicate {
         let hint = up.detail_url.unwrap_or_default();
         let Some(detail_url) = locate_existing_target(&tgt, &info, &hint, log) else {
+            // 回包 id 只当线索，不当结论：实测 6/6 新种的 details id 都是错的，
+            // 这里又定位不到可核对条目，就不能把 hint 写成「站点详情页」，
+            // 否则覆盖表会凭空多出一条「站点已有」的假记录。
+            let clue = if hint.is_empty() {
+                String::new()
+            } else {
+                format!("（回包给的线索 {hint}，未验证）")
+            };
             let note = format!(
-                "上传回包标记 existed（{}），站内没定位到条目，未加入下载器",
+                "上传回包标记 existed（{}），但站内定位不到可核对的条目{clue}；未加入下载器，待人工确认",
                 up.message
             );
             write_cell(
@@ -3937,13 +4504,13 @@ fn run_reseed_inner(
                 &req.content_key,
                 &req.target_site,
                 CoverageStatus::ReviewPending,
-                (!hint.is_empty()).then_some(hint.clone()),
+                None,
                 &note,
             );
             index.save()?;
             return Ok(ReseedOutcome::Duplicate(DuplicateOutcome {
                 status: CoverageStatus::ReviewPending,
-                url: (!hint.is_empty()).then_some(hint),
+                url: None,
                 note,
             }));
         };
@@ -3983,7 +4550,7 @@ fn run_reseed_inner(
                             ),
                             CoverageStatus::Assisted => (
                                 CoverageStatus::Assisted,
-                                "上传回包 existed：下载器里已存在（已补挂 tracker）".to_string(),
+                                "上传回包 existed：下载器里已存在（同 hash，按策略不改动原种子）".to_string(),
                             ),
                             CoverageStatus::SameHashSkip => (
                                 CoverageStatus::SameHashSkip,
@@ -4061,137 +4628,77 @@ fn run_reseed_inner(
             }
         };
     }
-    let detail_url = match up.detail_url {
-        Some(u) => u,
-        None => {
-            // 站点「发布成功」但回包没给链接：用 IMDb 区检索找回真实详情页。
-            match target_has_imdb(&tgt, info.imdb.as_deref(), log) {
-                Ok(Some((u, title))) => {
-                    log(&format!("回包无链接，IMDb 区找到新种：{title} → {u}"));
-                    u
-                }
-                // 上传可能已成功：格子必须离开草稿态，否则下轮 autopost 会重传造成重复发布。
-                // ReviewPending 非终态，missTTL 后 run 会重查——若真发成功了辅种臂会自然命中。
-                Ok(None) => {
-                    write_cell(
-                        index,
-                        &req.content_key,
-                        &req.target_site,
-                        CoverageStatus::ReviewPending,
-                        None,
-                        "上传可能已成功：回包无详情页链接且 IMDb 区未找到，待人工确认（不自动重传）",
-                    );
-                    index.save()?;
-                    bail!("上传成功但没拿到详情页链接（IMDb 区也没找到），格子已记待人工确认")
-                }
-                Err(e) => {
-                    write_cell(
-                        index,
-                        &req.content_key,
-                        &req.target_site,
-                        CoverageStatus::ReviewPending,
-                        None,
-                        "上传可能已成功：回包无详情页链接且 IMDb 区判重失败，待人工确认（不自动重传）",
-                    );
-                    index.save()?;
-                    bail!(
-                        "上传成功但没拿到详情页链接（IMDb 区判重失败：{e:#}），格子已记待人工确认"
-                    )
-                }
-            }
-        }
+
+    // ---- 5 发后定位：只从回包正文/跳转 URL 取自带链接，不做站内检索 ----
+    let links = extract_posted_links(&up.body, &up.final_url, &tgt.base);
+    let download_url: Option<String> = match (&links.download, &links.detail) {
+        (Some(d), _) => Some(d.clone()),
+        (None, Some(detail)) => tgt
+            .fetch_torrent_page(detail)
+            .ok()
+            .and_then(|p| (!p.download_url.is_empty()).then(|| p.download_url)),
+        (None, None) => None,
     };
-    log(&format!("新种详情页：{detail_url}"));
+    let Some(download_url) = download_url else {
+        // 上传可能已成功：定位不到新种 ≠ 发种失败；落 ReviewPending，不进退避、不计 posted。
+        let reason = format!(
+            "posted_unresolved：上传回包里没有可核对的下载/详情链接（{}），待人工确认；勿重发",
+            up.message
+        );
+        log(&format!("发后定位·未解决：{reason}"));
+        write_cell(
+            index,
+            &req.content_key,
+            &req.target_site,
+            CoverageStatus::ReviewPending,
+            up.detail_url.clone(),
+            &reason,
+        );
+        index.save()?;
+        return Ok(ReseedOutcome::Duplicate(DuplicateOutcome {
+            status: CoverageStatus::ReviewPending,
+            url: up.detail_url.clone(),
+            note: reason,
+        }));
+    };
+
+    // 详情页链接（自检用）：回包详情优先，否则由下载链接反推 details id
+    let detail_url = links
+        .detail
+        .clone()
+        .or_else(|| detail_from_download(&download_url, &tgt.base));
 
     // ---- 发后自检：回读新种页核对标题/MediaInfo/链接（只警告不推翻）----
-    // 站点回包给的详情页可能是中转/错误 id；先按标题校正，再做自检与回推
-    let detail_url = match tgt.fetch_torrent_page(&detail_url) {
-        Ok(p)
-            if !p.name.trim().is_empty()
-                && norm_post_title(&p.name) == norm_post_title(&info.name) =>
-        {
-            detail_url
-        }
-        Ok(p) => {
-            log(&format!(
-                "回包详情页标题不符（页面「{}」），按 IMDb/标题校正…",
-                p.name
-            ));
-            match target_has_imdb(&tgt, info.imdb.as_deref(), log) {
-                Ok(Some((u, title))) => {
-                    log(&format!("发后 IMDb 校正：{title} → {u}"));
-                    u
-                }
-                _ => match relocate_posted_detail(&tgt, &info.name, log) {
-                    Some(u) => {
-                        log(&format!("发后标题校正：{u}"));
-                        u
-                    }
-                    None => detail_url,
-                },
+    if !cfg.coverage.skip_post_check {
+        if let Some(d) = &detail_url {
+            for w in verify_posted(&tgt, d, &info) {
+                log(&format!("发后自检·{w}"));
             }
-        }
-        Err(e) => {
-            log(&format!(
-                "回包详情页打不开（{e:#}），按 IMDb 区/标题检索校正真实详情页…"
-            ));
-            match target_has_imdb(&tgt, info.imdb.as_deref(), log) {
-                Ok(Some((u, title))) => {
-                    log(&format!("发后 IMDb 校正：{title} → {u}"));
-                    u
-                }
-                _ => match relocate_posted_detail(&tgt, &info.name, log) {
-                    Some(u) => {
-                        log(&format!("发后标题校正：{u}"));
-                        u
-                    }
-                    None => detail_url,
-                },
-            }
-        }
-    };
-    if cfg.coverage.skip_post_check {
-        log("按配置跳过发后自检（skipPostCheck=true）");
-    } else {
-        for w in verify_posted(&tgt, &detail_url, &info) {
-            log(&format!("发后自检·{w}"));
         }
     }
 
-    // ---- 4 回推下载器并校验 ----
-    // 发布本身已成功；若站点随即删除/转待审导致详情页回读不到，不能再把整轮判失败
-    // （luckpt 实测：上传回包给的中转 id 不是真实种子 id；已先按标题校正）。
-    let tpage = match tgt.fetch_torrent_page(&detail_url) {
-        Ok(p) => p,
-        Err(e) => {
-            log(&format!(
-                "发后回读详情页失败（{e:#}）——发布已成功，格子记 Reseeded 并提示人工确认（不重发）"
-            ));
-            write_cell(
-                index,
-                &req.content_key,
-                &req.target_site,
-                CoverageStatus::Reseeded,
-                Some(detail_url.clone()),
-                "发布成功，但回包详情页与站内检索都定位失败（回包 id 可能有误），请人工确认；勿重发",
-            );
-            index.save()?;
-            return Ok(ReseedOutcome::Posted(detail_url));
-        }
+    // ---- 6 下载站点 .torrent，作为独立种子挂回 qB（绝不追加 tracker）----
+    let referer = detail_url.as_deref().unwrap_or(download_url.as_str());
+    let page = TorrentPage {
+        name: String::new(),
+        download_url: download_url.clone(),
+        size_bytes: None,
+        uploader_uid: None,
+        uploader_name: None,
     };
-    let tdata = tgt.download_torrent(&tpage, &detail_url)?;
+    let tdata = tgt.download_torrent(&page, referer)?;
     push_target_torrent(
         cfg,
         qb,
         req,
         &info.name,
-        &detail_url,
+        detail_url.as_deref().unwrap_or(&download_url),
         &tdata,
         matched_member,
         index,
         log,
     )?;
-    Ok(ReseedOutcome::Posted(detail_url))
+    Ok(ReseedOutcome::Posted(detail_url.unwrap_or(download_url)))
 }
 
 /// 转种动作日志（JSONL，fail-open）：GUI/CLI/autopost 每次转种都写一行。
@@ -4365,6 +4872,15 @@ fn push_target_torrent(
         add.id
     };
     let _ = qb.set_paused(&[&site_hash], false);
+    // 单 tracker 铁律（ARCH §3.3）：新种挂回后 tracker 列表长度必须为 1。
+    // 读不到列表（网络/404 形态）只记日志放行；读到多条即中止，绝不追加 announce。
+    match qb.tracker_count(&site_hash) {
+        Ok(1) => {}
+        Ok(n) => bail!(
+            "单 tracker 策略：新种挂回下载器后 tracker 数量为 {n}，必须为 1；中止（不追加 announce、不补挂 tracker）"
+        ),
+        Err(e) => log(&format!("tracker 数量核对跳过：{e:#}")),
+    }
     log("已加入下载器并启动校验…");
     let poll = cfg.coverage.verify_poll_sec.max(1);
     let mut waited: u64 = 0;
@@ -4449,7 +4965,8 @@ fn adapter_for(cfg: &Config, site_id: &str) -> Result<NexusPhp> {
     )
     .with_context(|| format!("站点配置不合法：{}", s.id))?;
     a.user_agent = cfg.user_agent.clone();
-    Ok(a.with_announce_hosts(s.announce_hosts.clone()))
+    Ok(a.with_announce_hosts(s.announce_hosts.clone())
+        .with_announce_url(s.announce_url.clone()))
 }
 
 /// CLI/调试用：把上传字段清单展开成人能读的行
@@ -4508,6 +5025,38 @@ Frame rate : 25</pre>
         assert!(info.mediainfo.contains("Unique ID"));
         assert_eq!(info.imdb.as_deref(), Some("tt4823720"));
         assert_eq!(info.douban.as_deref(), Some("26302614"));
+    }
+
+    #[test]
+    fn exist_marker_accepts_existed_redirect() {
+        let body = format!("<html>{}</html>", "x".repeat(30_000));
+        let m = exist_marker("https://sbpt.link/details.php?id=21692&existed=1", &body);
+        assert_eq!(m, Some("跳转 URL 带 existed=1"));
+    }
+
+    #[test]
+    fn exist_marker_ignores_rerendered_upload_form() {
+        // 必填项校验失败会把 upload.php 原样返回，页面帮助文案里可能带「已存在」
+        let body = r#"<form action="takeupload.php" method="post" enctype="multipart/form-data">
+<p>请先搜索站内是否已有该资源；重复资源会提示种子已存在。</p></form>"#;
+        assert_eq!(exist_marker("https://x/upload.php", body), None);
+    }
+
+    #[test]
+    fn exist_marker_ignores_long_page_boilerplate() {
+        let mut body = String::from("<html><body>");
+        body.push_str(&"y".repeat(12_000));
+        body.push_str("<p>规则：重复上传会提示已存在</p></body></html>");
+        assert_eq!(exist_marker("https://x/details.php?id=1", &body), None);
+    }
+
+    #[test]
+    fn exist_marker_reads_short_notice() {
+        let body = "<html><body><p>该种子已存在，请勿重复上传</p></body></html>";
+        assert_eq!(
+            exist_marker("https://x/takeupload.php", body),
+            Some("已存在")
+        );
     }
 
     #[test]
@@ -4638,6 +5187,8 @@ Frame rate : 25</pre>
         assert_eq!(strip_promo_suffix("Movie.2024 [FREE]"), "Movie.2024");
         assert_eq!(strip_promo_suffix("Movie.2024 [2x]"), "Movie.2024");
         assert_eq!(strip_promo_suffix("Movie.2024 [免费]"), "Movie.2024");
+        assert_eq!(strip_promo_suffix("Movie.2024 [未审]"), "Movie.2024");
+        assert_eq!(strip_promo_suffix("Movie.2024 [未审核]"), "Movie.2024");
         // 内容标签保留
         assert_eq!(strip_promo_suffix("Movie.2024 [中字]"), "Movie.2024 [中字]");
         assert_eq!(
@@ -4662,6 +5213,13 @@ Frame rate : 25</pre>
         assert_eq!(
             strip_promo_suffix("Movie.2024 [50%] 剩餘時間：2天3小時"),
             "Movie.2024"
+        );
+        // hdvideo 实测：倒计时按年/月计，前面挂着百分比角标
+        assert_eq!(
+            strip_promo_suffix(
+                "Star.Wars.Episode.IV.1977.1080p.BluRay.x264.MNHDR-FRDS    [50%] 剩余时间：26年4月"
+            ),
+            "Star.Wars.Episode.IV.1977.1080p.BluRay.x264.MNHDR-FRDS"
         );
         assert_eq!(strip_promo_suffix("Movie.2024 [免費]"), "Movie.2024");
         // 正文里提到「剩余时间」但后面不是倒计时：不动
@@ -4746,6 +5304,7 @@ Frame rate : 25</pre>
                 picked_tags: vec!["cnsub".into()],
                 tag_warn: None,
                 select_notes: vec!["分类：留空等人工选".into()],
+                required_gaps: vec![],
                 form_html: String::new(),
             },
             audit: Some(AuditVerdict {
@@ -5026,6 +5585,109 @@ Height : 1080</pre></div>"#;
     }
 
     #[test]
+    fn medium_plain_bluray_without_uhd_picks_plain_label() {
+        let form = r#"<select name="medium_sel[4]"><option value="0">请选择</option><option value="1">Blu-ray</option><option value="10">UHD Blu-ray</option></select>"#;
+        let info = ReleaseInfo {
+            name: "The.Machinist.2004.BluRay.1080p.TrueHD.5.1.x265-BeiTai".into(),
+            ..Default::default()
+        };
+        let (fs, _p, notes) = build_upload_fields(&info, form, &[]);
+        assert_eq!(field_lookup(&fs, "medium_sel"), Some("1"), "{notes:?}");
+    }
+
+    #[test]
+    fn medium_compound_token_fills_uhd_bluray_option() {
+        let form = r#"<select name="medium_sel[4]"><option value="0">请选择</option><option value="1">Blu-ray</option><option value="10">UHD Blu-ray</option><option value="3">Remux</option></select>"#;
+        let info = ReleaseInfo {
+            name: "Star.Wars.Episode.IX.The.Rise.of.Skywalker.2019.UHD.BluRay.1080p.x265.10bit.DDP.7.1.MNHDR-FRDS.mkv".into(),
+            ..Default::default()
+        };
+        let (fs, _p, notes) = build_upload_fields(&info, form, &[]);
+        assert_eq!(field_lookup(&fs, "medium_sel"), Some("10"), "{notes:?}");
+        assert!(notes.is_empty(), "{notes:?}");
+    }
+
+    #[test]
+    fn audio_aliases_match_real_site_labels() {
+        // luckpt 实测选项文案
+        let opts: Vec<(String, String)> = vec![
+            ("11".into(), "TrueHD Atmos".into()),
+            ("16".into(), "DTS-HD MA".into()),
+            ("14".into(), "TrueHD".into()),
+            ("12".into(), "DDP/E-AC3".into()),
+            ("8".into(), "DD/AC3".into()),
+            ("6".into(), "AAC".into()),
+            ("3".into(), "DTS".into()),
+        ];
+        // DDP → DD+/E-AC3 一类（EC3/EAC3 别名走 fill 路径，见 audio_alias_fill_from_title）
+        assert_eq!(match_option(&opts, "DDP").as_deref(), Some("12"));
+        // DTS-HD MA → DTS-HD MA
+        assert_eq!(match_option(&opts, "DTS-HD MA").as_deref(), Some("16"));
+        // TrueHD → TrueHD（不带 Atmos 不抢 Atmos 标签）
+        assert_eq!(match_option(&opts, "TrueHD").as_deref(), Some("14"));
+    }
+
+    #[test]
+    fn audio_alias_fill_from_title() {
+        let form = r#"<select name="audiocodec_sel[4]"><option value="0">请选择</option><option value="16">DTS-HD MA</option><option value="12">DDP/E-AC3</option><option value="14">TrueHD</option></select>"#;
+        let info = ReleaseInfo {
+            name: "Dark.City.1998.DC.BluRay.1080p.2Audio.DTS-HD.MA.7.1.x265.10bit-BeiTai".into(),
+            ..Default::default()
+        };
+        let (fs, _p, notes) = build_upload_fields(&info, form, &[]);
+        assert_eq!(field_lookup(&fs, "audiocodec_sel"), Some("16"), "{notes:?}");
+        let info2 = ReleaseInfo {
+            name: "Show.2020.1080p.BluRay.EC3.5.1-x265-GRP".into(),
+            ..Default::default()
+        };
+        let (fs2, _p2, notes2) = build_upload_fields(&info2, form, &[]);
+        assert_eq!(
+            field_lookup(&fs2, "audiocodec_sel"),
+            Some("12"),
+            "{notes2:?}"
+        );
+    }
+
+    #[test]
+    fn resolution_case_and_i_variants_normalize() {
+        let opts: Vec<(String, String)> = vec![
+            ("8".into(), "1080p".into()),
+            ("9".into(), "1080i".into()),
+            ("10".into(), "720p".into()),
+        ];
+        // 大小写归一：1080P / 1080p 同选项
+        assert_eq!(match_option(&opts, "1080P").as_deref(), Some("8"));
+        assert_eq!(match_option(&opts, "1080p").as_deref(), Some("8"));
+        assert_eq!(match_option(&opts, "1080I").as_deref(), Some("9"));
+        assert_eq!(match_option(&opts, "1080i").as_deref(), Some("9"));
+    }
+
+    #[test]
+    fn episode_marker_picks_tv_not_movie() {
+        let form = r#"<select name="type"><option value="0">请选择</option><option value="401">电影</option><option value="402">电视剧</option><option value="405">动漫</option></select>"#;
+        // 带 E01-E21 集数特征 → 唯一定位电视剧，不判歧义
+        let info = ReleaseInfo {
+            name: "白色巨塔.E01-E21.2003.1080p.HDTV.x265.AC3-FRDS".into(),
+            ..Default::default()
+        };
+        let (fs, _p, notes) = build_upload_fields(&info, form, &[]);
+        assert_eq!(field_lookup(&fs, "type"), Some("402"), "{notes:?}");
+        assert!(notes.is_empty(), "{notes:?}");
+    }
+
+    #[test]
+    fn movie_with_year_no_episode_stays_movie() {
+        let form = r#"<select name="type"><option value="0">请选择</option><option value="401">电影</option><option value="402">电视剧</option></select>"#;
+        // 无集数特征的年份电影 → 电影，不误伤成剧集
+        let info = ReleaseInfo {
+            name: "Dark.City.1998.DC.BluRay.1080p.DTS-HD.MA.7.1.x265-BeiTai".into(),
+            ..Default::default()
+        };
+        let (fs, _p, notes) = build_upload_fields(&info, form, &[]);
+        assert_eq!(field_lookup(&fs, "type"), Some("401"), "{notes:?}");
+    }
+
+    #[test]
     fn upload_descr_strips_inline_event_handlers() {
         // WAF 实测：真实上传也会被 on* 属性拦（luckpt 403）；提交前统一剥掉
         let form = r#"<form action="takeupload.php"><input type="file" name="file"><textarea name="descr"></textarea></form>"#;
@@ -5217,6 +5879,33 @@ Language : Chinese"
     }
 
     #[test]
+    fn image_content_type_rejects_hotlink_pages() {
+        assert!(content_type_is_image(Some("image/jpeg")));
+        assert!(content_type_is_image(Some("IMAGE/PNG")));
+        assert!(content_type_is_image(Some("application/octet-stream")));
+        // 防盗链/验证页：HTML、JSON 不算图片
+        assert!(!content_type_is_image(Some("text/html; charset=UTF-8")));
+        assert!(!content_type_is_image(Some("application/json")));
+        // CT 缺失放行（图床不回 CT 时不误剪）
+        assert!(content_type_is_image(None));
+    }
+
+    #[test]
+    fn upload_dump_gate_is_off_by_default_and_env_gated() {
+        // 默认关闭：未设置 / 空串 / 0 / 无关值都不落盘
+        assert!(!dump_upload_enabled(None));
+        assert!(!dump_upload_enabled(Some("")));
+        assert!(!dump_upload_enabled(Some("0")));
+        assert!(!dump_upload_enabled(Some("no")));
+        assert!(!dump_upload_enabled(Some("yes")));
+        // 显式开启：大小写/空白不敏感
+        assert!(dump_upload_enabled(Some("1")));
+        assert!(dump_upload_enabled(Some("true")));
+        assert!(dump_upload_enabled(Some(" on ")));
+        assert!(dump_upload_enabled(Some("TRUE")));
+    }
+
+    #[test]
     fn bluray_avc_is_not_reencode() {
         let form = r#"<select name="medium_sel[4]"><option value="0">请选择</option><option value="1">Blu-ray</option><option value="2">Encode</option></select>"#;
         let info = ReleaseInfo {
@@ -5377,6 +6066,7 @@ Language : Chinese"));
             picked_tags: vec![],
             tag_warn: None,
             select_notes: vec!["分类：留空等人工选".into()],
+            required_gaps: vec![],
             form_html: r#"<select name="type"><option value="0">请选择</option><option value="404">剧集</option></select>
 <select name="medium_sel[4]"><option value="0">请选择</option><option value="7">HDTV</option></select>
 <select name="codec_sel[4]"><option value="0">请选择</option><option value="1">x264</option></select>"#
@@ -5500,6 +6190,7 @@ Language : Chinese"));
             picked_tags: vec![],
             tag_warn: None,
             select_notes: vec![],
+            required_gaps: vec![],
             form_html: r#"<select name="type"><option value="0">请选择</option><option value="402">剧集</option></select>
 <select name="audiocodec_sel[8]"><option value="0">请选择</option><option value="1">PDF</option><option value="2">MOBI</option></select>"#
                 .into(),
@@ -5531,6 +6222,7 @@ Language : Chinese"));
             picked_tags: vec![],
             tag_warn: None,
             select_notes: notes,
+            required_gaps: vec![],
             form_html: form.into(),
         };
         let d = analyze_form("ht", "海棠", &prep, &drill_release());
@@ -5589,6 +6281,7 @@ Language : Chinese"));
             picked_tags: vec![],
             tag_warn: None,
             select_notes: _n,
+            required_gaps: vec![],
             form_html: form.into(),
         };
         let d = analyze_form("tjupt", "北洋", &prep, &drill_release());
@@ -5648,6 +6341,7 @@ Language : Chinese"));
             picked_tags: vec![],
             tag_warn: None,
             select_notes: vec![],
+            required_gaps: vec![],
             form_html: String::new(),
         };
         let rep = ReviewReport {
@@ -5671,5 +6365,222 @@ Language : Chinese"));
         ]);
         assert!(!dump.contains("abc123"), "{dump}");
         assert!(dump.contains("name=Show"), "{dump}");
+    }
+
+    #[test]
+    fn form_action_prefers_upload_form_over_nav_search() {
+        // 导航搜索表单排在前面，上传表单在后：action 必须取上传块里的 takeupload.php，
+        // 不能整页取第一个 <form> 误配成 search.php（tangpt/longpt 实机故障）
+        let base = Url::parse("https://x.example/")
+            .unwrap()
+            .join("upload.php")
+            .unwrap();
+        let page = r#"<form action="search.php"><input name="search"><select name="search_area"><option value="1">全站</option></select></form>
+<form action="takeupload.php" method="post" enctype="multipart/form-data"><input type="file" name="torrent"></form>"#;
+        assert_eq!(
+            form_action(page, &base).as_deref(),
+            Some("https://x.example/takeupload.php")
+        );
+    }
+
+    #[test]
+    fn form_action_keeps_offsite_absolute_endpoint() {
+        // 城市类站点把种子 POST 到独立域名：站外绝对地址照收，不按本站根解析
+        let base = Url::parse("https://city.example/upload.php").unwrap();
+        let page = r#"<form action="https://up.other-domain.cc/takeupload.php" enctype="multipart/form-data"><input type="file" name="torrent"></form>"#;
+        assert_eq!(
+            form_action(page, &base).as_deref(),
+            Some("https://up.other-domain.cc/takeupload.php")
+        );
+    }
+
+    #[test]
+    fn non_upload_endpoint_blocks_navigation_pages() {
+        let base = Url::parse("https://x.example/upload.php").unwrap();
+        for bad in [
+            "search.php",
+            "bonusrain.php",
+            "login.php",
+            "index.php",
+            "torrents.php",
+            "browse.php",
+            "details.php",
+        ] {
+            let action = resolve_url(bad, &base);
+            assert!(
+                non_upload_endpoint(&action, &base).is_some(),
+                "{bad} 必须被拦截"
+            );
+        }
+        // 上传端点与站外绝对地址放行
+        assert!(non_upload_endpoint("https://x.example/takeupload.php", &base).is_none());
+        assert!(non_upload_endpoint("https://up.other.cc/takeupload.php", &base).is_none());
+    }
+
+    #[test]
+    fn drill_select_options_excludes_nav_search() {
+        let page = r#"<form action="search.php"><select name="search_area"><option value="1">全站</option></select></form>
+<form action="takeupload.php" enctype="multipart/form-data"><input type="file" name="torrent">
+<select name="type"><option value="0">请选择</option><option value="404">剧集</option></select>
+<select name="medium_sel[4]"><option value="0">请选择</option><option value="7">HDTV</option></select></form>"#;
+        let opts = drill_select_options(page);
+        assert_eq!(opts.len(), 2, "{opts:?}");
+        assert_eq!(opts[0].0, "type");
+        assert!(opts[0].1.contains(&("404".to_string(), "剧集".to_string())));
+        assert_eq!(opts[1].0, "medium_sel[4]");
+        assert!(opts[1].1.contains(&("7".to_string(), "HDTV".to_string())));
+    }
+
+    fn prep_from_form(form: &str) -> PreparedUpload {
+        let (fields, picked, notes) = build_upload_fields(&drill_release(), form, &[]);
+        PreparedUpload {
+            action: "https://x/takeupload.php".into(),
+            form_url: "https://x/upload.php".into(),
+            fields,
+            picked_tags: picked,
+            tag_warn: None,
+            select_notes: notes,
+            required_gaps: vec![],
+            form_html: form.into(),
+        }
+    }
+
+    #[test]
+    fn multi_picks_checkboxes_match_and_fill() {
+        // 标签归一命中（含别名/子串）→ 按站点真实 value 勾上；必填缺口清空
+        let form = r#"<form action="takeupload.php" enctype="multipart/form-data"><input type="file" name="file">
+<select name="type"><option value="0">请选择</option><option value="402">剧集</option></select>
+<input type="checkbox" name="style_sel[4][]" value="23"> 中字
+<input type="checkbox" name="style_sel[4][]" value="24"> 国语配音
+</form>"#;
+        let mut prep = prep_from_form(form);
+        let mut multi = std::collections::BTreeMap::new();
+        multi.insert(
+            "style_sel".to_string(),
+            vec!["中字".to_string(), "国语".to_string()],
+        );
+        let rules = crate::gates::SiteRules {
+            multi_picks: multi,
+            required_fields: vec!["style_sel".into()],
+            ..Default::default()
+        };
+        apply_site_rules(&mut prep, &rules);
+        assert!(
+            prep.fields
+                .iter()
+                .any(|(n, v)| n == "style_sel[4][]" && v == "23"),
+            "{:?}",
+            prep.fields
+        );
+        assert!(
+            prep.fields
+                .iter()
+                .any(|(n, v)| n == "style_sel[4][]" && v == "24"),
+            "{:?}",
+            prep.fields
+        );
+        assert!(prep.required_gaps.is_empty(), "{:?}", prep.required_gaps);
+    }
+
+    #[test]
+    fn multi_picks_miss_keeps_empty_and_reports_required_gap() {
+        // 标签配不上 → 不臆造勾选，保持未选；必填门禁点名未命中标签
+        let form = r#"<form action="takeupload.php" enctype="multipart/form-data"><input type="file" name="file">
+<select name="type"><option value="0">请选择</option><option value="402">剧集</option></select>
+<input type="checkbox" name="style_sel[4][]" value="23"> 内嵌字幕
+<input type="checkbox" name="style_sel[4][]" value="24"> 粤语
+</form>"#;
+        let mut prep = prep_from_form(form);
+        let mut multi = std::collections::BTreeMap::new();
+        multi.insert(
+            "style_sel".to_string(),
+            vec!["中字".to_string(), "国语".to_string()],
+        );
+        let rules = crate::gates::SiteRules {
+            multi_picks: multi,
+            required_fields: vec!["style_sel".into()],
+            ..Default::default()
+        };
+        apply_site_rules(&mut prep, &rules);
+        assert!(
+            !prep.fields.iter().any(|(n, _)| n.starts_with("style_sel")),
+            "{:?}",
+            prep.fields
+        );
+        assert_eq!(
+            prep.required_gaps,
+            vec!["必填缺失：style_sel[4][]（配置标签未命中：中字/国语）".to_string()]
+        );
+    }
+
+    #[test]
+    fn required_single_select_empty_blocks() {
+        // 必填单选（select / radio）未选 → 阻断；已选（checked/非 0 value）→ 不报缺口
+        let select_form = r#"<form action="takeupload.php" enctype="multipart/form-data"><input type="file" name="file">
+<select name="region_sel[4]"><option value="0">请选择</option><option value="1">中国大陆</option></select>
+</form>"#;
+        let mut prep = prep_from_form(select_form);
+        let rules = crate::gates::SiteRules {
+            required_fields: vec!["region_sel".into()],
+            ..Default::default()
+        };
+        apply_site_rules(&mut prep, &rules);
+        assert_eq!(
+            prep.required_gaps,
+            vec!["必填缺失：region_sel[4]".to_string()]
+        );
+
+        let radio_empty = r#"<form action="takeupload.php" enctype="multipart/form-data"><input type="file" name="file">
+<input type="radio" name="region_sel[4]" value="1"> 中国大陆
+</form>"#;
+        let mut prep2 = prep_from_form(radio_empty);
+        apply_site_rules(&mut prep2, &rules);
+        assert_eq!(
+            prep2.required_gaps,
+            vec!["必填缺失：region_sel[4]".to_string()]
+        );
+
+        let radio_checked = r#"<form action="takeupload.php" enctype="multipart/form-data"><input type="file" name="file">
+<input type="radio" name="region_sel[4]" value="1" checked> 中国大陆
+</form>"#;
+        let mut prep3 = prep_from_form(radio_checked);
+        apply_site_rules(&mut prep3, &rules);
+        assert!(prep3.required_gaps.is_empty(), "{:?}", prep3.required_gaps);
+    }
+
+    #[test]
+    fn default_rules_leave_behavior_unchanged() {
+        // 旧配置（无 multiPicks / requiredFields）：不写字段、不记缺口、不加提示
+        let form = r#"<form action="takeupload.php" enctype="multipart/form-data"><input type="file" name="file">
+<select name="type"><option value="0">请选择</option><option value="402">剧集</option></select>
+<input type="checkbox" name="style_sel[4][]" value="23"> 中字
+</form>"#;
+        let mut prep = prep_from_form(form);
+        let before = prep.fields.len();
+        let notes_before = prep.select_notes.len();
+        apply_site_rules(&mut prep, &crate::gates::SiteRules::default());
+        assert_eq!(prep.fields.len(), before);
+        assert_eq!(prep.select_notes.len(), notes_before);
+        assert!(prep.required_gaps.is_empty());
+    }
+
+    #[test]
+    fn body_detail_success_url_kufei_style() {
+        // kufei 类站点：提交后不发 Location 跳转，回包正文挂新种详情页唯一链接
+        let action = "https://x.example/takeupload.php";
+        let body = r#"<html><body><p>种子提交成功，请在个人主页查看</p>
+<a href="details.php?id=12345">查看新种</a></body></html>"#;
+        let u = body_detail_success_url(body, action, action);
+        assert_eq!(u.as_deref(), Some("https://x.example/details.php?id=12345"));
+
+        // 校验失败回显的上传表单（multipart）不参与成功识别
+        let rerender = r#"<form action="takeupload.php" method="post" enctype="multipart/form-data">
+<p>请填写必填项目</p><a href="details.php?id=999">旧种链接</a></form>"#;
+        assert!(body_detail_success_url(rerender, action, action).is_none());
+
+        // 回包里多个详情链接（侧边栏/推荐位）不能唯一定位，不算成功
+        let two = r#"<html><body>
+<a href="details.php?id=111">A</a><a href="details.php?id=222">B</a></body></html>"#;
+        assert!(body_detail_success_url(two, action, action).is_none());
     }
 }
