@@ -59,6 +59,13 @@
 
 ### Fixed
 
+- 藏宝阁 43994 审核驳回修复：BDRip+x264 归 `Encode(3)`，标题无分辨率时按 MediaInfo 长边归档
+  （1290x696 → `720p(3)`）；源站 HTML 简介提交前默认转 BBCode，避免站点把 `<fieldset>`/`<img>`
+  转义成字面标签。已在线编辑 43994，未新发种。
+- 历史已发布种子简介批量转 BBCode：29 条（sbpt/luckpt/lajidui/ptcafe/tangpt/xdy 等）逐个编辑复查，
+  只改简介、不换种子文件；`scripts/fix-bbcode-descr.py` 保留为可重复执行的维护脚本。
+- GUI 概览页 clippy：`sort_by` 改 `sort_by_key(Reverse(...))`，图例查找去掉多余借用。
+
 - 发后定位不再取回包里的第一条详情链接：详情和下载必须按 id 配对，最终跳转是详情页时优先用它；
   详情和下载 id 对不上就留空转 `posted_unresolved`，避免把成功页里的相关旧种（hdvideo 14469）挂进 qB。
   `userdetails.php?id=` 也不再被当成种子详情。

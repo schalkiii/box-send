@@ -1025,8 +1025,8 @@ pub fn parse_torrent_page(html: &str, detail_url: &str, base: &Url) -> Option<To
     if name.is_empty() {
         return None;
     }
-    let (uploader_uid, uploader_name) = page_uploader(&html);
-    let size_bytes = page_size_bytes(&html);
+    let (uploader_uid, uploader_name) = page_uploader(html);
+    let size_bytes = page_size_bytes(html);
     Some(TorrentPage {
         name,
         download_url,

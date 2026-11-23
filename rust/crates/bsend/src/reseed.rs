@@ -677,10 +677,8 @@ fn strip_promo_suffix(name: &str) -> String {
 }
 
 /// 源站把简介 HTML 整体转义后存储（luckpt 实测 kdescr 里是 `&lt;fieldset&gt;…`，
-/// 站点只补了 nl2br 的裸 `<br />`）：转义标签 >= 3 且多于裸标签，并且含 >= 2 种
-/// 富文本标记（fieldset/img/span/font…）、或干脆没有任何裸标签（整块都是转义）时
-/// 解码一层还原。正常裸 HTML 简介、以及混在 nl2br 裸 `<br>` 里的 b/i/u 教程文本
-/// 都不会命中。
+/// 站点只补了 nl2br 的裸 `<br />`）；也有站是「裸 `<div>` + 转义块」混排（hdvideo
+/// 实测），或转义两层（`&amp;lt;fieldset`）。按块判断，不再要求整段转义多于裸标签。
 fn unescape_descr(html: &str) -> String {
     let count_tags = |s: &str, prefix: &str| {
         let b = s.as_bytes();
@@ -695,32 +693,347 @@ fn unescape_descr(html: &str) -> String {
         }
         n
     };
-    let escaped = count_tags(html, "&lt;");
-    let raw = count_tags(html, "<");
-    let lower = html.to_ascii_lowercase();
-    let rich = [
-        "&lt;fieldset",
-        "&lt;img",
-        "&lt;span",
-        "&lt;font",
-        "&lt;div",
-        "&lt;table",
-        "&lt;center",
-        "&lt;iframe",
-        "&lt;video",
-        "&lt;audio",
-        "&lt;blockquote",
-        "&lt;pre",
-        "&lt;code",
+    let rich_markers = [
+        "fieldset",
+        "img",
+        "span",
+        "font",
+        "div",
+        "table",
+        "center",
+        "iframe",
+        "video",
+        "audio",
+        "blockquote",
+        "pre",
+        "code",
+    ];
+    let mut cur = html.to_string();
+    for _ in 0..2 {
+        let escaped = count_tags(&cur, "&lt;");
+        let double = count_tags(&cur, "&amp;lt;");
+        let raw = count_tags(&cur, "<");
+        let lower = cur.to_ascii_lowercase();
+        let rich = rich_markers
+            .iter()
+            .filter(|m| {
+                lower.contains(&format!("&lt;{m}")) || lower.contains(&format!("&amp;lt;{m}"))
+            })
+            .count();
+        let should_decode = escaped + double >= 3 && (rich >= 1 || (raw == 0 && escaped >= 5));
+        if !should_decode {
+            break;
+        }
+        cur = decode_entities_once(&cur);
+    }
+    cur
+}
+
+/// 目标站关闭 HTML、只吃 BBCode 时，把源站简介转成 BBCode。
+/// NexusPHP 的 BBCode 会把 `[quote]` 渲染成 `<fieldset><legend>引用</legend>`；
+/// 直接提交 HTML 会被站点转义成字面 `<fieldset>`，审核端看不到图也看不到排版。
+pub(crate) fn html_to_bbcode(html: &str) -> String {
+    fn newline(out: &mut String) {
+        if !out.is_empty() && !out.ends_with('\n') {
+            out.push('\n');
+        }
+    }
+    fn open(
+        out: &mut String,
+        stack: &mut Vec<(&'static str, String)>,
+        key: &'static str,
+        text: &str,
+        close: &str,
+    ) {
+        out.push_str(text);
+        stack.push((key, close.to_string()));
+    }
+    fn close(out: &mut String, stack: &mut Vec<(&'static str, String)>, key: &str) {
+        let Some(pos) = stack.iter().rposition(|(k, _)| *k == key) else {
+            return;
+        };
+        while stack.len() > pos {
+            let (_, close) = stack.pop().expect("stack has pos");
+            out.push_str(&close);
+        }
+    }
+    fn clean_url(raw: &str) -> String {
+        let mut u = raw.trim().to_string();
+        loop {
+            if let Some(s) = u.strip_suffix("%2522") {
+                u = s.to_string();
+            } else if let Some(s) = u.strip_suffix("%22") {
+                u = s.to_string();
+            } else {
+                break;
+            }
+        }
+        while let Some(s) = u.strip_prefix("%22") {
+            u = s.to_string();
+        }
+        u.trim_matches('"').trim().replace(']', "%5D")
+    }
+    fn css_color(style: &str) -> Option<String> {
+        let lower = style.to_ascii_lowercase();
+        let p = lower.find("color:")?;
+        let rest = &style[p + "color:".len()..];
+        let end = rest.find([';', '!']).unwrap_or(rest.len());
+        let v = rest[..end].trim().trim_matches('"').trim();
+        (!v.is_empty()).then(|| v.to_string())
+    }
+    fn font_size(raw: &str) -> Option<u8> {
+        let n: u8 = raw.trim().parse().ok()?;
+        (1..=7).contains(&n).then_some(n)
+    }
+    fn tidy(s: &str) -> String {
+        let normalized = s.replace("\r\n", "\n").replace('\r', "\n");
+        let mut out = String::with_capacity(normalized.len());
+        let mut blank = 0usize;
+        for line in normalized.lines() {
+            let line = line.trim_end();
+            if line.trim().is_empty() {
+                blank += 1;
+                if blank <= 1 {
+                    out.push('\n');
+                }
+            } else {
+                blank = 0;
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+        while out.ends_with('\n') {
+            out.pop();
+        }
+        out
+    }
+
+    let mut out = String::with_capacity(html.len());
+    let mut stack: Vec<(&'static str, String)> = Vec::new();
+    let mut i = 0usize;
+    while i < html.len() {
+        let Some(rel) = html[i..].find('<') else {
+            out.push_str(&decode_entities(&html[i..]));
+            break;
+        };
+        let start = i + rel;
+        if start > i {
+            out.push_str(&decode_entities(&html[i..start]));
+        }
+        let rest = &html[start..];
+        if rest.starts_with("<!--") {
+            i = rest
+                .find("-->")
+                .map(|p| start + p + 3)
+                .unwrap_or(html.len());
+            continue;
+        }
+        // `<` 后必须是标签起始字符；数学式子里的 `2 < 3` 原样保留
+        if !rest
+            .as_bytes()
+            .get(1)
+            .is_some_and(|b| b.is_ascii_alphabetic() || *b == b'/' || *b == b'!')
+        {
+            out.push('<');
+            i = start + 1;
+            continue;
+        }
+        let Some(tag_end) = rest.find('>') else {
+            out.push_str(&decode_entities(rest));
+            break;
+        };
+        let tag = &rest[..tag_end + 1];
+        i = start + tag_end + 1;
+        let inner = &tag[1..tag.len() - 1];
+        let closing = inner.trim_start().starts_with('/');
+        let name: String = inner
+            .trim_start_matches('/')
+            .trim_start()
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric())
+            .collect::<String>()
+            .to_ascii_lowercase();
+        if name.is_empty() {
+            continue;
+        }
+
+        if (name == "script" || name == "style") && !closing {
+            let lower = html[i..].to_ascii_lowercase();
+            let close = format!("</{name}>");
+            if let Some(p) = lower.find(&close) {
+                i += p + close.len();
+            }
+            continue;
+        }
+        // [quote] 自带「引用」legend，源里的 legend 文案不再重复
+        if name == "legend" && !closing {
+            let lower = html[i..].to_ascii_lowercase();
+            if let Some(p) = lower.find("</legend>") {
+                i += p + "</legend>".len();
+            }
+            continue;
+        }
+
+        match name.as_str() {
+            "br" => newline(&mut out),
+            "hr" => {
+                newline(&mut out);
+                newline(&mut out);
+            }
+            "img" if !closing => {
+                if let Some(src) = attr(tag, "src") {
+                    let url = clean_url(&src);
+                    if url.starts_with("http://") || url.starts_with("https://") {
+                        out.push_str("[img]");
+                        out.push_str(&url);
+                        out.push_str("[/img]");
+                    }
+                }
+            }
+            "a" => {
+                if closing {
+                    close(&mut out, &mut stack, "a");
+                } else if let Some(href) = attr(tag, "href") {
+                    let href = href.trim().replace(']', "%5D");
+                    if !href.is_empty() && href != "#" {
+                        open(
+                            &mut out,
+                            &mut stack,
+                            "a",
+                            &format!("[url={href}]"),
+                            "[/url]",
+                        );
+                    }
+                }
+            }
+            "b" | "strong" => {
+                if closing {
+                    close(&mut out, &mut stack, "b");
+                } else {
+                    open(&mut out, &mut stack, "b", "[b]", "[/b]");
+                }
+            }
+            "i" | "em" => {
+                if closing {
+                    close(&mut out, &mut stack, "i");
+                } else {
+                    open(&mut out, &mut stack, "i", "[i]", "[/i]");
+                }
+            }
+            "u" => {
+                if closing {
+                    close(&mut out, &mut stack, "u");
+                } else {
+                    open(&mut out, &mut stack, "u", "[u]", "[/u]");
+                }
+            }
+            "font" => {
+                if closing {
+                    close(&mut out, &mut stack, "font");
+                } else {
+                    let color = attr(tag, "color").filter(|c| !c.trim().is_empty());
+                    let size = attr(tag, "size").and_then(|s| font_size(&s));
+                    let mut opens = String::new();
+                    let mut closes = String::new();
+                    if let Some(c) = color {
+                        opens.push_str(&format!("[color={}]", c.trim()));
+                        closes.push_str("[/color]");
+                    }
+                    if let Some(n) = size {
+                        opens.push_str(&format!("[size={n}]"));
+                        closes.insert_str(0, "[/size]");
+                    }
+                    if !opens.is_empty() {
+                        open(&mut out, &mut stack, "font", &opens, &closes);
+                    }
+                }
+            }
+            "span" => {
+                if closing {
+                    close(&mut out, &mut stack, "span");
+                } else if let Some(style) = attr(tag, "style") {
+                    if let Some(color) = css_color(&style) {
+                        open(
+                            &mut out,
+                            &mut stack,
+                            "span",
+                            &format!("[color={color}]"),
+                            "[/color]",
+                        );
+                    }
+                }
+            }
+            "blockquote" | "fieldset" => {
+                if closing {
+                    newline(&mut out);
+                    close(&mut out, &mut stack, "quote");
+                } else {
+                    newline(&mut out);
+                    open(&mut out, &mut stack, "quote", "[quote]\n", "\n[/quote]");
+                }
+            }
+            "pre" => {
+                newline(&mut out);
+            }
+            "code" => {
+                if closing {
+                    close(&mut out, &mut stack, "code");
+                } else {
+                    open(&mut out, &mut stack, "code", "[code]", "[/code]");
+                }
+            }
+            "div" | "p" | "center" | "table" | "tbody" | "thead" | "ul" | "ol" => {
+                newline(&mut out);
+            }
+            "tr" => newline(&mut out),
+            "td" | "th" => {
+                if !out.ends_with('\n') && !out.ends_with(' ') {
+                    out.push(' ');
+                }
+            }
+            "li" if !closing => {
+                newline(&mut out);
+                out.push_str("• ");
+            }
+            "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
+                if closing {
+                    newline(&mut out);
+                    close(&mut out, &mut stack, "h");
+                } else {
+                    newline(&mut out);
+                    open(&mut out, &mut stack, "h", "[b]", "[/b]");
+                }
+            }
+            _ => {}
+        }
+    }
+    tidy(&out)
+}
+
+/// 判断简介是不是 HTML（避免把纯文本或已有 BBCode 误转）
+fn looks_like_html(s: &str) -> bool {
+    let l = s.to_ascii_lowercase();
+    [
+        "<fieldset",
+        "<img",
+        "<br",
+        "<b>",
+        "<strong",
+        "<font",
+        "<span",
+        "<div",
+        "<p>",
+        "<a ",
+        "<center",
+        "<table",
+        "<blockquote",
+        "<pre",
+        "<code",
+        "<i>",
+        "<u>",
     ]
     .iter()
-    .filter(|m| lower.contains(*m))
-    .count();
-    if escaped >= 3 && escaped > raw && (rich >= 2 || raw == 0) {
-        decode_entities_once(html)
-    } else {
-        html.to_string()
-    }
+    .any(|t| l.contains(t))
 }
 
 /// `<body>` 内的纯文本（简介容器都找不到时的兜底；绝不返回标签源码）
@@ -1612,6 +1925,35 @@ fn js_driven_form(form: &str) -> bool {
     true
 }
 
+/// MediaInfo 文本里的视频宽/高（`Width : 1 290 pixels`；只认第一个 Width/Height）
+fn mediainfo_dimension(mediainfo: &str, key: &str) -> Option<u32> {
+    mediainfo.lines().find_map(|line| {
+        let (k, v) = line.split_once(':')?;
+        if !k.trim().eq_ignore_ascii_case(key) {
+            return None;
+        }
+        let digits: String = v.chars().filter(|c| c.is_ascii_digit()).collect();
+        digits.parse().ok()
+    })
+}
+
+/// 由 MediaInfo 宽高反推站点标准分辨率档；BDRip 常裁掉黑边（1290x696），
+/// 用长边分档比按高度更稳（1920x800 仍是 1080p）。
+fn resolution_from_mediainfo(mediainfo: &str) -> Option<&'static str> {
+    let w = mediainfo_dimension(mediainfo, "Width")?;
+    let h = mediainfo_dimension(mediainfo, "Height")?;
+    let long = w.max(h);
+    Some(match long {
+        3200.. => "2160p",
+        2200..=3199 => "1440p",
+        1600..=2199 => "1080p",
+        1100..=1599 => "720p",
+        900..=1099 => "576p",
+        600..=899 => "480p",
+        _ => return None,
+    })
+}
+
 /// 选档回填：发布名/副标题词元 → 分类与质量下拉。只动当前值为 0/空的下拉，
 /// 词元与选项唯一配对才填；有词元配不上、或推断不唯一，留提示不猜。
 /// 同前缀多组下拉（`medium_sel[4]`/`medium_sel[9]`）各自独立配对全填。
@@ -1648,6 +1990,13 @@ fn fill_selects(fields: &mut Vec<Field>, page: &str, info: &ReleaseInfo) -> Vec<
         } else {
             title_tokens
         };
+        // 分辨率：标题/副标题常只有 BDRip、没有 1080p/720p。此时从 MediaInfo
+        // 的 Width/Height 反推标准档（BDRip 1290x696 → 720p），不凭标题猜。
+        if *prefix == "standard_sel" && tokens.is_empty() {
+            if let Some(r) = resolution_from_mediainfo(&info.mediainfo) {
+                tokens.push(r.to_string());
+            }
+        }
         if matches!(*prefix, "source_sel" | "medium_sel") {
             if let Some(c) = compound_medium_token(&tokens) {
                 tokens.insert(0, c);
@@ -1683,7 +2032,12 @@ fn fill_selects(fields: &mut Vec<Field>, page: &str, info: &ReleaseInfo) -> Vec<
             // 只在站点确实提供 Encode 选项时生效；REMUX/HDTV 不受影响。
             let disc_source = tokens.iter().any(|t| {
                 let l = t.to_ascii_lowercase();
-                l.contains("blu") || l.contains("bluray") || l == "dvd"
+                l.contains("blu")
+                    || l.contains("bluray")
+                    || l.contains("bdrip")
+                    || l.contains("brrip")
+                    || l.contains("dvdrip")
+                    || l == "dvd"
             });
             let is_remux = tokens
                 .iter()
@@ -2149,7 +2503,7 @@ fn prefix_control_names(page: &str, prefix: &str) -> Vec<String> {
 /// 前缀下是否已有已选值：fields 里非空/非 0，或页面控件带 checked 且 value 非空
 fn prefix_selected(fields: &[Field], page: &str, prefix: &str) -> bool {
     if select_field_names(fields, prefix).iter().any(|n| {
-        let v = field_lookup(fields, &n).unwrap_or("");
+        let v = field_lookup(fields, n).unwrap_or("");
         !v.is_empty() && v != "0"
     }) {
         return true;
@@ -2183,6 +2537,26 @@ pub fn apply_site_rules(prep: &mut PreparedUpload, rules: &crate::gates::SiteRul
                 prep.select_notes.push(format!(
                     "简介剪掉 {removed} 张不可访问图片（pruneDeadImages）"
                 ));
+            }
+        }
+    }
+    // 站点只吃 BBCode 时（NexusPHP 的简介框是 BBCode 编辑器），源站 HTML 原样提交
+    // 会被转义成字面 `<fieldset>`，审核端既看不到排版也看不到图。缺省就转 BBCode；
+    // 只有规则显式 descrFormat=html 才保持 HTML。先剪死图，再转。
+    if rules.descr_is_bbcode() {
+        if let Some(field) = ["descr", "release_desc", "description", "content"]
+            .iter()
+            .find(|f| field_lookup(&prep.fields, f).is_some())
+            .copied()
+        {
+            let cur = field_lookup(&prep.fields, field).unwrap_or("").to_string();
+            if looks_like_html(&cur) {
+                let next = html_to_bbcode(&cur);
+                if next != cur {
+                    set_field(&mut prep.fields, field, next);
+                    prep.select_notes
+                        .push("简介：HTML 已转 BBCode（descrFormat）".into());
+                }
             }
         }
     }
@@ -2783,9 +3157,13 @@ pub fn review_reseed(
     }
     log("抓目标站上传表单，构造提交字段…");
     let mut prepared = prepare_upload(&rel.tgt, &rel.info)?;
-    if let Some(rules) = cfg.coverage.reseed_rules.get(&req.target_site) {
-        apply_site_rules(&mut prepared, rules);
-    }
+    let rules = cfg
+        .coverage
+        .reseed_rules
+        .get(&req.target_site)
+        .cloned()
+        .unwrap_or_default();
+    apply_site_rules(&mut prepared, &rules);
     log(&format!(
         "审阅完成：{} 个字段 → {}（未提交）",
         prepared.fields.len(),
@@ -2999,7 +3377,7 @@ pub fn extract_posted_links(body: &str, final_url: &str, base: &Url) -> PostedLi
     }
 
     // 正文里 id 对得上的详情/下载对。唯一一对才可信。
-    let pairs: Vec<(&(String, String), &(String, String))> = body_downloads
+    let pairs: Vec<_> = body_downloads
         .iter()
         .filter_map(|d| {
             body_details
@@ -4436,9 +4814,13 @@ fn run_reseed_inner(
         }
         None => {
             let mut prep = prepare_upload(&tgt, &info)?;
-            if let Some(rules) = cfg.coverage.reseed_rules.get(&req.target_site) {
-                apply_site_rules(&mut prep, rules);
-            }
+            let rules = cfg
+                .coverage
+                .reseed_rules
+                .get(&req.target_site)
+                .cloned()
+                .unwrap_or_default();
+            apply_site_rules(&mut prep, &rules);
             if pre_audit_supported(&prep.form_html) {
                 log("调用站点官方预审（LuckAudit）…");
                 match run_pre_audit(&tgt, &info, &prep) {
@@ -4703,7 +5085,7 @@ fn run_reseed_inner(
         (None, Some(detail)) => tgt
             .fetch_torrent_page(detail)
             .ok()
-            .and_then(|p| (!p.download_url.is_empty()).then(|| p.download_url)),
+            .and_then(|p| (!p.download_url.is_empty()).then_some(p.download_url)),
         (None, None) => None,
     };
     let Some(download_url) = download_url else {
@@ -5323,6 +5705,131 @@ Frame rate : 25</pre>
     }
 
     #[test]
+    fn escaped_descr_decodes_mixed_and_double_escaped_blocks() {
+        // hdvideo 实测：裸 <div> 壳 + 转义 <fieldset> 混排，旧逻辑因裸标签多而整段不解码
+        let mixed = r#"<div><fieldset><legend>引用</legend>正文</fieldset></div>
+&lt;fieldset&gt;&lt;legend&gt; 引用 &lt;/legend&gt;&lt;br /&gt;转自&lt;b&gt;TLF&lt;/b&gt;&lt;/fieldset&gt;<br />"#;
+        let out = unescape_descr(mixed);
+        assert!(out.starts_with("<div><fieldset>"), "{out}");
+        assert!(out.contains("<fieldset><legend> 引用 </legend>"), "{out}");
+        assert!(!out.contains("&lt;fieldset"), "{out}");
+        // 两层转义：&amp;lt;fieldset → &lt;fieldset → <fieldset
+        let double = "&amp;lt;fieldset&amp;gt;&amp;lt;legend&amp;gt;引用&amp;lt;/legend&amp;gt;正文&amp;lt;/fieldset&amp;gt;";
+        let out = unescape_descr(double);
+        assert_eq!(out, "<fieldset><legend>引用</legend>正文</fieldset>");
+    }
+
+    #[test]
+    fn html_descr_is_converted_to_bbcode() {
+        // 藏宝阁只吃 BBCode：HTML 原样提交会被转义成字面 <fieldset>，
+        // 审核端看不到图/排版（Quick Change 43994 实测）。
+        let html = r#"<fieldset><legend> 引用 </legend><br />转自<b>TLF</b>，感谢原发布者！</fieldset><br /><br />
+<b><font size="5">本种来自TLFBits<br /><br /></font></b><br />
+<img style="max-width: 100%" id="" alt="image" src="https://img9.doubanio.com/view/photo/l_ratio_poster/public/p2300931299.jpg" /><br />
+◎IMDb链接　<a class="faqlink" href="https://www.imdb.com/title/tt0100449/" target="_blank">https://www.imdb.com/title/tt0100449/</a><br />"#;
+        let bb = html_to_bbcode(html);
+        assert!(bb.starts_with("[quote]\n转自[b]TLF[/b]"), "{bb}");
+        assert!(bb.contains("[quote]"), "{bb}");
+        assert!(bb.contains("[/quote]"), "{bb}");
+        assert!(bb.contains("[b][size=5]本种来自TLFBits"), "{bb}");
+        assert!(
+            bb.contains("[img]https://img9.doubanio.com/view/photo/l_ratio_poster/public/p2300931299.jpg[/img]"),
+            "{bb}"
+        );
+        assert!(
+            bb.contains("[url=https://www.imdb.com/title/tt0100449/]"),
+            "{bb}"
+        );
+        assert!(!bb.contains("<fieldset"), "{bb}");
+        assert!(!bb.contains("<img"), "{bb}");
+        assert!(!bb.contains("&lt;"), "{bb}");
+    }
+
+    #[test]
+    fn html_to_bbcode_keeps_plain_text_and_repaired_img_url() {
+        let text = "用 2 < 3 说明，不动";
+        assert_eq!(html_to_bbcode(text), text);
+        let html = r#"<img src=" https://x/a.jpg%22" />"#;
+        assert_eq!(html_to_bbcode(html), "[img]https://x/a.jpg[/img]");
+    }
+
+    #[test]
+    fn bbcode_rule_rewrites_descr_field() {
+        let mut prep = PreparedUpload {
+            action: "https://x/takeupload.php".into(),
+            form_url: "https://x/upload.php".into(),
+            fields: vec![(
+                "descr".into(),
+                "<fieldset><legend>引用</legend>正文</fieldset><img src=\"https://x/a.jpg\">"
+                    .into(),
+            )],
+            picked_tags: vec![],
+            tag_warn: None,
+            select_notes: vec![],
+            required_gaps: vec![],
+            form_html: String::new(),
+        };
+        let rules = crate::gates::SiteRules {
+            descr_format: Some("bbcode".into()),
+            ..Default::default()
+        };
+        apply_site_rules(&mut prep, &rules);
+        let d = field_lookup(&prep.fields, "descr").unwrap_or("");
+        assert!(d.starts_with("[quote]\n正文"), "{d}");
+        assert!(d.contains("[img]https://x/a.jpg[/img]"), "{d}");
+        assert!(!d.contains("<fieldset"), "{d}");
+        assert!(
+            prep.select_notes
+                .iter()
+                .any(|n| n.contains("HTML 已转 BBCode")),
+            "{:?}",
+            prep.select_notes
+        );
+    }
+
+    #[test]
+    fn default_rules_convert_html_descr_to_bbcode() {
+        let html = "<fieldset><legend>引用</legend>正文</fieldset><img src=\"https://x/a.jpg\">";
+        let mut prep = PreparedUpload {
+            action: "https://x/takeupload.php".into(),
+            form_url: "https://x/upload.php".into(),
+            fields: vec![("descr".into(), html.into())],
+            picked_tags: vec![],
+            tag_warn: None,
+            select_notes: vec![],
+            required_gaps: vec![],
+            form_html: String::new(),
+        };
+        apply_site_rules(&mut prep, &crate::gates::SiteRules::default());
+        let d = field_lookup(&prep.fields, "descr").unwrap_or("");
+        assert!(d.starts_with("[quote]\n正文"), "{d}");
+        assert!(d.contains("[img]https://x/a.jpg[/img]"), "{d}");
+        assert!(!d.contains("<fieldset"), "{d}");
+    }
+
+    #[test]
+    fn html_rule_keeps_descr_html() {
+        let html = "<fieldset><legend>引用</legend>正文</fieldset>";
+        let mut prep = PreparedUpload {
+            action: "https://x/takeupload.php".into(),
+            form_url: "https://x/upload.php".into(),
+            fields: vec![("descr".into(), html.into())],
+            picked_tags: vec![],
+            tag_warn: None,
+            select_notes: vec![],
+            required_gaps: vec![],
+            form_html: String::new(),
+        };
+        let rules = crate::gates::SiteRules {
+            descr_format: Some("html".into()),
+            ..Default::default()
+        };
+        apply_site_rules(&mut prep, &rules);
+        assert_eq!(field_lookup(&prep.fields, "descr"), Some(html));
+        assert!(prep.select_notes.is_empty(), "{:?}", prep.select_notes);
+    }
+
+    #[test]
     fn single_quoted_ids_are_parsed() {
         let page = r#"<html><body>
 <h1>T</h1>
@@ -5660,6 +6167,43 @@ Height : 1080</pre></div>"#;
         };
         let (fs, _p, notes) = build_upload_fields(&info, form, &[]);
         assert_eq!(field_lookup(&fs, "medium_sel"), Some("1"), "{notes:?}");
+    }
+
+    #[test]
+    fn bdrip_x264_uses_mediainfo_for_encode_and_resolution() {
+        // 藏宝阁实测拒绝：标题只有 BDRip X264，媒介/分辨率都没填。
+        let form = r#"<form action="takeupload.php">
+<select name="medium_sel[4]"><option value="0">请选择</option><option value="9">UHD</option><option value="8">Remux</option><option value="7">Blu-ray</option><option value="6">WEB-DL</option><option value="5">UHDTV</option><option value="4">HDTV</option><option value="3">Encode</option><option value="2">DVD</option></select>
+<select name="codec_sel[4]"><option value="0">请选择</option><option value="9">AV1</option><option value="8">HEVC</option><option value="6">AVC</option></select>
+<select name="audiocodec_sel[4]"><option value="0">请选择</option><option value="5">DDP</option><option value="4">AAC</option><option value="3">DTS</option><option value="2">AC3</option></select>
+<select name="standard_sel[4]"><option value="0">请选择</option><option value="7">4320p</option><option value="6">2160p</option><option value="5">1440p</option><option value="4">1080p</option><option value="3">720p</option><option value="2">540p</option><option value="1">480P</option></select>
+</form>"#;
+        let info = ReleaseInfo {
+            name: "Quick Change 1990 BDRip X264 iNT-TLF".into(),
+            mediainfo: "Video\nWidth                                    : 1 290 pixels\nHeight                                   : 696 pixels\nAudio\nFormat                                   : AC-3\n".into(),
+            ..Default::default()
+        };
+        let (fs, _picked, notes) = build_upload_fields(&info, form, &[]);
+        assert_eq!(field_lookup(&fs, "medium_sel"), Some("3"), "{notes:?}");
+        assert_eq!(field_lookup(&fs, "standard_sel"), Some("3"), "{notes:?}");
+        assert_eq!(field_lookup(&fs, "codec_sel"), Some("6"), "{notes:?}");
+        assert_eq!(field_lookup(&fs, "audiocodec_sel"), Some("2"), "{notes:?}");
+    }
+
+    #[test]
+    fn resolution_from_mediainfo_handles_cropped_frames() {
+        assert_eq!(
+            resolution_from_mediainfo("Width : 1 920 pixels\nHeight : 800 pixels"),
+            Some("1080p")
+        );
+        assert_eq!(
+            resolution_from_mediainfo("Width : 3 840 pixels\nHeight : 1 600 pixels"),
+            Some("2160p")
+        );
+        assert_eq!(
+            resolution_from_mediainfo("Width : 1 280 pixels\nHeight : 720 pixels"),
+            Some("720p")
+        );
     }
 
     #[test]

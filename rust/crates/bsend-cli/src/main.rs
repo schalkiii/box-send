@@ -1870,12 +1870,14 @@ mod tests {
 
     #[test]
     fn formcheck_fact_keeps_legacy_fields_and_adds_action_options() {
-        let mut d = bsend::reseed::FormDrill::default();
-        d.site_id = "kufei".into();
-        d.field_count = 16;
-        d.select_count = 9;
-        d.action = Some("https://kufei.example/takeupload.php".into());
-        d.select_options = vec![("type".into(), vec![("404".into(), "剧集".into())])];
+        let d = bsend::reseed::FormDrill {
+            site_id: "kufei".into(),
+            field_count: 16,
+            select_count: 9,
+            action: Some("https://kufei.example/takeupload.php".into()),
+            select_options: vec![("type".into(), vec![("404".into(), "剧集".into())])],
+            ..Default::default()
+        };
         let fact = formcheck_fact(&d, &[], &["team_sel[4] 未选".into()]);
         // 旧字段原样保留（sites 总账 / site-matrix.ps1 依赖）
         assert_eq!(fact["site"], "kufei");

@@ -167,6 +167,15 @@ luckpt 的候选规则（**还没有写进 `boxsend.json`**）：
 
 站上其实已经发布（qilin 479362、panda 141276），但旧逻辑拿旧种或错误详情页当结果，记成了失败；新 hash 不在 qB。这是发后定位错误，不是上传失败。新版流程已经改成从回包正文/跳转里按 id 配对详情和下载链接，再下载目标种独立挂回；发后定位缺陷已修（见 `ROADMAP.md` 4.3），但这三条历史结果还没实际补挂；先按详情页手工挂回，修复后复测。
 
+### 6.7 cangbao（藏宝阁）
+
+- 现象：`Quick Change 1990 BDRip X264 iNT-TLF`（43994）审核拒绝：未填写媒介类型、未选择分辨率、简介未包含图片。
+- 媒介：标题只有 `BDRip`/`X264`，旧映射没把 BDRip 当光盘源，`medium_sel[4]` 留空。BDRip + x264 是重编码，站点 `Encode(3)` 才对。
+- 分辨率：标题没有 `1080p`/`720p`，旧逻辑不从 MediaInfo 取值；实际 MediaInfo 是 1290x696，按长边归 `720p(3)`（裁黑边的 720p 编码）。
+- 简介：站点简介框是 BBCode 编辑器，源站 hdfans 的简介是裸 HTML；原样提交后数据库里是 `&lt;fieldset&gt;…`，页面显示字面标签，审核端看不到 `<img>`。代码已改为默认把 HTML 简介转 BBCode（`descrFormat=html` 才保留 HTML），43994 已用 `[quote]`/`[img]` 重新提交，详情页正常渲染。
+- 2026-11-23 抽查 29 条已发布种子，lajidui、ptcafe、sbpt、luckpt、ptlgs、tangpt、longpt、cyanbug、kufei、xingyunge、city13、shuioudao、xdy、baozi、novahd、ptzone 等站的历史简介也是字面 HTML；已用 `scripts/fix-bbcode-descr.py` 批量改成 BBCode，只改简介、不换种子文件，29 条复查全部为 BBCode。
+- 修复后先只编辑 43994，不新发种；等审核通过、再考虑恢复藏宝阁自动发种。
+
 ## 7. 复现模板
 
 ```powershell

@@ -598,7 +598,7 @@ fn skip_hit<'a>(name: &str, keywords: &'a [String]) -> Option<&'a str> {
         .collect();
     for kw in keywords {
         let k = kw.to_lowercase();
-        let ascii = k.chars().all(|c| c.is_ascii());
+        let ascii = k.is_ascii();
         let hit = if ascii {
             tokenized.split_whitespace().any(|t| t == k)
         } else {

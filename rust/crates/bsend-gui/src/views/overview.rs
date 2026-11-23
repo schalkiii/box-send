@@ -51,7 +51,7 @@ impl BsendGui {
             .collect();
         match self.overview_sort {
             // 默认：覆盖率降序（先看谁最铺得开，避免首屏一片 0%）
-            1 => rows.sort_by(|a, b| b.gap.cmp(&a.gap)),
+            1 => rows.sort_by_key(|a| std::cmp::Reverse(a.gap)),
             2 => rows.sort_by(|a, b| a.site.cmp(&b.site)),
             _ => rows.sort_by(|a, b| {
                 b.ratio
@@ -64,7 +64,7 @@ impl BsendGui {
         let mut legend: Vec<(String, usize, u32)> = Vec::new();
         for r in &self.sites {
             for c in &r.chips {
-                match legend.iter_mut().find(|(l, _, _)| l == &c.label) {
+                match legend.iter_mut().find(|(l, _, _)| l.as_str() == c.label) {
                     Some((_, n, _)) => *n += c.count,
                     None => legend.push((c.label.to_string(), c.count, c.color)),
                 }

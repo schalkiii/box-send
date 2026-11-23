@@ -398,7 +398,7 @@ pub struct ReconcileMark {
 /// 2. 该种子 `progress >= 1.0`（文件已下完）；
 /// 3. 该种子的某个 tracker host 命中目标站 `SiteConf::matches_tracker`
 ///    （走内置别名与子域匹配，禁止拿 site.url 的 host 裸比）。
-/// 且当前 (key, site) 格子仍是 `ReseedDraft`（已是 Seeding/Failed 等不动）。
+///    且当前 (key, site) 格子仍是 `ReseedDraft`（已是 Seeding/Failed 等不动）。
 ///
 /// 真值口径（设计约束，不是残缺视图）：一个种子只允许一个站点 tracker，禁止
 /// `addTrackers`。上传新种时在 `info.source` 写入目标站专属标记，让新种子的

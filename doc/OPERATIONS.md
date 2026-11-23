@@ -206,7 +206,7 @@ cargo build --release -p bsend-cli
 | `assist.uploadBudget` | 10 | 每轮最多尝试上传多少次；重复结果是否占额度还在修 |
 | `assist.allowOtherVersion` | `true` | 站上有同名其他版本时照样发 |
 | `assist.skipKeywords` | 16 个词 | 标题黑名单，命中不占额度 |
-| `assist.reseedRules` | 35 条 | 站点级字段映射和下拉选项覆盖 |
+| `assist.reseedRules` | 36 条 | 站点级字段映射和下拉选项覆盖 |
 | `assist.skipPostCheck` | `true` | 跳过发后自检；小批量验证时应关掉 |
 
 `targetSites` 是旧界面留下的字段，引擎不读。
@@ -229,6 +229,22 @@ cargo build --release -p bsend-cli
 为什么要单独填：程序正常情况下会从 qB 里已有该站的种子中抄 tracker 地址。第一次向这个站发种时，qB 里一条该站种子都没有，抄不到，程序会停下不传。填了以后就用配置里的地址；没填仍会先尝试从 qB 抄。
 
 地址必须属于这个站。程序会拿地址里的域名和该站登记的域名比对，对不上直接中止。不要把别的站的 passkey 填进来，也不要只填 tracker 主域名而漏掉你的个人参数。
+
+### 7.2 简介格式：BBCode 站要转格式
+
+NexusPHP 的简介框是 BBCode 编辑器。源站简介里的 `<fieldset>`、`<img>` 原样提交，会被站点转义成字面标签，页面只显示 `<fieldset>…`，审核端也会判“简介未包含图片”。
+
+程序现在**默认把 HTML 简介转成 BBCode**（`[quote]`、`[b]`、`[size]`、`[img]`、`[url]`），不需要逐站配置。只有确认某站支持 HTML、且不希望转换时，才在该站规则里显式关掉：
+
+```json
+"reseedRules": {
+  "some-html-site": {
+    "descrFormat": "html"
+  }
+}
+```
+
+藏宝阁 43994 已经用 BBCode 重新提交，详情页能正常渲染引用块和海报图。2026-11-23 抽查发现 lajidui、ptcafe、sbpt、luckpt、ptlgs、tangpt、longpt、cyanbug、kufei、xingyunge、city13、shuioudao、xdy、baozi、novahd、ptzone 等站的历史种子简介也是字面 HTML，已用 `scripts/fix-bbcode-descr.py` 批量改成 BBCode（只改简介，不换种子文件）；29 条已发布种子复查时编辑框里都不再是 HTML。
 
 ## 8. 出问题按这个顺序查
 

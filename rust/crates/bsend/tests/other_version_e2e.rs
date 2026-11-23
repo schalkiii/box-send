@@ -19,7 +19,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -328,12 +328,12 @@ fn test_config(
     qb_port: u16,
     src_port: u16,
     tgt_port: u16,
-    dir: &PathBuf,
+    dir: &Path,
     allow_other_version: bool,
 ) -> Config {
     Config {
         config_path: dir.join("boxsend.json"),
-        data_dir: Some(dir.clone()),
+        data_dir: Some(dir.to_path_buf()),
         downloader: DownloaderSettings {
             url: format!("http://127.0.0.1:{qb_port}"),
             username: "admin".into(),

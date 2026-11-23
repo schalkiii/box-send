@@ -747,7 +747,7 @@ fn normalize_tracker_host(raw: &str) -> String {
         None => s.as_str(),
     };
     // Cut the authority off before the first path / query / fragment delimiter.
-    let authority = match s.find(|c| c == '/' || c == '?' || c == '#') {
+    let authority = match s.find(['/', '?', '#']) {
         Some(idx) => &s[..idx],
         None => s,
     };

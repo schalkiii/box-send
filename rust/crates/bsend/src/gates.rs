@@ -59,6 +59,10 @@ pub struct SiteRules {
     pub required_fields: Vec<String>,
     /// 提交前剪掉简介里无法访问的图片（站点官方预审会逐图校验）
     pub prune_dead_images: Option<bool>,
+    /// 简介格式：缺省 `bbcode` = 提交前把 HTML 转 BBCode（NexusPHP 的简介框是
+    /// BBCode 编辑器，原样提交 HTML 会被转义成字面 `<fieldset>`）；显式 `html`
+    /// 才保持 HTML 原样（仅用于确认支持 HTML 的站）。
+    pub descr_format: Option<String>,
     /// 每日自动发种上限（缺省 2）
     pub daily_limit: Option<u32>,
     /// 规则来源备注
@@ -74,6 +78,12 @@ impl SiteRules {
     }
     pub fn daily_limit(&self) -> u32 {
         self.daily_limit.unwrap_or(2)
+    }
+    /// 简介是否按 BBCode 提交：缺省是；只有显式 `html` 才保持 HTML。
+    pub fn descr_is_bbcode(&self) -> bool {
+        self.descr_format
+            .as_deref()
+            .is_none_or(|f| !f.eq_ignore_ascii_case("html"))
     }
 }
 

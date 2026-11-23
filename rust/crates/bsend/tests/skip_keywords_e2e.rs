@@ -13,7 +13,7 @@
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -126,7 +126,7 @@ fn temp_dir(tag: &str) -> PathBuf {
     d
 }
 
-fn write_boxsend_json(dir: &PathBuf, port: u16, keywords: &[&str]) -> PathBuf {
+fn write_boxsend_json(dir: &Path, port: u16, keywords: &[&str]) -> PathBuf {
     let kw: String = keywords
         .iter()
         .map(|k| format!("\"{k}\""))
