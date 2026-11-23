@@ -138,7 +138,7 @@ impl BsendGui {
                     .text_color(rgb(theme::TEXT_FAINT))
                     .truncate()
                     .child(format!(
-                        "退避中 {backoff_count} 条（门禁拦截 24h / 失败 6h）"
+                        "退避中 {backoff_count} 条（发布检查拦截 24h / 失败 6h）"
                     )),
             );
 

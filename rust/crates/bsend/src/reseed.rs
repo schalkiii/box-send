@@ -2639,25 +2639,12 @@ fn sole_detail_url(body: &str, final_url: &str, action: &str) -> Option<String> 
     if let Some(u) = redirect_detail_url(final_url, action) {
         return Some(u);
     }
-    // 响应体里唯一的 details.php?id=N
-    let mut found: Vec<String> = Vec::new();
-    let mut rest = body;
-    while let Some(p) = rest.find("details.php?id=") {
-        let after = &rest[p + "details.php?id=".len()..];
-        let digits: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
-        if !digits.is_empty() {
-            let url = resolve_url(
-                &format!("details.php?id={digits}"),
-                &Url::parse(action).ok()?,
-            );
-            if !found.contains(&url) {
-                found.push(url);
-            }
-        }
-        rest = &after[digits.len()..];
-    }
+    // 响应体里唯一的 details.php?id=N；`userdetails.php?id=` 是用户主页，不算。
+    let base = Url::parse(action).ok()?;
+    let mut found: Vec<(String, String)> = Vec::new();
+    collect_id_links(body, &base, "details.php?id=", &mut found);
     if found.len() == 1 {
-        Some(found.pop().unwrap())
+        Some(found.pop().unwrap().1)
     } else {
         None
     }
@@ -2931,9 +2918,19 @@ pub struct PostedLinks {
     pub download: Option<String>,
 }
 
-fn collect_id_links(haystack: &str, base: &Url, marker: &str, out: &mut Vec<String>) {
+fn collect_id_links(haystack: &str, base: &Url, marker: &str, out: &mut Vec<(String, String)>) {
     let mut rest = haystack;
     while let Some(p) = rest.find(marker) {
+        // `userdetails.php?id=` 里也包含 `details.php?id=`：marker 前面还是字母
+        // 或下划线时说明它是更长的文件名，不能当种子详情链接。
+        if rest[..p]
+            .chars()
+            .next_back()
+            .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
+        {
+            rest = &rest[p + marker.len()..];
+            continue;
+        }
         let after = &rest[p + marker.len()..];
         let digits: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
         if !digits.is_empty() {
@@ -2944,8 +2941,8 @@ fn collect_id_links(haystack: &str, base: &Url, marker: &str, out: &mut Vec<Stri
                 continue;
             }
             let u = resolve_url(&href, base);
-            if !out.contains(&u) {
-                out.push(u);
+            if !out.iter().any(|(id, url)| id == &digits && url == &u) {
+                out.push((digits, u));
             }
         }
         rest = after;
@@ -2954,17 +2951,87 @@ fn collect_id_links(haystack: &str, base: &Url, marker: &str, out: &mut Vec<Stri
 
 /// 从上传回包正文与最终跳转 URL 提取 `details.php?id=` / `download.php?id=` 链接。
 /// 纯解析：不发检索请求、不读「我发布的列表」（QB-TRUTH-MODE §6）。
+///
+/// 成功页常把侧边栏/相关推荐里的旧种一起带上，不能盲取第一条。取链接的顺序：
+/// 1. 最终跳转 URL 是详情页 → 以它为准；下载链接只在 id 对得上时才用；
+/// 2. 正文里详情和下载链接 id 相同 → 用这一对；
+/// 3. 只有唯一详情或唯一下载 → 用唯一的一个；
+/// 4. 多个链接但 id 对不上 → 两个都留空，交给 `posted_unresolved` 人工确认，
+///    宁可不挂也不能把旧种挂进 qB。
 pub fn extract_posted_links(body: &str, final_url: &str, base: &Url) -> PostedLinks {
-    let mut details: Vec<String> = Vec::new();
-    let mut downloads: Vec<String> = Vec::new();
-    for hay in [body, final_url] {
-        collect_id_links(hay, base, "details.php?id=", &mut details);
-        collect_id_links(hay, base, "download.php?id=", &mut downloads);
+    let mut body_details: Vec<(String, String)> = Vec::new();
+    let mut body_downloads: Vec<(String, String)> = Vec::new();
+    collect_id_links(body, base, "details.php?id=", &mut body_details);
+    collect_id_links(body, base, "download.php?id=", &mut body_downloads);
+
+    let mut final_details: Vec<(String, String)> = Vec::new();
+    let mut final_downloads: Vec<(String, String)> = Vec::new();
+    collect_id_links(final_url, base, "details.php?id=", &mut final_details);
+    collect_id_links(final_url, base, "download.php?id=", &mut final_downloads);
+
+    if let Some((fid, furl)) = final_details.first() {
+        if let Some((_, durl)) = final_downloads
+            .iter()
+            .chain(body_downloads.iter())
+            .find(|(id, _)| id == fid)
+        {
+            return PostedLinks {
+                detail: Some(furl.clone()),
+                download: Some(durl.clone()),
+            };
+        }
+        return PostedLinks {
+            detail: Some(furl.clone()),
+            download: None,
+        };
     }
-    PostedLinks {
-        detail: details.into_iter().next(),
-        download: downloads.into_iter().next(),
+    if let [(did, durl)] = final_downloads.as_slice() {
+        if let Some((_, detail)) = body_details.iter().find(|(id, _)| id == did) {
+            return PostedLinks {
+                detail: Some(detail.clone()),
+                download: Some(durl.clone()),
+            };
+        }
+        return PostedLinks {
+            detail: None,
+            download: Some(durl.clone()),
+        };
     }
+
+    // 正文里 id 对得上的详情/下载对。唯一一对才可信。
+    let pairs: Vec<(&(String, String), &(String, String))> = body_downloads
+        .iter()
+        .filter_map(|d| {
+            body_details
+                .iter()
+                .find(|(id, _)| id == &d.0)
+                .map(|detail| (detail, d))
+        })
+        .collect();
+    if let [(detail, download)] = pairs.as_slice() {
+        return PostedLinks {
+            detail: Some(detail.1.clone()),
+            download: Some(download.1.clone()),
+        };
+    }
+    if !pairs.is_empty() {
+        return PostedLinks::default();
+    }
+
+    // 只有一类链接时，唯一的那条还能用；多条就分不清新旧。
+    if body_downloads.is_empty() && body_details.len() == 1 {
+        return PostedLinks {
+            detail: Some(body_details[0].1.clone()),
+            download: None,
+        };
+    }
+    if body_details.is_empty() && body_downloads.len() == 1 {
+        return PostedLinks {
+            detail: None,
+            download: Some(body_downloads[0].1.clone()),
+        };
+    }
+    PostedLinks::default()
 }
 
 /// existed 回包详情页标题核对：只采信回包给的 hint 页面，标题一致才返回。
@@ -6582,5 +6649,62 @@ Language : Chinese"));
         let two = r#"<html><body>
 <a href="details.php?id=111">A</a><a href="details.php?id=222">B</a></body></html>"#;
         assert!(body_detail_success_url(two, action, action).is_none());
+
+        // 用户主页锚不是种子详情页：只有 userdetails 时不算唯一详情
+        let user = r#"<html><body><a href="userdetails.php?id=777">上传者</a></body></html>"#;
+        assert!(body_detail_success_url(user, action, action).is_none());
+        // 用户主页 + 唯一详情 → 仍能定位到详情
+        let user_and_detail = r#"<html><body><a href="userdetails.php?id=777">上传者</a>
+<a href="details.php?id=12345">新种</a></body></html>"#;
+        assert_eq!(
+            body_detail_success_url(user_and_detail, action, action).as_deref(),
+            Some("https://x.example/details.php?id=12345")
+        );
+    }
+
+    #[test]
+    fn extract_posted_links_uses_matching_id_not_first_link() {
+        // hdvideo 实测：成功页先出现新种，后面跟着相关旧种；下载直链只有新种。
+        // 即使旧种链接排在前面，也必须按 id 配对，不能取第一条详情。
+        let base = Url::parse("https://hdvideo.top/").unwrap();
+        let body = r#"<p>发布成功！</p>
+<a href="details.php?id=14469">相关旧种</a>
+<a href="download.php?id=78856">下载</a>
+<a href="details.php?id=78856">新种</a>
+<a href="userdetails.php?id=999">上传者</a>"#;
+        let links = extract_posted_links(body, "https://hdvideo.top/takeupload.php", &base);
+        assert_eq!(
+            links.detail.as_deref(),
+            Some("https://hdvideo.top/details.php?id=78856")
+        );
+        assert_eq!(
+            links.download.as_deref(),
+            Some("https://hdvideo.top/download.php?id=78856")
+        );
+    }
+
+    #[test]
+    fn extract_posted_links_refuses_mismatched_ids() {
+        // 详情指向 A、下载指向 B：分不清哪个是新种，宁可留空转人工，也不挂错种。
+        let base = Url::parse("https://x.example/").unwrap();
+        let body = r#"<a href="details.php?id=111">A</a><a href="download.php?id=222">B</a>"#;
+        let links = extract_posted_links(body, "https://x.example/takeupload.php", &base);
+        assert!(links.detail.is_none());
+        assert!(links.download.is_none());
+    }
+
+    #[test]
+    fn extract_posted_links_prefers_final_redirect() {
+        let base = Url::parse("https://x.example/").unwrap();
+        let body = r#"<a href="details.php?id=111">旧种</a><a href="download.php?id=333">下载</a>"#;
+        let links = extract_posted_links(body, "https://x.example/details.php?id=333", &base);
+        assert_eq!(
+            links.detail.as_deref(),
+            Some("https://x.example/details.php?id=333")
+        );
+        assert_eq!(
+            links.download.as_deref(),
+            Some("https://x.example/download.php?id=333")
+        );
     }
 }

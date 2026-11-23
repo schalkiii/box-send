@@ -219,7 +219,7 @@ pub(crate) fn run_autopost_job(
             } => vec![match result {
                 "posted" => format!("→ 已发布（{site}）：{}", url.unwrap_or_default()),
                 "skipped_duplicate" => format!("→ 已跳过（{site}）：目标站已有同条目"),
-                "blocked" => format!("→ 门禁拦截（{site}），转人工"),
+                "blocked" => format!("→ 发布检查拦截（{site}），转人工"),
                 "review_failed" => {
                     format!("→ 审阅未通过（{site}）：{}", error.unwrap_or_default())
                 }

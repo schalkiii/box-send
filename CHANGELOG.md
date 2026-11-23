@@ -58,6 +58,9 @@
 
 ### Fixed
 
+- 发后定位不再取回包里的第一条详情链接：详情和下载必须按 id 配对，最终跳转是详情页时优先用它；
+  详情和下载 id 对不上就留空转 `posted_unresolved`，避免把成功页里的相关旧种（hdvideo 14469）挂进 qB。
+  `userdetails.php?id=` 也不再被当成种子详情。
 - 辅种新加种带限速/异常 note 时不再误落 `assisted` 捷径（会继续校验并启动）。
 - 源种预算耗尽不再落 7 天 `miss` 负缓存。
 - 审核渲染脱敏 `passkey/token/secure/uid` 等字段值。

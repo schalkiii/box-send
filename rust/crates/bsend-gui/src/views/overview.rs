@@ -262,7 +262,7 @@ impl BsendGui {
             widgets::scroll_list("overview-list")
                 .child(widgets::empty_state(
                     "没有符合条件的站点",
-                    "调整上方筛选，或先跑一轮基线刷新账本。",
+                    "调整上方筛选，或先跑一轮基线刷新覆盖记录。",
                 ))
                 .into_any_element()
         } else {
@@ -331,7 +331,7 @@ impl BsendGui {
                     .flex_none()
                     .items_center()
                     .gap_2()
-                    .child(widgets::kpi("段内容", contents, "账本索引的去重段落"))
+                    .child(widgets::kpi("段内容", contents, "覆盖记录里的去重段落"))
                     .child(widgets::kpi("成员种子", members, "下载器里挂着的成员种"))
                     .child(widgets::kpi("草稿", drafts, "待转种草稿条数"))
                     .child(widgets::kpi(
