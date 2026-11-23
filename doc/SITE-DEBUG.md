@@ -180,9 +180,11 @@ luckpt 的候选规则（**还没有写进 `boxsend.json`**）：
 
 六站共同的结论：站点改写种子元信息是正常行为，不能把 hash 不一致一概当错种；但只对实测确认的站放行，且必须 pieces 和标题同时一致。新增站先按默认严格模式跑，出现 hash 不一致再核对，不要预先扩大白名单。
 
-### 6.8 2026-11-23 未打通的站：oshen
+### 6.8 2026-11-23 未打通的站：oshen、itzmx、ptfans
 
 - **oshen**：`formcheck` 通过（14 个字段、8 个下拉，选档正常）；实际 `reseed` 先遇到判重搜索 30 秒超时，重试后上传页返回“没有可解析的静态上传表单”。同一时刻再跑 `formcheck` 又正常，说明是站点侧限流或页面形态抖动，不是 cookie 失效。没有上传，未产生站点记录。
+- **itzmx**：审阅和门禁都通过（10 个字段，`type=402` 剧集、`standard_sel=1` 1080p），两条候选都是大合集（294.3 GB / 197.2 GB）。两次 `reseed --yes` 都在 `takeupload.php` 被站点前置的 Kangle 拦下：`HTTP 403 access denied by input filter`，回包已落 `upload-debug/itzmx-1795423111-a0.html`。这不是 tracker/hash/权限问题，是站点侧输入过滤；未产生站点记录。先不重试，等换非合集候选或确认站点过滤规则。
+- **ptfans**：审阅时目标站上传页 `https://ptfans.cc/upload.php` 超时；再试在 IMDb 判重搜索 `torrents.php?search=tt0094525…` 超时，流程按设计拒绝未确认重复的上传。没有上传，未产生站点记录；等站点连通性恢复再试。
 
 ### 6.9 cangbao（藏宝阁）
 

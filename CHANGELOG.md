@@ -111,6 +111,8 @@
   片源词错填成「电影-WEB-DL」；type 选完后再按父子关系填，实测《知否》选到「剧集-大陆」。
 - 新站首次实发暴露的 cspt tracker 别名 `tracker.cspt.cc` 已补；不补时目标种加进 qB 后
   会被“非目标站 tracker”校验中止，补挂失败。
+- 其余未打通站：`itzmx` 两条大合集上传都被站点前置 Kangle 以 `input filter` 403 拒绝；
+  `ptfans` 上传页和 IMDb 判重搜索都超时。两者都没上传、没写覆盖记录，待换候选或站点恢复。
 - GUI 双击启动：配置文件默认回退到 `%LOCALAPPDATA%\BoxSend\boxsend.json`；
   加载失败弹可见错误框（此前无控制台，双击后静默退出）。
 - **自动发种改为「审阅产物直发」**（BUG-M7）：发布检查通过后直接把 `ReviewReport`

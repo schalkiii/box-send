@@ -123,7 +123,7 @@ tjupt, ubits, xingyunge
 | hdcity | 城市 | hdcity.city | NexusPHP | 是 | — | — | gap | 简介为空 | unsupported | 5 |  |
 | musopia | 音乐乌托邦 | musopia.vip | NexusPHP | 是 | — | — | gap | medium_sel 未选 | 未测 | 1 |  |
 | muxuege | 慕雪阁 | pt.muxuege.org | NexusPHP | 是 | — | — | gap | audiocodec_sel 未选 | ok | 1 |  |
-| ptfans | PTFans | ptfans.cc | NexusPHP | 是 | — | — | gap | medium_sel 未选 | ok | 1 |  |
+| ptfans | PTFans | ptfans.cc | NexusPHP | 是 | — | — | gap | medium_sel 未选 | ok | 1 | 2026-11-23 上传页与 IMDb 判重均超时，未上传；不出站点记录，等连通性恢复 |
 | agsvpt | 末日 | agsvpt.com | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | 未测 | 1 |  |
 | aling | 爱玲 | pt.aling.de | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | 未测 | 1 |  |
 | audiences | 观众 | audiences.me | NexusPHP | 是 | — | — | ok |  | unsupported | 6 |  |
@@ -145,7 +145,7 @@ tjupt, ubits, xingyunge
 | hdu | 好多油 | pt.upxin.net | NexusPHP | 是 | — | — | ok | processing_sel 未选 | unsupported | 5 |  |
 | hdvideo | HDVideo | hdvideo.top | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 1 | 检查结论是上一次表单结果；`region_sel[4]`、`style_sel[4][]` 已补，78856 已补挂 qB |
 | iloli | 爱萝莉 | mua.xloli.cc | NexusPHP | 是 | — | — | ok | source_sel[4] 未选 | 未测 | 1 |  |
-| itzmx | Itz | pt.itzmx.com | NexusPHP | 是 | — | — | ok | team_sel 未选 | 未测 | 5 |  |
+| itzmx | Itz | pt.itzmx.com | NexusPHP | 是 | — | — | ok | team_sel 未选 | 未测 | 5 | 2026-11-23 两次上传被 Kangle `input filter` 返回 403；审阅/门禁通过，未产生站点记录；两条候选都是大合集，待换非合集候选再试 |
 | kelu | Kelu | our.kelu.one | NexusPHP | 是 | — | — | ok | type 未选 | 未测 | 1 |  |
 | kufei | 库非 | kufei.org | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 1 |  |
 | lajidui | 垃圾堆 | pt.lajidui.top | NexusPHP | 是 | — | — | ok | processing_sel[4] 未选 | ok | 1 |  |

@@ -136,6 +136,8 @@ reseed/coverage_io.rs  覆盖记录读写
 - **agsvpt**：提交域和登录域不一致，返回“你没有该权限”，建议剔除。
 - **ptba / cspt / dubhe / ptsbao / crabpt / hdbao**：2026-11-23 首次实发（hdbao 2 条，其余各 1 条）并挂回成功；六站都会改写种子元信息，站上 hash 与构造 hash 不同，已加入 hash 改写白名单。cspt 另有 `tracker.cspt.cc` 别名，dubhe 判重搜索偶发 30 秒超时；ptsbao 的 `source_sel` 是二级分类，已按 type 父类 + 标题自动填；crabpt 此前候选源站 `hdfans` 502 退避，改走 `hdsky` 源后成功；hdbao 的 `autopost --limit` 计数缺陷已修。
 - **oshen**：`formcheck` 能拿到表单，但实际发种时判重搜索超时，重试后上传页返回“没有可解析的静态上传表单”；同一条命令再跑 `formcheck` 又正常，属于站点侧抖动/限流，暂未实发。
+- **itzmx**：审阅/门禁通过，但两条候选都是大合集；`reseed --yes` 两次被站点前置 Kangle 以 `HTTP 403 access denied by input filter` 拒绝，未产生站点记录。先不重试，等换非合集候选或确认过滤规则。
+- **ptfans**：上传页和 IMDb 判重搜索都超时，未上传；站点连通性恢复后再试。
 - **tey**：发布检查报 `medium_sel` 没选，补站点规则后再试。hdbao 已在 2026-11-23 实发 2 条并挂回，见 5.1。
 
 ### 5.2 工程
