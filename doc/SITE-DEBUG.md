@@ -167,9 +167,9 @@ luckpt 的候选规则（**还没有写进 `boxsend.json`**）：
 
 站上其实已经发布（qilin 479362、panda 141276），但旧逻辑拿旧种或错误详情页当结果，记成了失败；新 hash 不在 qB。这是发后定位错误，不是上传失败。新版流程已经改成从回包正文/跳转里按 id 配对详情和下载链接，再下载目标种独立挂回；发后定位缺陷已修（见 `ROADMAP.md` 4.3）。2026-11-23 已补挂：qilin 479362（hash `bd348dfc…`，站点审核仍显示缺图，不影响做种）、panda 141276（hash `3f8ed774…`），两条 qB 校验 100%。
 
-### 6.7 2026-11-23 新实发：ptba、cspt、dubhe、ptsbao、crabpt、hdbao、tey、oshen
+### 6.7 2026-11-23 新实发：ptba、cspt、dubhe、ptsbao、crabpt、hdbao、tey、oshen、ptfans
 
-八站都是第一次向目标站发种，上传本身成功；站上返回的 `.torrent` hash 与本地上传构造的 hash 不同。ptba 已确认是站点改写了 `info.source`；cspt、dubhe、ptsbao、crabpt、hdbao、tey、oshen 的 pieces 和 `info.name` 未变，但具体改写字段没有逐字节核对。程序默认拒绝 hash 不一致；八站经 pieces 和 `info.name` 核对后加入白名单，后续同站发种直接放行，不再落 `posted_unresolved`。
+九站都是第一次向目标站发种，上传本身成功；站上返回的 `.torrent` hash 与本地上传构造的 hash 不同。ptba 已确认是站点改写了 `info.source`；cspt、dubhe、ptsbao、crabpt、hdbao、tey、oshen、ptfans 的 pieces 和 `info.name` 未变，但具体改写字段没有逐字节核对。程序默认拒绝 hash 不一致；九站经 pieces 和 `info.name` 核对后加入白名单，后续同站发种直接放行，不再落 `posted_unresolved`。
 
 - **ptba**：源 `luckpt` 的 `金枝欲孽`（51.9 GB）→ `https://1ptba.com/details.php?id=106718`，站上 hash `abf41c82…`，构造 hash `4f8b63e2…`。站上 `info.source` 为 `[1ptba.com] 1PTBA.COM`，本地构造写的是 `ptba`。已用 `reattach` 补挂，qB 校验 100%。
 - **cspt**：源 `ptba` 的 `Mad Men S01-S07`（95.1 GB）→ `https://cspt.top/details.php?id=259870`，站上 hash `cf568e1a…`，构造 hash `516522da…`。第一次补挂被 tracker 校验拦住：站上种子的 announce 在 `tracker.cspt.cc`，页面域是 `cspt.top`，`extra_announce_hosts` 缺别名。补 `cspt => ["tracker.cspt.cc"]` 后重新补挂成功；站上种子自带两条同站 announce，保留原样。
@@ -179,13 +179,13 @@ luckpt 的候选规则（**还没有写进 `boxsend.json`**）：
 - **hdbao**：`autopost --sites hdbao --limit 1` 实际发了 2 条：源 `ptba` 的 `Mad Men S01-S07`（102.1 GB）→ `https://hdbao.cc/details.php?id=54402`，站上 hash `95eacf24…`，构造 hash `e88d740e…`；源 `hdfans` 的《人民的名义》（95.8 GB）→ `https://hdbao.cc/details.php?id=54403`，站上 hash `51ededb2…`，构造 hash `1f8a0104…`。两条都先落 `posted_unresolved`，`reattach` 后 qB 校验 100%。`--limit` 少算 `posted_unresolved` 的缺陷已修，后续同站不再连发。
 - **tey**：源 `hdsky` 的 `The Disguiser`（HDTV 1080p，82.8 GB）→ `https://pt.tey.cc/details.php?id=623`，站上 hash `c9570904…`，构造 hash `465916fd…`。该站 `medium_sel[4]` 没有 Blu-ray，蓝光/Remux 候选会被选档门禁拦住；这次改用 HDTV 源才通过。qB 里 5 条老种全走 `tracker.tey.cc`，页面域是 `pt.tey.cc`，补 announce 别名后 qB 覆盖从 0 变 5，也能抄到 passkey。上传回包同样没给详情链接，落 `posted_unresolved`；`reattach` 后 qB 校验 100%。新种在站上暂时显示“未审”，等站点审核。
 - **oshen**：源 `soulvoice` 的《知否知否应是绿肥红瘦》（119.6 GB）→ `http://www.oshen.win/details.php?id=57082`，站上 hash `22e3dd63…`，构造 hash `0f73ae73…`。前两次分别断在“send failed because receiver is gone”和判重搜索超时；第三次站点恢复，判重正常、上传成功。回包没给详情链接，落 `posted_unresolved`；`reattach` 后 qB 校验 100%，tracker 为 `https://www.oshen.win/announce.php?...`。表单没有“完结”标签，发布后需要人工补。
+- **ptfans**：源 `carpt` 的 `Agatha.Christies.Poirot.S01-S13.Collection`（294.3 GB）→ `https://ptfans.cc/details.php?id=11111`，站上 hash `fdf27b29…`，构造 hash `4fd4392f…`。此前上传页和 IMDb 判重都超时；2026-11-23 站点恢复后一次通过。站上已有 720p 其他版本 `6095`，按“同名其他版本照样发”的策略继续上传。回包没给详情链接，落 `posted_unresolved`；`reattach` 后 qB 校验 100%，tracker 为 `https://ptfans.cc/announce.php?...`。表单没有“完结”标签，发布后需要人工补。
 
-八站共同的结论：站点改写种子元信息是正常行为，不能把 hash 不一致一概当错种；但只对实测确认的站放行，且必须 pieces 和标题同时一致。新增站先按默认严格模式跑，出现 hash 不一致再核对，不要预先扩大白名单。
+九站共同的结论：站点改写种子元信息是正常行为，不能把 hash 不一致一概当错种；但只对实测确认的站放行，且必须 pieces 和标题同时一致。新增站先按默认严格模式跑，出现 hash 不一致再核对，不要预先扩大白名单。
 
-### 6.8 2026-11-23 未打通的站：itzmx、ptfans
+### 6.8 2026-11-23 未打通的站：itzmx
 
 - **itzmx**：审阅和门禁都通过（10 个字段，`type=402` 剧集、`standard_sel=1` 1080p），两条候选都是大合集（294.3 GB / 197.2 GB）。两次 `reseed --yes` 都在 `takeupload.php` 被站点前置的 Kangle 拦下：`HTTP 403 access denied by input filter`，回包已落 `upload-debug/itzmx-1795423111-a0.html`。这不是 tracker/hash/权限问题，是站点侧输入过滤；未产生站点记录。先不重试，等换非合集候选或确认站点过滤规则。
-- **ptfans**：审阅时目标站上传页 `https://ptfans.cc/upload.php` 超时；再试在 IMDb 判重搜索 `torrents.php?search=tt0094525…` 超时，流程按设计拒绝未确认重复的上传。没有上传，未产生站点记录；等站点连通性恢复再试。
 
 ### 6.9 cangbao（藏宝阁）
 
