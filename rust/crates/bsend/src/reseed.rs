@@ -30,7 +30,7 @@ use crate::index::{ContentIndex, CoverageStatus, SiteCoverage};
 use crate::qbittorrent::QBittorrent;
 use crate::sites::nexusphp::{
     decode_entities, decode_entities_once, is_detail_href, resolve_url, search_names_match,
-    sizes_close, strip_tags, NexusPhp, SearchOutcome, TorrentPage,
+    sizes_close_with_slack, strip_tags, NexusPhp, SearchOutcome, TorrentPage,
 };
 use crate::throttle::{BudgetKind, SiteThrottle};
 use crate::torrent_rewrite;
@@ -3756,7 +3756,9 @@ fn locate_posted_by_search(
         }
         if let Some(expected) = expected_size {
             match page.size_bytes {
-                Some(actual) if !sizes_close(actual, expected) => {
+                Some(actual)
+                    if !sizes_close_with_slack(actual, expected, page.size_slack_bytes) =>
+                {
                     log(&format!(
                         "发后定位·候选大小不符：页面 {} 字节，期望 {} 字节",
                         actual, expected
@@ -5574,6 +5576,7 @@ fn run_reseed_inner(
             name: String::new(),
             download_url: url.to_string(),
             size_bytes: None,
+            size_slack_bytes: None,
             uploader_uid: None,
             uploader_name: None,
         };
@@ -6236,7 +6239,8 @@ Frame rate : 25</pre>
 <textarea name="descr"></textarea>
 </form>"#;
         let info = ReleaseInfo {
-            name: "Agatha Christies Poirot S01-S13 Collection Bluray 1080p x265 10bit MNHD-FRDS".into(),
+            name: "Agatha Christies Poirot S01-S13 Collection Bluray 1080p x265 10bit MNHD-FRDS"
+                .into(),
             subtitle: "【大侦探波洛】国英双配 外挂中英ass字幕 10bit HEVC版本".into(),
             descr: "◎标　　签　英剧 | 推理".into(),
             ..Default::default()

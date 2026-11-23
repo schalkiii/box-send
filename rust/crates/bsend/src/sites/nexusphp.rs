@@ -54,18 +54,32 @@ pub struct SearchHit {
     pub title: String,
     /// 结果页列表里的大小；解析不到为 None，后续用详情页复核
     pub size_bytes: Option<i64>,
+    /// 结果页大小文本的显示精度（0.01 个显示单位）；用作初筛冗余，最终仍以 pieces 为准
+    pub size_slack_bytes: Option<i64>,
 }
 
 /// 站点显示的大小是四舍五入过的人类可读值，不能和本地精确字节直接相等。
 /// 0.5% 的容差只用于“名字+大小”初筛，最终的 pieces 校验仍是精确比对。
 /// 站点有的用 1024 进位标 GB、有的用 1000 进位；同一串 294.27 GB 两种解释会差 7.4%，
 /// 所以同时接受 expected 和 expected 的两种单位换算，避免把正确候选误杀。
+///
+/// 另外站点只显示两位小数时，页面上的 `0.01 GB/GiB` 本身就是一个显示量子；
+/// 调用方把该量子传进 `sizes_close_with_slack`，小体积种子也能覆盖显示舍入。
 pub fn sizes_close(actual: i64, expected: i64) -> bool {
+    sizes_close_with_slack(actual, expected, None)
+}
+
+/// 带显示精度余量的大小初筛。`display_slack` 是站点文本里 `0.01` 个显示单位
+/// 对应的字节数（例如 `274.04 GiB` 的 0.01 GiB）；None 时退回默认 2 MiB 下限。
+pub fn sizes_close_with_slack(actual: i64, expected: i64, display_slack: Option<i64>) -> bool {
     if actual <= 0 || expected <= 0 {
         return false;
     }
     let near = |a: i64, b: i64| {
-        let tolerance = (b / 200).max(2 * 1024 * 1024);
+        // 2 MiB 只作为小体积的绝对下限；同时不超过 b 的 1%，避免 1 MB 的种子
+        // 也吃满 2 MiB 容差，把同名不同版本当成同一条。
+        let floor = (2 * 1024 * 1024).min(b / 100).max(0);
+        let tolerance = (b / 200).max(floor).max(display_slack.unwrap_or(0).max(0));
         (a - b).abs() <= tolerance
     };
     if near(actual, expected) {
@@ -84,6 +98,8 @@ pub struct TorrentPage {
     pub download_url: String,
     /// 页面解析出的总大小（字节）；解析不出为 None
     pub size_bytes: Option<i64>,
+    /// 页面大小文本的显示精度（0.01 个显示单位）；用于初筛冗余，最终仍以 pieces 为准
+    pub size_slack_bytes: Option<i64>,
     /// 上传者 uid（`usercp.php?id=` / `userdetails.php?id=` / `details.php?uploader=`）；解析不出为 None
     pub uploader_uid: Option<String>,
     /// 上传者展示名
@@ -446,6 +462,7 @@ impl NexusPhp {
             name: String::new(),
             download_url: url.to_string(),
             size_bytes: None,
+            size_slack_bytes: None,
             uploader_uid: None,
             uploader_name: None,
         };
@@ -871,7 +888,7 @@ fn candidate_score(candidate: &str, release_name: &str, relaxed: bool) -> Option
 
 /// 结果页一行里的大小：先截取详情锚所在 `<tr>` 的上下文，再剥标签找 `12.34 GB`。
 /// 版式不固定时找不到就返回 None，后续由详情页大小复核兜底。
-fn result_row_size(html: &str, href: &str) -> Option<i64> {
+fn result_row_size(html: &str, href: &str) -> Option<DisplaySize> {
     let pos = html.find(href)?;
     let start = html[..pos]
         .rfind("<tr")
@@ -883,7 +900,7 @@ fn result_row_size(html: &str, href: &str) -> Option<i64> {
     human_size_in_text(&strip_tags(&html[start..end]))
 }
 
-fn human_size_in_text(text: &str) -> Option<i64> {
+fn human_size_in_text(text: &str) -> Option<DisplaySize> {
     let cleaned = text.replace(',', " ");
     let words: Vec<&str> = cleaned.split_whitespace().collect();
     for (i, word) in words.iter().enumerate() {
@@ -897,7 +914,7 @@ fn human_size_in_text(text: &str) -> Option<i64> {
                 suffix
             };
             if unit.chars().any(|c| c.is_ascii_alphabetic()) {
-                if let Some(v) = parse_human_size(&format!("{num} {unit}")) {
+                if let Some(v) = parse_human_size_display(&format!("{num} {unit}")) {
                     return Some(v);
                 }
             }
@@ -908,7 +925,7 @@ fn human_size_in_text(text: &str) -> Option<i64> {
         if !w[0].chars().any(|c| c.is_ascii_digit()) {
             continue;
         }
-        if let Some(v) = parse_human_size(&format!("{} {}", w[0], w[1])) {
+        if let Some(v) = parse_human_size_display(&format!("{} {}", w[0], w[1])) {
             return Some(v);
         }
     }
@@ -963,7 +980,7 @@ pub fn search_name_in_results(
     let doc = Html::parse_document(html);
     let sel = Selector::parse("a").unwrap();
     // 扁平候选列表：(href, 文本, 行内大小)，title 更完整时在同锚后面补一条——与 Swift anchorText 的顺序一致
-    let mut candidates: Vec<(String, String, Option<i64>)> = Vec::new();
+    let mut candidates: Vec<(String, String, Option<DisplaySize>)> = Vec::new();
     for el in doc.select(&sel) {
         let Some(href) = el.value().attr("href") else {
             continue;
@@ -985,7 +1002,7 @@ pub fn search_name_in_results(
     let mut best: Option<(u8, f64, usize)> = None;
     for (idx, cand) in candidates.iter().enumerate() {
         if let (Some(expected), Some(actual)) = (expected_size, cand.2) {
-            if !sizes_close(actual, expected) {
+            if !sizes_close_with_slack(actual.bytes, expected, Some(actual.slack_bytes)) {
                 continue;
             }
         }
@@ -1006,7 +1023,8 @@ pub fn search_name_in_results(
     Some(SearchHit {
         detail_url: resolve_url(&hit.0, base),
         title: hit.1.clone(),
-        size_bytes: hit.2,
+        size_bytes: hit.2.map(|s| s.bytes),
+        size_slack_bytes: hit.2.map(|s| s.slack_bytes),
     })
 }
 
@@ -1153,24 +1171,35 @@ pub fn parse_torrent_page(html: &str, detail_url: &str, base: &Url) -> Option<To
         return None;
     }
     let (uploader_uid, uploader_name) = page_uploader(html);
-    let size_bytes = page_size_bytes(html);
+    let size = page_size_display(html);
     Some(TorrentPage {
         name,
         download_url,
-        size_bytes,
+        size_bytes: size.map(|s| s.bytes),
+        size_slack_bytes: size.map(|s| s.slack_bytes),
         uploader_uid,
         uploader_name,
     })
 }
 
-/// 人类可读大小 → 字节。支持 B / KiB / KB / MiB / MB / GiB / GB / TiB / TB（1024 进制）；
-/// 解析不出返回 None。站点详情页大小文本形如 `12.34 GiB` / `1,024 MB`。
-pub fn parse_human_size(text: &str) -> Option<i64> {
+/// 人类可读大小 → 字节 + 显示精度（0.01 个显示单位）。支持
+/// B / KiB / KB / MiB / MB / GiB / GB / TiB / TB（1024 进制）；解析不出返回 None。
+/// 站点详情页大小文本形如 `12.34 GiB` / `1,024 MB`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DisplaySize {
+    bytes: i64,
+    slack_bytes: i64,
+}
+
+fn parse_human_size_display(text: &str) -> Option<DisplaySize> {
     let cleaned = text.replace(',', "");
     let tokens: Vec<&str> = cleaned.split_whitespace().collect();
     let mut i = 0;
     while i < tokens.len() {
-        let num: f64 = tokens[i].parse().ok()?;
+        let Ok(num) = tokens[i].parse::<f64>() else {
+            i += 1;
+            continue;
+        };
         let unit = tokens
             .get(i + 1)
             .map(|u| u.trim_end_matches('.'))
@@ -1189,15 +1218,22 @@ pub fn parse_human_size(text: &str) -> Option<i64> {
         };
         let bytes = (num * factor).round() as i64;
         if bytes > 0 {
-            return Some(bytes);
+            // 站点通常只保留两位小数；0.01 个显示单位就是它的舍入粒度。
+            let slack_bytes = (factor * 0.01).round() as i64;
+            return Some(DisplaySize { bytes, slack_bytes });
         }
         i += 1;
     }
     None
 }
 
-/// 从详情页 HTML 提取总大小（字节）。只认带单位的大小文本；纯数字不当大小。
-pub fn page_size_bytes(html: &str) -> Option<i64> {
+/// 人类可读大小 → 字节；解析不出返回 None。
+pub fn parse_human_size(text: &str) -> Option<i64> {
+    parse_human_size_display(text).map(|s| s.bytes)
+}
+
+/// 从详情页 HTML 提取总大小（字节 + 显示精度）。只认带单位的大小文本；纯数字不当大小。
+fn page_size_display(html: &str) -> Option<DisplaySize> {
     let doc = Html::parse_document(html);
     let sel = Selector::parse("td,th,span,div").ok()?;
     for el in doc.select(&sel) {
@@ -1206,11 +1242,16 @@ pub fn page_size_bytes(html: &str) -> Option<i64> {
         if t.is_empty() || t.chars().count() > 40 {
             continue;
         }
-        if parse_human_size(t).is_some() {
-            return parse_human_size(t);
+        if let Some(size) = parse_human_size_display(t) {
+            return Some(size);
         }
     }
     None
+}
+
+/// 从详情页 HTML 提取总大小（字节）。只认带单位的大小文本；纯数字不当大小。
+pub fn page_size_bytes(html: &str) -> Option<i64> {
+    page_size_display(html).map(|s| s.bytes)
 }
 
 /// 从详情页 HTML 提取上传者 `(uid, 展示名)`。排除种子详情锚点本身：
@@ -1841,6 +1882,51 @@ mod tests {
         // 同名但差一个数量级/明显不同版本：不能过
         assert!(!sizes_close(100 * 1024 * 1024 * 1024, expected));
         assert!(!sizes_close(0, expected));
+    }
+
+    #[test]
+    fn sizes_close_covers_one_hundredth_of_displayed_unit() {
+        let one_gib = 1024 * 1024 * 1024i64;
+        let display = parse_human_size_display("1.00 GB").expect("1.00 GB must parse");
+        assert_eq!(display.bytes, one_gib);
+        assert_eq!(display.slack_bytes, (one_gib as f64 * 0.01).round() as i64);
+
+        // 差 10 MiB：默认 0.5% 容差不够，但 0.01 GiB 的显示余量必须放行。
+        let rounded = one_gib - 10 * 1024 * 1024;
+        assert!(!sizes_close(rounded, one_gib));
+        assert!(sizes_close_with_slack(
+            rounded,
+            one_gib,
+            Some(display.slack_bytes)
+        ));
+
+        // 小体积种子按自己的单位算余量，不套用 10 MiB 的固定下限。
+        let one_mib = 1024 * 1024i64;
+        let small = parse_human_size_display("1.00 MB").expect("1.00 MB must parse");
+        assert_eq!(small.slack_bytes, 10_486);
+        assert!(sizes_close_with_slack(
+            one_mib - 10_000,
+            one_mib,
+            Some(small.slack_bytes)
+        ));
+        assert!(!sizes_close_with_slack(
+            one_mib - 12_000,
+            one_mib,
+            Some(small.slack_bytes)
+        ));
+    }
+
+    #[test]
+    fn detail_page_carries_display_size_slack() {
+        let base = Url::parse("https://hdsky.me/details.php?id=1002").unwrap();
+        let html = r#"
+        <html><body><h1 id="top">Black.Lagoon.S01.1080p.Blu-ray.GROUP</h1>
+        <table><tr><td>大小：</td><td>1.00 GB</td></tr></table>
+        <a href="download.php?id=1002">下载种子</a>
+        </body></html>"#;
+        let page = parse_torrent_page(html, "https://hdsky.me/details.php?id=1002", &base).unwrap();
+        assert_eq!(page.size_bytes, Some(1024 * 1024 * 1024));
+        assert_eq!(page.size_slack_bytes, Some(10_737_418));
     }
 
     #[test]

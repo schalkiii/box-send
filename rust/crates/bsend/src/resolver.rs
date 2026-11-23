@@ -201,7 +201,11 @@ pub fn resolve_source(
         // 结果行没解析出大小时，再用详情页大小兜底；数字对不上直接换下一站，
         // 不下载候选，避免同名不同版本靠名字混过去。
         if let Some(actual) = page.size_bytes {
-            if !crate::sites::nexusphp::sizes_close(actual, local.total_size) {
+            if !crate::sites::nexusphp::sizes_close_with_slack(
+                actual,
+                local.total_size,
+                page.size_slack_bytes,
+            ) {
                 attempts.push(SiteAttempt {
                     site_id,
                     note: format!(
@@ -311,6 +315,7 @@ mod tests {
                 name: format!("{}.1080p-GROUP", self.id),
                 download_url: format!("https://{}/download.php?id=1", self.id),
                 size_bytes: None,
+                size_slack_bytes: None,
                 uploader_uid: None,
                 uploader_name: None,
             })
@@ -359,6 +364,7 @@ mod tests {
             detail_url: "https://b.example/details.php?id=9".to_string(),
             title: "x".to_string(),
             size_bytes: None,
+            size_slack_bytes: None,
         };
         let st = site_torrent(&[("a.mkv", 100)], "Pack");
         let b = MockSite {
@@ -405,6 +411,7 @@ mod tests {
                 detail_url: format!("https://{id}/details.php?id=1"),
                 title: "x".to_string(),
                 size_bytes: None,
+                size_slack_bytes: None,
             }))),
             torrent_data: RefCell::new(st.clone()),
         };
@@ -444,6 +451,7 @@ mod tests {
                 detail_url: "https://a.example/details.php?id=1".to_string(),
                 title: "x".to_string(),
                 size_bytes: None,
+                size_slack_bytes: None,
             }))),
             torrent_data: RefCell::new(site_torrent(&[("a.mkv", 999)], "Pack")),
         };

@@ -37,10 +37,18 @@ env:
 permissions:
   contents: write
 
+# 同一 ref 的新推送取消旧打包：macOS arm64 runner 排队经常超过 15 分钟，
+# 不让已经过期的 run 继续占队列，也避免旧 run 的排队失败盖住新提交的结果。
+concurrency:
+  group: package-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   macOS:
     if: github.event_name != 'workflow_dispatch' || inputs.platform != 'windows'
-    runs-on: macos-latest
+    # macos-latest 现在指向 macOS 26；新镜像的 arm64 容量经常排不到。
+    # 固定到 macOS 15 arm64，架构不变，runner 池更稳。
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v7
 

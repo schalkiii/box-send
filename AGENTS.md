@@ -6,6 +6,7 @@ PT 站自动发种/跨站辅种工具：读 qB 里的内容组和 tracker，找�
 ## 常用命令
 ```powershell
 Set-Location rust
+cargo fmt --all -- --check                           # 提交前必跑；CI 第一条就是它，格式不对直接红
 cargo test -p bsend                                  # 单测 + e2e
 cargo test -p bsend --lib reseed::tests::exist_marker # 跑单条用例
 cargo build --release -p bsend-cli                   # 产物 rust/target/release/bsend.exe
