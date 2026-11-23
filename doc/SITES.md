@@ -41,7 +41,7 @@ tjupt, ubits, xingyunge
 | haitang | 类目不符 | 没有发布 | — | 只有曲艺、有声书类目；已移出白名单，规则留档 |
 | haoxue | 需要重做 | 检索路由 404 | — | Next.js/Flux 单页应用；已移出白名单，需要按前端接口重做 |
 
-扩容候选的另外 18 个站里，city13、novahd、xingyunge、cyanbug 这 4 个站已经实测发布并挂回成功；hdvideo（78856）、qilin（479362）、panda（141276）站上已经发布，2026-11-23 已全部补挂到 qB 并校验 100%；hdbao、tey、oshen、ptfans 也在 2026-11-23 首次实发（见 2.1）；agsvpt 权限不足；ubits 是站上已有、无缺口；其余没测或类目不符。证据见 `SITE-DEBUG.md`。
+扩容候选的另外 18 个站里，city13、novahd、xingyunge、cyanbug 这 4 个站已经实测发布并挂回成功；hdvideo（78856）、qilin（479362）、panda（141276）站上已经发布，2026-11-23 已全部补挂到 qB 并校验 100%；hdbao、tey、oshen、ptfans 也在 2026-11-23 首次实发（见 2.1）；agsvpt 权限不足；itzmx 仍被 Kangle input filter 403；ubits 是站上已有、无缺口；其余没测或类目不符。证据见 `SITE-DEBUG.md`。
 
 ### 2.1 2026-11-23 新实发的 9 个站
 
