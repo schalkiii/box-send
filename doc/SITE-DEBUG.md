@@ -168,20 +168,21 @@ luckpt 的候选规则（**还没有写进 `boxsend.json`**）：
 
 站上其实已经发布（qilin 479362、panda 141276），但旧逻辑拿旧种或错误详情页当结果，记成了失败；新 hash 不在 qB。这是发后定位错误，不是上传失败。新版流程已经改成从回包正文/跳转里按 id 配对详情和下载链接，再下载目标种独立挂回；发后定位缺陷已修（见 `ROADMAP.md` 4.3）。2026-11-23 已补挂：qilin 479362（hash `bd348dfc…`，站点审核仍显示缺图，不影响做种）、panda 141276（hash `3f8ed774…`），两条 qB 校验 100%。
 
-### 6.7 2026-11-23 新实发：ptba、cspt、dubhe
+### 6.7 2026-11-23 新实发：ptba、cspt、dubhe、ptsbao、crabpt
 
-三站都是第一次向目标站发种，上传本身成功；站点在 `takeupload.php` 阶段改写了 `info.source`，站上返回的 `.torrent` hash 与本地上传构造的 hash 不同。程序默认拒绝这种 hash 不一致；三站经 pieces 和 `info.name` 核对后加入白名单，后续同站发种直接放行，不再落 `posted_unresolved`。
+五站都是第一次向目标站发种，上传本身成功；站上返回的 `.torrent` hash 与本地上传构造的 hash 不同。ptba 已确认是站点改写了 `info.source`；cspt、dubhe、ptsbao、crabpt 的 pieces 和 `info.name` 未变，但具体改写字段没有逐字节核对。程序默认拒绝 hash 不一致；五站经 pieces 和 `info.name` 核对后加入白名单，后续同站发种直接放行，不再落 `posted_unresolved`。
 
 - **ptba**：源 `luckpt` 的 `金枝欲孽`（51.9 GB）→ `https://1ptba.com/details.php?id=106718`，站上 hash `abf41c82…`，构造 hash `4f8b63e2…`。站上 `info.source` 为 `[1ptba.com] 1PTBA.COM`，本地构造写的是 `ptba`。已用 `reattach` 补挂，qB 校验 100%。
 - **cspt**：源 `ptba` 的 `Mad Men S01-S07`（95.1 GB）→ `https://cspt.top/details.php?id=259870`，站上 hash `cf568e1a…`，构造 hash `516522da…`。第一次补挂被 tracker 校验拦住：站上种子的 announce 在 `tracker.cspt.cc`，页面域是 `cspt.top`，`extra_announce_hosts` 缺别名。补 `cspt => ["tracker.cspt.cc"]` 后重新补挂成功；站上种子自带两条同站 announce，保留原样。
 - **dubhe**：源 `soulvoice` 的 `知否知否应是绿肥红瘦`（119.6 GB）→ `https://dubhe.site/details.php?id=55492`，站上 hash `b5ebc539…`，构造 hash `0e53fd1b…`。第一次判重搜索 30 秒超时，重试才通过；表单里没有“完结”标签复选框，发布后需要人工补。已用 `reattach` 补挂，qB 校验 100%。
+- **ptsbao**：源 `soulvoice` 的同一条《知否知否应是绿肥红瘦》→ `https://ptsbao.club/details.php?id=135787`，站上 hash `0b0087f7…`，构造 hash `bf6e43ae…`。`source_sel[1]` 是二级分类（`剧集-美剧` / `电影-WEB-DL`），旧逻辑会按“WEB-DL”错填成 `电影-WEB-DL`；已改成先识别二级分类、type 选完后再按父子关系填，实发时选到 `剧集-大陆(23)`。已用 `reattach` 补挂，qB 校验 100%；表单没有“完结”标签，发布后需要人工补。
+- **crabpt**：源 `hdsky` 的 `The Disguiser`（88.9 GB）→ `https://crabpt.vip/details.php?id=240242`，站上 hash `732e2c99…`，构造 hash `fe9204e8…`。此前候选《人民的名义》卡在源站 `hdfans` 502（6 小时退避），这次改选 `hdsky` 源后一次通过；站上已有同片 2160p 其他版本 214580，按策略继续发布。已用 `reattach` 补挂，qB 校验 100%。
 
-三站共同的结论：站点改写 `info.source` 是正常行为，不能把 hash 不一致一概当错种；但只对实测确认的站放行，且必须 pieces 和标题同时一致。新增站先按默认严格模式跑，出现 hash 不一致再核对，不要预先扩大白名单。
+五站共同的结论：站点改写种子元信息是正常行为，不能把 hash 不一致一概当错种；但只对实测确认的站放行，且必须 pieces 和标题同时一致。新增站先按默认严格模式跑，出现 hash 不一致再核对，不要预先扩大白名单。
 
-### 6.8 2026-11-23 未打通的站：oshen、ptsbao
+### 6.8 2026-11-23 未打通的站：oshen
 
 - **oshen**：`formcheck` 通过（14 个字段、8 个下拉，选档正常）；实际 `reseed` 先遇到判重搜索 30 秒超时，重试后上传页返回“没有可解析的静态上传表单”。同一时刻再跑 `formcheck` 又正常，说明是站点侧限流或页面形态抖动，不是 cookie 失效。没有上传，未产生站点记录。
-- **ptsbao**：`formcheck` 通过，但审阅时 `source_sel[1]` 没选。看真实下拉才发现这个字段不是“片源（Blu-ray/WEB-DL）”，而是“剧集-美剧 / 电影-1080”这类二级分类；当前选档逻辑把它当片源，所以留 0。先不提交，避免发出一条没有二级分类的种子。下一步要把这个站点的 `source_sel` 当分类字段填，不能再按片源映射。
 
 ### 6.9 cangbao（藏宝阁）
 

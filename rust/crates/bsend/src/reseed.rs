@@ -1572,6 +1572,49 @@ fn options_in_domain(options: &[(String, String)], kws: &[&str]) -> bool {
     })
 }
 
+/// `source_sel` 的选项是不是「大类-子类」二级分类（ptsbao 实测：电影-WEB-DL /
+/// 剧集-美剧 / 音乐-无损）。按‘-’前的中文大类判断，至少两个不同大类才算；
+/// 这样 `Blu-ray` 的 `Blu-ray` 前缀、`UHD Blu-ray` 不会被误认成分类。
+fn looks_like_secondary_category(options: &[(String, String)]) -> bool {
+    const CATEGORY_PREFIXES: &[&str] = &[
+        "电影",
+        "剧集",
+        "电视剧",
+        "音乐",
+        "动漫",
+        "动画",
+        "综艺",
+        "纪录片",
+        "体育",
+        "游戏",
+        "软件",
+        "其他",
+        "其它",
+        "书籍",
+        "期刊",
+        "教育",
+        "学习",
+        "资料",
+        "写真",
+        "禁片",
+        "MV",
+        "晚会",
+        "讲座",
+        "个人",
+    ];
+    let mut prefixes = std::collections::BTreeSet::new();
+    for (_, label) in options {
+        let Some((prefix, _)) = label.split_once('-') else {
+            continue;
+        };
+        let prefix = prefix.trim();
+        if CATEGORY_PREFIXES.contains(&prefix) {
+            prefixes.insert(prefix.to_string());
+        }
+    }
+    prefixes.len() >= 2
+}
+
 /// 词元直配不上时的别名回退（同一制式的不同写法；含实测站点的简写与中文标签）
 fn token_aliases(token: &str) -> &'static [&'static str] {
     match norm_token(token).as_str() {
@@ -2022,6 +2065,12 @@ fn fill_selects(fields: &mut Vec<Field>, page: &str, info: &ReleaseInfo) -> Vec<
             if options.is_empty() {
                 continue;
             }
+            // ptsbao 实测：source_sel 不是片源，是「剧集-美剧 / 电影-WEB-DL」二级分类。
+            // 它的选项里也含 WEB-DL/Blu-ray 字样，按片源匹配会错填到「电影-WEB-DL」；
+            // 这里先认出来跳过，等 type 选完再由 fill_secondary_category 按父子关系填。
+            if *prefix == "source_sel" && looks_like_secondary_category(&options) {
+                continue;
+            }
             if !options_in_domain(&options, kws) {
                 continue;
             }
@@ -2171,7 +2220,114 @@ fn fill_selects(fields: &mut Vec<Field>, page: &str, info: &ReleaseInfo) -> Vec<
             }
         }
     }
+    // 少数站（ptsbao 实测）把 `source_sel` 当二级分类：`剧集-美剧` / `电影-1080`。
+    // 它跟 type 的选项文案是父子关系，不能按片源词匹配；type 选好后按标题/副标题归子类。
+    if let Some(note) = fill_secondary_category(fields, page, info) {
+        notes.push(note);
+    }
     notes
+}
+
+/// `source_sel` 是二级分类时的子类映射（fulfilled type 后调用）。
+/// 只处理选项文案形如 `{type_label}-{子类}` 的下拉；普通地区/片源下拉原样跳过。
+fn fill_secondary_category(
+    fields: &mut Vec<Field>,
+    page: &str,
+    info: &ReleaseInfo,
+) -> Option<String> {
+    let type_value = field_lookup(fields, "type").unwrap_or("").to_string();
+    if type_value.is_empty() || type_value == "0" {
+        return None;
+    }
+    let type_label = select_option_meta(page, "type", &type_value)?.0;
+    let mut saw_category_style = false;
+    for fname in select_field_names(fields, "source_sel") {
+        let current = field_lookup(fields, &fname).unwrap_or("").to_string();
+        let options = select_options(page, &fname);
+        let prefix = format!("{type_label}-");
+        if !options.iter().any(|(_, l)| l.starts_with(&prefix)) {
+            continue;
+        }
+        saw_category_style = true;
+        if !current.is_empty() && current != "0" {
+            continue;
+        }
+        let Some(sub) = secondary_category_label(&type_label, info) else {
+            continue;
+        };
+        let wanted = format!("{prefix}{sub}");
+        if let Some((value, _)) = options.iter().find(|(_, label)| label == &wanted) {
+            set_field(fields, &fname, value.clone());
+            return None;
+        }
+    }
+    saw_category_style
+        .then(|| "分类：source_sel 是二级分类，无法从标题/副标题判断子类，留空等人工选".into())
+}
+
+/// 二级分类子类：只认明确信号，不凭「名里有中文」乱猜国别。
+fn secondary_category_label(type_label: &str, info: &ReleaseInfo) -> Option<&'static str> {
+    let hay = format!("{} {}", info.name, info.subtitle).to_ascii_lowercase();
+    if type_label.contains("剧集") || type_label.contains("电视剧") || type_label.contains("TV")
+    {
+        const BRANCHES: &[(&str, &str)] = &[
+            ("美剧", "美剧"),
+            ("英剧", "英剧"),
+            ("日剧", "日剧"),
+            ("韩剧", "韩剧"),
+            ("港剧", "港台"),
+            ("台剧", "港台"),
+            ("国产剧", "大陆"),
+            ("大陆剧", "大陆"),
+            ("内地剧", "大陆"),
+            ("tvb", "港台"),
+            ("bbc", "英剧"),
+            ("nhk", "日剧"),
+            ("kbs", "韩剧"),
+            ("cctv", "大陆"),
+        ];
+        for (marker, branch) in BRANCHES {
+            if marker_contains(&hay, marker) {
+                return Some(branch);
+            }
+        }
+        // `全73集` 是国产剧的强信号；没有这个信号就不猜国别（英文剧的中文副标题不算）。
+        if info.is_completed_series() && has_cjk(&info.subtitle) {
+            return Some("大陆");
+        }
+        return None;
+    }
+    if type_label.contains("电影") || type_label == "Movie" {
+        if hay.contains("remux") {
+            return Some("Remux");
+        }
+        if hay.contains("2160") || hay.contains("4k") || hay.contains("uhd") {
+            return Some("4K");
+        }
+        if hay.contains("1080") {
+            return Some("1080");
+        }
+        if hay.contains("720") {
+            return Some("720");
+        }
+        if hay.contains("hdtv") {
+            return Some("HDTV");
+        }
+        if hay.contains("web-dl") || hay.contains("webrip") {
+            return Some("WEB-DL");
+        }
+        if hay.contains("blu") || hay.contains("bdrip") || hay.contains("dvd") {
+            return Some("原盘");
+        }
+    }
+    None
+}
+
+fn has_cjk(s: &str) -> bool {
+    s.chars().any(|c| {
+        let u = c as u32;
+        (0x3400..=0x4DBF).contains(&u) || (0x4E00..=0x9FFF).contains(&u)
+    })
 }
 
 /// 选档摘要：`分类=剧集 媒介=HDTV 编码=x264 …`（只列已选中的下拉）
@@ -6328,6 +6484,74 @@ Height : 1080</pre></div>"#;
         assert_eq!(f("standard_sel"), "2", "1080p");
         assert_eq!(f("team_sel"), "5", "名尾 -JING");
         assert!(notes.is_empty(), "全部配对成功不该有提示：{notes:?}");
+    }
+
+    #[test]
+    fn fill_secondary_category_for_ptsbao_style() {
+        // ptsbao 实测：source_sel 不是片源，是 type 的二级分类（剧集-大陆/美剧/电影-4K）。
+        let form = r#"<form action="takeupload.php">
+<select name="type"><option value="0">请选择</option><option value="401">电影</option><option value="402">剧集</option></select>
+<select name="source_sel[1]"><option value="0">请选择</option><option value="23">剧集-大陆</option><option value="25">剧集-美剧</option><option value="4">电影-WEB-DL</option><option value="92">电影-4K</option><option value="3">电影-1080</option></select>
+</form>"#;
+        let tv = ReleaseInfo {
+            name: "The.Story.Of.Ming.Lan.2018.WEB-DL.4k.H265.60fps.10bit.AAC-HDSWEB".into(),
+            subtitle: "知否知否应是绿肥红瘦 全73集|主演：赵丽颖 冯绍峰".into(),
+            ..Default::default()
+        };
+        let (fs, _p, notes) = build_upload_fields(&tv, form, &[]);
+        assert_eq!(field_lookup(&fs, "type"), Some("402"), "{notes:?}");
+        assert_eq!(
+            field_lookup(&fs, "source_sel"),
+            Some("23"),
+            "国产剧全N集 → 剧集-大陆：{notes:?}"
+        );
+
+        // 电影按分辨率归子类，不是按片源
+        let movie = ReleaseInfo {
+            name: "Movie.2024.2160p.BluRay.x265-GRP".into(),
+            ..Default::default()
+        };
+        let (fs, _p, notes) = build_upload_fields(&movie, form, &[]);
+        assert_eq!(field_lookup(&fs, "type"), Some("401"), "{notes:?}");
+        assert_eq!(
+            field_lookup(&fs, "source_sel"),
+            Some("92"),
+            "2160p → 电影-4K：{notes:?}"
+        );
+    }
+
+    #[test]
+    fn secondary_category_detection_ignores_medium_hyphens() {
+        let medium = vec![
+            ("7".into(), "Blu-ray".into()),
+            ("8".into(), "UHD Blu-ray".into()),
+            ("9".into(), "WEB-DL".into()),
+        ];
+        assert!(!looks_like_secondary_category(&medium));
+        let category = vec![
+            ("23".into(), "剧集-大陆".into()),
+            ("25".into(), "剧集-美剧".into()),
+            ("92".into(), "电影-4K".into()),
+        ];
+        assert!(looks_like_secondary_category(&category));
+    }
+
+    #[test]
+    fn secondary_category_skips_region_source_sel() {
+        // 别的站 source_sel 是地区（内地/香港），不能按「剧集-」前缀硬套。
+        let form = r#"<select name="type"><option value="0">请选择</option><option value="402">剧集</option></select>
+<select name="source_sel[4]"><option value="0">请选择</option><option value="1">内地</option><option value="2">香港</option></select>"#;
+        let info = ReleaseInfo {
+            name: "国产剧.2024.1080p.WEB-DL.x264-GRP".into(),
+            subtitle: "全40集".into(),
+            ..Default::default()
+        };
+        let (fs, _p, notes) = build_upload_fields(&info, form, &[]);
+        assert_eq!(field_lookup(&fs, "source_sel"), Some("0"), "{notes:?}");
+        assert!(
+            !notes.iter().any(|n| n.contains("二级分类")),
+            "地区下拉不该报二级分类：{notes:?}"
+        );
     }
 
     #[test]
