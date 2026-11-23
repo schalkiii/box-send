@@ -174,9 +174,6 @@ enum Cmd {
         /// 内容 key（m:…）；省略则按目标种 pieces 在索引里自动找
         #[arg(long)]
         key: Option<String>,
-        /// 站点下载被拒时，直接给本地 .torrent（例如从 qB 导出后改 source/announce 构造）
-        #[arg(long)]
-        file: Option<PathBuf>,
     },
 
     /// 站点档案汇总：配置开关 + 最近一次实测结论 + pieces 支持 + cookie 概况
@@ -227,12 +224,7 @@ fn main() -> Result<()> {
         Cmd::Cookies { from, write, all } => cmd_cookies(&mut cfg, &from, write, all),
         Cmd::Status => cmd_status(&cfg),
         Cmd::Reseed { draft, yes } => cmd_reseed(&cfg, draft, yes),
-        Cmd::Reattach {
-            site,
-            url,
-            key,
-            file,
-        } => cmd_reattach(&cfg, &site, &url, key.as_deref(), file.as_deref()),
+        Cmd::Reattach { site, url, key } => cmd_reattach(&cfg, &site, &url, key.as_deref()),
         Cmd::Report { top, json, sites } => cmd_report(&cfg, top, json, sites),
         Cmd::Formcheck { sites } => cmd_formcheck(&cfg, sites),
         Cmd::Layoutcheck { limit, only } => cmd_layoutcheck(&cfg, limit, only),
@@ -725,18 +717,12 @@ fn cmd_reseed(cfg: &Config, draft: Option<usize>, yes: bool) -> Result<()> {
     Ok(())
 }
 
-fn cmd_reattach(
-    cfg: &Config,
-    site: &str,
-    url: &str,
-    key: Option<&str>,
-    file: Option<&std::path::Path>,
-) -> Result<()> {
+fn cmd_reattach(cfg: &Config, site: &str, url: &str, key: Option<&str>) -> Result<()> {
     let qb = connect_qb(cfg)?;
     let mut index = ContentIndex::load(&cfg.coverage_state_path());
     let mut log = |line: &str| println!("  {line}");
     let (status, detail) =
-        bsend::reseed::reattach_published(cfg, &qb, site, url, key, file, &mut index, &mut log)?;
+        bsend::reseed::reattach_published(cfg, &qb, site, url, key, &mut index, &mut log)?;
     println!("补挂结果：{} → {}", status.label(), detail);
     Ok(())
 }
@@ -1919,16 +1905,10 @@ mod tests {
         ])
         .unwrap();
         match cli.cmd {
-            Cmd::Reattach {
-                site,
-                url,
-                key,
-                file,
-            } => {
+            Cmd::Reattach { site, url, key } => {
                 assert_eq!(site, "hdvideo");
                 assert!(url.contains("78856"));
                 assert!(key.is_none());
-                assert!(file.is_none());
             }
             _ => panic!("expected reattach command"),
         }

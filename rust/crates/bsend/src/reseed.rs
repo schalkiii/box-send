@@ -29,8 +29,8 @@ use crate::coverage::now_unix;
 use crate::index::{ContentIndex, CoverageStatus, SiteCoverage};
 use crate::qbittorrent::QBittorrent;
 use crate::sites::nexusphp::{
-    decode_entities, decode_entities_once, is_detail_href, resolve_url, strip_tags, NexusPhp,
-    TorrentPage,
+    decode_entities, decode_entities_once, is_detail_href, resolve_url, search_names_match,
+    sizes_close, strip_tags, NexusPhp, SearchOutcome, TorrentPage,
 };
 use crate::throttle::{BudgetKind, SiteThrottle};
 use crate::torrent_rewrite;
@@ -3593,8 +3593,98 @@ pub fn extract_posted_links(body: &str, final_url: &str, base: &Url) -> PostedLi
     PostedLinks::default()
 }
 
+/// 发后定位的站内检索兜底：按发布名 + 本地总大小找刚发布的新种。
+///
+/// 只在 takeupload.php 回包/跳转没有给出详情或下载链接时使用。命中后先核对详情页标题，
+/// 再核对详情页大小（结果行大小解析不出来时也要过这一关），最后只下载站点生成的
+/// `.torrent`；不会拿本地上传构造的种子顶替站种，避免把审核没过的废种挂进 qB。
+fn locate_posted_by_search(
+    tgt: &NexusPhp,
+    info: &ReleaseInfo,
+    expected_size: Option<i64>,
+    relaxed_retry: bool,
+    throttle: &SiteThrottle,
+    log: &mut dyn FnMut(&str),
+) -> Option<(String, Vec<u8>)> {
+    for relaxed in [false, true] {
+        if relaxed && !relaxed_retry {
+            break;
+        }
+        let mut gate = || throttle.acquire(&tgt.site_id, BudgetKind::Search);
+        let outcome = match tgt.search_sized(
+            &info.name,
+            "",
+            relaxed,
+            info.imdb.as_deref().unwrap_or(""),
+            expected_size,
+            &mut gate,
+        ) {
+            Ok(SearchOutcome::Hit(h)) => h,
+            Ok(SearchOutcome::Miss) => continue,
+            Ok(SearchOutcome::BudgetExhausted) => {
+                log("发后定位·检索预算用完，转 posted_unresolved");
+                return None;
+            }
+            Err(e) => {
+                log(&format!("发后定位·站内检索失败（{e:#}）"));
+                return None;
+            }
+        };
+
+        if !throttle.acquire(&tgt.site_id, BudgetKind::Search) {
+            log("发后定位·详情页预算用完，转 posted_unresolved");
+            return None;
+        }
+        let page = match tgt.fetch_torrent_page(&outcome.detail_url) {
+            Ok(p) => p,
+            Err(e) => {
+                log(&format!("发后定位·候选详情页读不下来（{e:#}）"));
+                continue;
+            }
+        };
+        if !search_names_match(&page.name, &info.name, true)
+            && norm_post_title(&page.name) != norm_post_title(&info.name)
+        {
+            log(&format!(
+                "发后定位·候选标题不符：页面「{}」，期望「{}」",
+                page.name, info.name
+            ));
+            continue;
+        }
+        if let Some(expected) = expected_size {
+            match page.size_bytes {
+                Some(actual) if !sizes_close(actual, expected) => {
+                    log(&format!(
+                        "发后定位·候选大小不符：页面 {} 字节，期望 {} 字节",
+                        actual, expected
+                    ));
+                    continue;
+                }
+                None => log("发后定位·详情页大小解析不到，继续用 pieces 核对"),
+                _ => {}
+            }
+        }
+
+        if !throttle.acquire(&tgt.site_id, BudgetKind::Search) {
+            log("发后定位·下载预算用完，转 posted_unresolved");
+            return None;
+        }
+        match tgt.download_torrent(&page, &outcome.detail_url) {
+            Ok(data) => {
+                log(&format!(
+                    "发后定位·站内检索命中：{}（{}）",
+                    outcome.detail_url, page.name
+                ));
+                return Some((outcome.detail_url, data));
+            }
+            Err(e) => log(&format!("发后定位·候选站点种下载失败（{e:#}）")),
+        }
+    }
+    None
+}
+
 /// existed 回包详情页标题核对：只采信回包给的 hint 页面，标题一致才返回。
-/// 不做站内检索校正（QB-TRUTH-MODE §6：发后定位只允许用回包自带链接）。
+/// 这里不做站内检索校正；新发后的无链接兜底检索由 `locate_posted_by_search` 负责。
 /// 不用 IMDb 区兜底：IMDb 命中只说明同一部片子，不能说明同一条种子。
 fn locate_existing_target(
     tgt: &NexusPhp,
@@ -4732,31 +4822,23 @@ pub fn run_reseed_reviewed(
 }
 
 /// 手工补挂：站上已经发布，qB 里还没有这个站的目标种。
-/// 拉详情页/下载目标种（或直接读本地 `.torrent`），按 pieces 在索引里找本地内容，
+/// 只拉详情页下载站点生成的 `.torrent`，按 pieces 在索引里找本地内容，
 /// 再走与发后同一条 `push_target_torrent`。绝不重新上传、不占发布额度。
+/// 不接受本地构造的种子：站点审核没通过时，挂它只会得到一条没有 tracker 响应的废种。
 /// 返回最终格子状态和详情页 URL。
-#[allow(clippy::too_many_arguments)]
 pub fn reattach_published(
     cfg: &Config,
     qb: &QBittorrent,
     site_id: &str,
     detail_url: &str,
     content_key: Option<&str>,
-    torrent_file: Option<&Path>,
     index: &mut ContentIndex,
     log: &mut dyn FnMut(&str),
 ) -> Result<(CoverageStatus, String)> {
     let tgt = adapter_for(cfg, site_id)?;
-    let tdata = match torrent_file {
-        Some(path) => {
-            std::fs::read(path).with_context(|| format!("读本地种子 {} 失败", path.display()))?
-        }
-        None => {
-            log(&format!("拉取目标种：{detail_url}"));
-            let page = tgt.fetch_torrent_page(detail_url)?;
-            tgt.download_torrent(&page, detail_url)?
-        }
-    };
+    log(&format!("拉取目标种：{detail_url}"));
+    let page = tgt.fetch_torrent_page(detail_url)?;
+    let tdata = tgt.download_torrent(&page, detail_url)?;
     let key = match content_key {
         Some(k) => k.to_string(),
         None => find_content_key_by_pieces(qb, index, &tdata)?,
@@ -4903,11 +4985,12 @@ fn run_reseed_inner(
     let imdb_for_search = rel.info.imdb.as_deref();
     let dup = match target_has_imdb(&rel.tgt, imdb_for_search, log) {
         Ok(Some(hit)) => Some(hit),
-        Ok(None) => match rel.tgt.search(
+        Ok(None) => match rel.tgt.search_sized(
             &rel.info.name,
             &rel.info.subtitle,
             false,
             imdb_for_search.unwrap_or(""),
+            rel.page.size_bytes,
             &mut || throttle.acquire(&rel.tgt.site_id, BudgetKind::Search),
         ) {
             Ok(crate::sites::nexusphp::SearchOutcome::Hit(hit)) => {
@@ -5327,44 +5410,93 @@ fn run_reseed_inner(
         };
     }
 
-    // ---- 5 发后定位：只从回包正文/跳转 URL 取自带链接，不做站内检索 ----
+    // ---- 5 发后定位：优先用回包/跳转里的详情 id；拿不到才按名称+大小站内检索 ----
     let links = extract_posted_links(&up.body, &up.final_url, &tgt.base);
-    let download_url: Option<String> = match (&links.download, &links.detail) {
-        (Some(d), _) => Some(d.clone()),
-        (None, Some(detail)) => tgt
-            .fetch_torrent_page(detail)
-            .ok()
-            .and_then(|p| (!p.download_url.is_empty()).then_some(p.download_url)),
-        (None, None) => None,
-    };
-    let Some(download_url) = download_url else {
+    // takeupload.php / 跳转里的详情链接优先：submit_upload 已经单独解析过，
+    // 这里不能只信 extract_posted_links 的正文扫描，否则会把已有的 detail_url 丢掉。
+    let mut detail_url = up
+        .detail_url
+        .clone()
+        .filter(|u| !u.is_empty())
+        .or_else(|| links.detail.clone());
+    let mut download_url = links.download.clone();
+    let mut tdata: Option<Vec<u8>> = None;
+
+    // 回包只给详情页时，从详情页拿站点的 download.php；不要自己拼目标站种子。
+    if download_url.is_none() {
+        if let Some(detail) = detail_url.as_deref() {
+            match tgt.fetch_torrent_page(detail) {
+                Ok(p) if !p.download_url.is_empty() => {
+                    download_url = Some(p.download_url);
+                }
+                Ok(_) => log(&format!("回包详情页没有下载链接：{detail}")),
+                Err(e) => log(&format!("回包详情页打不开（{e:#}）：{detail}")),
+            }
+        }
+    }
+
+    // 只下载站点生成的 .torrent；下载失败不立刻放弃，后面还有名称+大小检索兜底。
+    if let Some(url) = download_url.as_deref() {
+        let referer = detail_url.as_deref().unwrap_or(url);
+        let page = TorrentPage {
+            name: String::new(),
+            download_url: url.to_string(),
+            size_bytes: None,
+            uploader_uid: None,
+            uploader_name: None,
+        };
+        match tgt.download_torrent(&page, referer) {
+            Ok(d) => tdata = Some(d),
+            Err(e) => log(&format!("站点种子下载失败（{e:#}）：{url}")),
+        }
+    }
+
+    // 回包没给链接、或链接下载失败：用发布名 + 本地总大小检索新种。
+    // 只接受站点详情页标题和大小都对上的候选，再下载站点种；绝不拿本地构造种顶替。
+    if tdata.is_none() {
+        if let Some((found_detail, found_data)) = locate_posted_by_search(
+            &tgt,
+            &info,
+            Some(entry.total_size),
+            cfg.coverage.relaxed_retry_search,
+            throttle,
+            log,
+        ) {
+            detail_url = Some(found_detail);
+            tdata = Some(found_data);
+        }
+    }
+
+    let Some(tdata) = tdata else {
         // 上传可能已成功：定位不到新种 ≠ 发种失败；落 ReviewPending，不进退避、不计 posted。
         let reason = format!(
-            "posted_unresolved：上传回包里没有可核对的下载/详情链接（{}），待人工确认；勿重发",
+            "posted_unresolved：回包无详情/下载链接，站内按名称+总大小也没定位到新种（{}），待人工确认；勿重发",
             up.message
         );
         log(&format!("发后定位·未解决：{reason}"));
+        let unresolved_url = detail_url.clone().or_else(|| up.detail_url.clone());
         write_cell(
             index,
             &req.content_key,
             &req.target_site,
             CoverageStatus::ReviewPending,
-            up.detail_url.clone(),
+            unresolved_url.clone(),
             &reason,
         );
         index.save()?;
         return Ok(ReseedOutcome::Duplicate(DuplicateOutcome {
             status: CoverageStatus::ReviewPending,
-            url: up.detail_url.clone(),
+            url: unresolved_url,
             note: reason,
         }));
     };
 
     // 详情页链接（自检用）：回包详情优先，否则由下载链接反推 details id
-    let detail_url = links
-        .detail
-        .clone()
-        .or_else(|| detail_from_download(&download_url, &tgt.base));
+    let detail_url = detail_url.or_else(|| {
+        download_url
+            .as_deref()
+            .and_then(|u| detail_from_download(u, &tgt.base))
+    });
 
     // ---- 发后自检：回读新种页核对标题/MediaInfo/链接（只警告不推翻）----
     if !cfg.coverage.skip_post_check {
@@ -5375,29 +5507,11 @@ fn run_reseed_inner(
         }
     }
 
-    // ---- 6 下载站点 .torrent，作为独立种子挂回 qB（绝不追加 tracker）----
-    let referer = detail_url.as_deref().unwrap_or(download_url.as_str());
-    let page = TorrentPage {
-        name: String::new(),
-        download_url: download_url.clone(),
-        size_bytes: None,
-        uploader_uid: None,
-        uploader_name: None,
-    };
-    let reported_url = detail_url.clone().unwrap_or_else(|| download_url.clone());
-    let tdata = match tgt.download_torrent(&page, referer) {
-        Ok(d) => d,
-        Err(e) => {
-            return unresolved_after_site(
-                index,
-                &req.content_key,
-                &req.target_site,
-                "posted_unresolved",
-                Some(reported_url),
-                &format!("站上已发布，但下载目标种失败（{e:#}）"),
-            );
-        }
-    };
+    // ---- 6 已拿到站点 .torrent（下载或检索补定位），作为独立种子挂回 qB（绝不追加 tracker）----
+    let reported_url = detail_url
+        .clone()
+        .or_else(|| download_url.clone())
+        .unwrap_or_else(|| up.final_url.clone());
     match push_target_torrent(
         cfg,
         qb,

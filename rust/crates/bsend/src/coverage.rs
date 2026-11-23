@@ -899,21 +899,22 @@ fn process_item(
     // 按请求领号（gate），而不是按 search 调用领号——否则 5 个查询会在 1 秒内连发。
     let gate_site = site_id.to_string();
     let mut gate = move || throttle.acquire(&gate_site, BudgetKind::Search);
-    let mut found = match adapter.search(&item.name, "", false, "", &mut gate) {
-        Ok(SearchOutcome::Hit(h)) => Some(h),
-        Ok(SearchOutcome::Miss) => None,
-        Ok(SearchOutcome::BudgetExhausted) => return skipped("本轮检索预算用完，下次接着跑"),
-        // 「检索报错」与「站内没有」是两回事：cookie 失效、站点 500 不能记成负缓存；
-        // 限流（429/503）还要给该站退避，别按原节奏接着敲
-        Err(e) => {
-            if crate::sites::nexusphp::error_is_rate_limited(&e) {
-                throttle.note_rate_limited(site_id);
+    let mut found =
+        match adapter.search_sized(&item.name, "", false, "", Some(fp.total_size), &mut gate) {
+            Ok(SearchOutcome::Hit(h)) => Some(h),
+            Ok(SearchOutcome::Miss) => None,
+            Ok(SearchOutcome::BudgetExhausted) => return skipped("本轮检索预算用完，下次接着跑"),
+            // 「检索报错」与「站内没有」是两回事：cookie 失效、站点 500 不能记成负缓存；
+            // 限流（429/503）还要给该站退避，别按原节奏接着敲
+            Err(e) => {
+                if crate::sites::nexusphp::error_is_rate_limited(&e) {
+                    throttle.note_rate_limited(site_id);
+                }
+                return done(CoverageStatus::Failed, format!("站内检索失败：{e:#}"));
             }
-            return done(CoverageStatus::Failed, format!("站内检索失败：{e:#}"));
-        }
-    };
+        };
     if found.is_none() && cov.relaxed_retry_search {
-        match adapter.search(&item.name, "", true, "", &mut gate) {
+        match adapter.search_sized(&item.name, "", true, "", Some(fp.total_size), &mut gate) {
             Ok(SearchOutcome::Hit(h)) => found = Some(h),
             Ok(SearchOutcome::Miss) => {}
             Ok(SearchOutcome::BudgetExhausted) => {
@@ -933,7 +934,7 @@ fn process_item(
     if found.is_none() && cov.member_name_fallback && item.hashes.len() > 1 {
         let members = qb.torrent_names(&item.hashes);
         if let Some(alt) = pick_member_fallback(&item.name, &members) {
-            match adapter.search(&alt, "", false, "", &mut gate) {
+            match adapter.search_sized(&alt, "", false, "", Some(fp.total_size), &mut gate) {
                 Ok(SearchOutcome::Hit(h)) => found = Some(h),
                 Ok(SearchOutcome::Miss) => {}
                 Ok(SearchOutcome::BudgetExhausted) => {

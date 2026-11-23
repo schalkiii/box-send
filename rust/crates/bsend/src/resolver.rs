@@ -23,6 +23,7 @@ pub trait SiteClient {
         &self,
         name: &str,
         relaxed: bool,
+        expected_size: Option<i64>,
         gate: &mut dyn FnMut() -> bool,
     ) -> Result<SearchOutcome>;
     fn fetch_torrent_page(&self, detail_url: &str) -> Result<TorrentPage>;
@@ -38,10 +39,11 @@ impl SiteClient for NexusPhp {
         &self,
         name: &str,
         relaxed: bool,
+        expected_size: Option<i64>,
         gate: &mut dyn FnMut() -> bool,
     ) -> Result<SearchOutcome> {
         // 源种定位没有副标题/IMDb（那俩来自源站详情页，这里正是在找它）
-        NexusPhp::search(self, name, "", relaxed, "", gate)
+        NexusPhp::search_sized(self, name, "", relaxed, "", expected_size, gate)
     }
 
     fn fetch_torrent_page(&self, detail_url: &str) -> Result<TorrentPage> {
@@ -117,7 +119,10 @@ pub fn resolve_source(
         let gate_site = site_id.clone();
         let mut gate = move || throttle.acquire(&gate_site, BudgetKind::Source);
         // 严格查询词先行（阶梯每级一发请求，gate 逐发领号）
-        let mut found = match site.client.search(name, false, &mut gate) {
+        let mut found = match site
+            .client
+            .search(name, false, Some(local.total_size), &mut gate)
+        {
             Ok(SearchOutcome::Hit(h)) => Some(h),
             Ok(SearchOutcome::Miss) => None,
             Ok(SearchOutcome::BudgetExhausted) => {
@@ -141,7 +146,10 @@ pub fn resolve_source(
         };
         // 严格没命中且允许宽松兜底 → 再走一轮（同样逐发领号）
         if found.is_none() && relaxed_retry {
-            match site.client.search(name, true, &mut gate) {
+            match site
+                .client
+                .search(name, true, Some(local.total_size), &mut gate)
+            {
                 Ok(SearchOutcome::Hit(h)) => found = Some(h),
                 Ok(SearchOutcome::Miss) => {}
                 Ok(SearchOutcome::BudgetExhausted) => {
@@ -190,6 +198,20 @@ pub fn resolve_source(
                 continue;
             }
         };
+        // 结果行没解析出大小时，再用详情页大小兜底；数字对不上直接换下一站，
+        // 不下载候选，避免同名不同版本靠名字混过去。
+        if let Some(actual) = page.size_bytes {
+            if !crate::sites::nexusphp::sizes_close(actual, local.total_size) {
+                attempts.push(SiteAttempt {
+                    site_id,
+                    note: format!(
+                        "详情页大小对不上（{} vs {} 字节）",
+                        actual, local.total_size
+                    ),
+                });
+                continue;
+            }
+        }
         if !throttle.acquire(&site_id, BudgetKind::Source) {
             attempts.push(SiteAttempt {
                 site_id,
@@ -269,6 +291,7 @@ mod tests {
             &self,
             _name: &str,
             _relaxed: bool,
+            _expected_size: Option<i64>,
             gate: &mut dyn FnMut() -> bool,
         ) -> Result<SearchOutcome> {
             // 一个 mock 站一次检索 = 一发请求（真实站会按查询词阶梯发多发，由 gate 计数）
@@ -335,6 +358,7 @@ mod tests {
         let hit = SearchHit {
             detail_url: "https://b.example/details.php?id=9".to_string(),
             title: "x".to_string(),
+            size_bytes: None,
         };
         let st = site_torrent(&[("a.mkv", 100)], "Pack");
         let b = MockSite {
@@ -380,6 +404,7 @@ mod tests {
             search_result: RefCell::new(Ok(Some(SearchHit {
                 detail_url: format!("https://{id}/details.php?id=1"),
                 title: "x".to_string(),
+                size_bytes: None,
             }))),
             torrent_data: RefCell::new(st.clone()),
         };
@@ -418,6 +443,7 @@ mod tests {
             search_result: RefCell::new(Ok(Some(SearchHit {
                 detail_url: "https://a.example/details.php?id=1".to_string(),
                 title: "x".to_string(),
+                size_bytes: None,
             }))),
             torrent_data: RefCell::new(site_torrent(&[("a.mkv", 999)], "Pack")),
         };

@@ -48,10 +48,32 @@ pub struct NexusPhp {
 }
 
 /// 检索命中：站内已有这条种子的详情页
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SearchHit {
     pub detail_url: String,
     pub title: String,
+    /// 结果页列表里的大小；解析不到为 None，后续用详情页复核
+    pub size_bytes: Option<i64>,
+}
+
+/// 站点显示的大小是四舍五入过的人类可读值，不能和本地精确字节直接相等。
+/// 0.5% 的容差只用于“名字+大小”初筛，最终的 pieces 校验仍是精确比对。
+/// 站点有的用 1024 进位标 GB、有的用 1000 进位；同一串 294.27 GB 两种解释会差 7.4%，
+/// 所以同时接受 expected 和 expected 的两种单位换算，避免把正确候选误杀。
+pub fn sizes_close(actual: i64, expected: i64) -> bool {
+    if actual <= 0 || expected <= 0 {
+        return false;
+    }
+    let near = |a: i64, b: i64| {
+        let tolerance = (b / 200).max(2 * 1024 * 1024);
+        (a - b).abs() <= tolerance
+    };
+    if near(actual, expected) {
+        return true;
+    }
+    let binary_scaled = (expected as f64 * 1.073_741_824).round() as i64;
+    let decimal_scaled = (expected as f64 / 1.073_741_824).round() as i64;
+    near(actual, binary_scaled) || near(actual, decimal_scaled)
 }
 
 /// 详情页解析结果：发布名 + 下载链接 + 发后定位核对字段（大小/上传者）。
@@ -322,6 +344,21 @@ impl NexusPhp {
         imdb: &str,
         gate: &mut dyn FnMut() -> bool,
     ) -> Result<SearchOutcome> {
+        self.search_sized(name, subtitle, relaxed, imdb, None, gate)
+    }
+
+    /// 与 `search` 相同，但用本地总大小初筛结果行：同名不同版本很多时，
+    /// 只凭名字会先抓错候选；大小对不上的候选不进详情页下载。
+    #[allow(clippy::too_many_arguments)]
+    pub fn search_sized(
+        &self,
+        name: &str,
+        subtitle: &str,
+        relaxed: bool,
+        imdb: &str,
+        expected_size: Option<i64>,
+        gate: &mut dyn FnMut() -> bool,
+    ) -> Result<SearchOutcome> {
         // 未配 searchURL 时退回 torrents.php?search=（NexusPHP 家族都有这个通用端点）
         let tmpl = self
             .search_url_tmpl
@@ -353,7 +390,8 @@ impl NexusPhp {
             // 用中文副标题查的时候，结果行写的还是英文发布名：发布名也参与复核
             let names = match_names(&target, name);
             let base = Url::parse(&url).unwrap_or_else(|_| self.base.clone());
-            if let Some(hit) = search_name_in_results(&html, &names, &base, relaxed) {
+            if let Some(hit) = search_name_in_results(&html, &names, &base, relaxed, expected_size)
+            {
                 return Ok(SearchOutcome::Hit(hit));
             }
         }
@@ -831,6 +869,87 @@ fn candidate_score(candidate: &str, release_name: &str, relaxed: bool) -> Option
     None
 }
 
+/// 结果页一行里的大小：先截取详情锚所在 `<tr>` 的上下文，再剥标签找 `12.34 GB`。
+/// 版式不固定时找不到就返回 None，后续由详情页大小复核兜底。
+fn result_row_size(html: &str, href: &str) -> Option<i64> {
+    let pos = html.find(href)?;
+    let start = html[..pos]
+        .rfind("<tr")
+        .unwrap_or_else(|| pos.saturating_sub(600));
+    let end = html[pos..]
+        .find("</tr>")
+        .map(|i| pos + i + 5)
+        .unwrap_or_else(|| (pos + 800).min(html.len()));
+    human_size_in_text(&strip_tags(&html[start..end]))
+}
+
+fn human_size_in_text(text: &str) -> Option<i64> {
+    let cleaned = text.replace(',', " ");
+    let words: Vec<&str> = cleaned.split_whitespace().collect();
+    for (i, word) in words.iter().enumerate() {
+        // 结果行剥标签后经常长这样：`...GROUP1.00 GB`，数字和标题粘在一起。
+        // 标题里也可能有数字（S01、1080p、5.1），所以词内每个数字串都要试，
+        // 只接受数字后面紧接单位、或者数字就是词尾（单位在下一个词）的候选。
+        for (num, suffix) in numeric_token_parts(word) {
+            let unit = if suffix.is_empty() {
+                words.get(i + 1).copied().unwrap_or("")
+            } else {
+                suffix
+            };
+            if unit.chars().any(|c| c.is_ascii_alphabetic()) {
+                if let Some(v) = parse_human_size(&format!("{num} {unit}")) {
+                    return Some(v);
+                }
+            }
+        }
+    }
+    // 兼容 `1.00 GB` 这种数字与单位分成两个词的常规情况
+    for w in words.windows(2) {
+        if !w[0].chars().any(|c| c.is_ascii_digit()) {
+            continue;
+        }
+        if let Some(v) = parse_human_size(&format!("{} {}", w[0], w[1])) {
+            return Some(v);
+        }
+    }
+    None
+}
+
+/// 从 token 里拆出所有“词尾数字 + 后面的单位片段”候选；`GROUP1.00` -> (`1.00`, ``)，
+/// `1080p` -> (`1080`, `p`)。标题中的数字不会阻断后面真正的 `1.00 GB`。
+fn numeric_token_parts(token: &str) -> Vec<(&str, &str)> {
+    let mut out = Vec::new();
+    for (start, c) in token.char_indices() {
+        if !c.is_ascii_digit() {
+            continue;
+        }
+        let mut end = start;
+        let mut seen_dot = false;
+        for (idx, ch) in token[start..].char_indices() {
+            let at = start + idx;
+            if ch.is_ascii_digit() {
+                end = at + ch.len_utf8();
+            } else if ch == '.' && !seen_dot {
+                seen_dot = true;
+                end = at + 1;
+            } else {
+                break;
+            }
+        }
+        if end == start {
+            continue;
+        }
+        let num = &token[start..end];
+        let rest = &token[end..];
+        // 只保留“数字后就是词尾”或“数字后全是字母”的片段；带其他符号说明数字
+        // 只是标题的一部分（如 5.1-GROUP），继续找后面的数字串。
+        if rest.is_empty() || rest.chars().all(|c| c.is_ascii_alphabetic()) {
+            out.push((num, rest));
+        }
+    }
+    out
+}
+
 /// 搜索结果页里按名称匹配已存在种子：先按归一化互含，`relaxed` 时再按词元包含放宽。
 /// 结果行的 title 属性也参与判定（站内常截断锚文本，完整名只在 title 里）。
 /// 多个候选都命中时取 `candidate_score` 最高者，而不是文档序第一个。
@@ -839,11 +958,12 @@ pub fn search_name_in_results(
     release_names: &[String],
     base: &Url,
     relaxed: bool,
+    expected_size: Option<i64>,
 ) -> Option<SearchHit> {
     let doc = Html::parse_document(html);
     let sel = Selector::parse("a").unwrap();
-    // 扁平候选列表：(href, 文本)，title 更完整时在同锚后面补一条——与 Swift anchorText 的顺序一致
-    let mut candidates: Vec<(String, String)> = Vec::new();
+    // 扁平候选列表：(href, 文本, 行内大小)，title 更完整时在同锚后面补一条——与 Swift anchorText 的顺序一致
+    let mut candidates: Vec<(String, String, Option<i64>)> = Vec::new();
     for el in doc.select(&sel) {
         let Some(href) = el.value().attr("href") else {
             continue;
@@ -851,18 +971,24 @@ pub fn search_name_in_results(
         if !is_detail_href(href) {
             continue;
         }
+        let size = result_row_size(html, href);
         let text: String = el.text().collect::<String>().trim().to_string();
-        candidates.push((href.to_string(), text.clone()));
+        candidates.push((href.to_string(), text.clone(), size));
         if let Some(t) = el.value().attr("title") {
             let t = t.trim();
             // title 至少 12 字符且比锚文本完整才补（{12,} 且 count > text.count）
             if t.chars().count() >= 12 && t.chars().count() > text.chars().count() {
-                candidates.push((href.to_string(), t.to_string()));
+                candidates.push((href.to_string(), t.to_string(), size));
             }
         }
     }
-    let mut best: Option<(u8, f64, &(String, String))> = None;
-    for cand in &candidates {
+    let mut best: Option<(u8, f64, usize)> = None;
+    for (idx, cand) in candidates.iter().enumerate() {
+        if let (Some(expected), Some(actual)) = (expected_size, cand.2) {
+            if !sizes_close(actual, expected) {
+                continue;
+            }
+        }
         for name in release_names {
             let Some((rank, ratio)) = candidate_score(&cand.1, name, relaxed) else {
                 continue;
@@ -872,14 +998,15 @@ pub fn search_name_in_results(
                 Some((br, brt, _)) => rank > br || (rank == br && ratio > brt),
             };
             if better {
-                best = Some((rank, ratio, cand));
+                best = Some((rank, ratio, idx));
             }
         }
     }
-    let hit = best.map(|(_, _, c)| c)?;
+    let hit = &candidates[best?.2];
     Some(SearchHit {
         detail_url: resolve_url(&hit.0, base),
         title: hit.1.clone(),
+        size_bytes: hit.2,
     })
 }
 
@@ -1642,18 +1769,19 @@ mod tests {
         </table></body></html>"#;
         let base = Url::parse("https://hdsky.me/torrents.php?search=x").unwrap();
         let names = vec!["Black.Lagoon.S01.1080p.Blu-ray.DTS-HD.MA.5.1-GROUP".to_string()];
-        let hit = search_name_in_results(html, &names, &base, false).unwrap();
+        let hit = search_name_in_results(html, &names, &base, false, None).unwrap();
         assert_eq!(hit.detail_url, "https://hdsky.me/details.php?id=1002");
         // 截断的锚文本在 title 里补全：严格互含判不出时靠 title 命中
         let html2 = r#"<a href="details.php?id=1003" title="Black.Lagoon.S01.1080p.Blu-ray.DTS-HD.MA.5.1-GROUP">Black.Lagoon…</a>"#;
-        let hit2 = search_name_in_results(html2, &names, &base, false).unwrap();
+        let hit2 = search_name_in_results(html2, &names, &base, false, None).unwrap();
         assert_eq!(hit2.detail_url, "https://hdsky.me/details.php?id=1003");
         // 查不到时 None
         assert!(search_name_in_results(
             "<a href='details.php?id=1'>Nothing</a>",
             &names,
             &base,
-            false
+            false,
+            None
         )
         .is_none());
     }
@@ -1666,14 +1794,53 @@ mod tests {
         let html = r#"
         <a href="details.php?id=2001">Black.Lagoon.S01.1080p.Blu-ray.DTS-HD.MA.5.1.Extended-GROUP</a>
         <a href="details.php?id=2002">Black.Lagoon.S01.1080p.Blu-ray.DTS-HD.MA.5.1-GROUP</a>"#;
-        let hit = search_name_in_results(html, &names, &base, false).unwrap();
+        let hit = search_name_in_results(html, &names, &base, false, None).unwrap();
         assert_eq!(hit.detail_url, "https://hdsky.me/details.php?id=2002");
         // 同档按覆盖比例：越接近发布名越优先（顺序反过来也取 2002）
         let html2 = r#"
         <a href="details.php?id=2002">Black.Lagoon.S01.1080p.Blu-ray.DTS-HD.MA.5.1-GROUP</a>
         <a href="details.php?id=2001">Black.Lagoon.S01.1080p.Blu-ray.DTS-HD.MA.5.1.Extended-GROUP</a>"#;
-        let hit2 = search_name_in_results(html2, &names, &base, false).unwrap();
+        let hit2 = search_name_in_results(html2, &names, &base, false, None).unwrap();
         assert_eq!(hit2.detail_url, "https://hdsky.me/details.php?id=2002");
+    }
+
+    #[test]
+    fn search_result_size_filters_same_name_other_version() {
+        let base = Url::parse("https://hdsky.me/torrents.php?search=x").unwrap();
+        let names = vec!["Black.Lagoon.S01.1080p.Blu-ray.DTS-HD.MA.5.1-GROUP".to_string()];
+        let html = r#"
+        <table>
+        <tr><td><a href="details.php?id=3001">Black.Lagoon.S01.1080p.Blu-ray.DTS-HD.MA.5.1-GROUP</a></td><td>1.00 GB</td></tr>
+        <tr><td><a href="details.php?id=3002">Black.Lagoon.S01.1080p.Blu-ray.DTS-HD.MA.5.1-GROUP</a></td><td>2.00 GB</td></tr>
+        </table>"#;
+        let expected = 2 * 1024 * 1024 * 1024i64;
+        let hit = search_name_in_results(html, &names, &base, false, Some(expected)).unwrap();
+        assert_eq!(hit.detail_url, "https://hdsky.me/details.php?id=3002");
+        assert_eq!(hit.size_bytes, Some(expected));
+
+        // expected 1 GB 时只能选 3001，不能因为名字一样就抓 2 GB 的 3002
+        let hit_one =
+            search_name_in_results(html, &names, &base, false, Some(1024 * 1024 * 1024)).unwrap();
+        assert_eq!(hit_one.detail_url, "https://hdsky.me/details.php?id=3001");
+
+        // 页面里只有 2 GB 版本、expected 是 1 GB：宁可返回 None，也不抓错版本
+        let only_two = r#"<tr><td><a href="details.php?id=3002">Black.Lagoon.S01.1080p.Blu-ray.DTS-HD.MA.5.1-GROUP</a></td><td>2.00 GB</td></tr>"#;
+        assert!(
+            search_name_in_results(only_two, &names, &base, false, Some(1024 * 1024 * 1024))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn sizes_close_allows_display_rounding_but_not_other_version() {
+        let expected = 294_270_271_759i64;
+        assert!(sizes_close(expected, expected));
+        // 同一串「294.27 GB」按 1024 进位解析会大 7.4%，也要接受，避免误杀正确候选
+        let binary_display = (expected as f64 * 1.073_741_824).round() as i64;
+        assert!(sizes_close(binary_display, expected));
+        // 同名但差一个数量级/明显不同版本：不能过
+        assert!(!sizes_close(100 * 1024 * 1024 * 1024, expected));
+        assert!(!sizes_close(0, expected));
     }
 
     #[test]

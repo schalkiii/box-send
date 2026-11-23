@@ -205,12 +205,9 @@ cargo build --release -p bsend-cli
 
 # 索引里同一内容有多条、或要指定内容：加 --key
 ... reattach --site qilin --url https://www.hdkyl.in/details.php?id=479362 --key m:5826983b00126e58
-
-# 站点拒绝下载：用 qB 导出后改 source/announce 构造的本地 .torrent
-... reattach --site qilin --url https://www.hdkyl.in/details.php?id=479362 --file .\qilin-built.torrent
 ```
 
-`reattach` 只核对 hash/pieces 和挂回 qB，不会调用上传接口；目标种 pieces 与本地内容对不上会直接拒绝。
+`reattach` 只从站点详情页下载目标种，不再接受 `--file` 本地构造种；站点下载不到就报错，宁可不挂也不塞废种。它只核对 hash/pieces 和挂回 qB，不会调用上传接口；目标种 pieces 与本地内容对不上会直接拒绝。
 
 ## 7. 发布相关配置
 
