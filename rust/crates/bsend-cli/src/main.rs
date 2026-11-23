@@ -1794,11 +1794,12 @@ fn cmd_gatecheck(cfg: &Config, sites: Option<Vec<String>>, as_json: bool) -> Res
                 Err(e) => audit_text = format!("预审接口失败：{e:#}"),
             }
         }
+        let descr_final = bsend::reseed::submitted_descr(&prep, &info.descr);
         let input = bsend::gates::GateInput {
             rules: &rules,
             name: &info.name,
             subtitle: &info.subtitle,
-            descr: &info.descr,
+            descr: descr_final,
             mediainfo: &info.mediainfo,
             has_links: info.has_media_links(),
             type_label: type_label.as_deref(),

@@ -2505,6 +2505,17 @@ pub struct PreparedUpload {
     pub form_html: String,
 }
 
+/// 取最终要提交的简介（`apply_site_rules` 可能已剪死图/转 BBCode）。
+/// 门禁必须看最终值，不能看源页原文，否则死图剪掉后仍会按旧图数量误判。
+pub fn submitted_descr<'a>(prep: &'a PreparedUpload, fallback: &'a str) -> &'a str {
+    for name in ["descr", "release_desc", "description", "content"] {
+        if let Some((_, v)) = prep.fields.iter().find(|(n, _)| n == name) {
+            return v;
+        }
+    }
+    fallback
+}
+
 /// 剪掉简介里不可访问的 `<img>`（预审逐图校验；只处理绝对 URL）。
 /// `probe` 返回 true 表示图片可访问，便于单测注入。
 pub fn prune_dead_images_with(html: &str, probe: &mut dyn FnMut(&str) -> bool) -> (String, usize) {

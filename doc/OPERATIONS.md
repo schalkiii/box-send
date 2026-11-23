@@ -175,6 +175,8 @@ pwsh scripts/seeding-audit.ps1 -Json -OutFile audit.json
 - `bsend report`：看整体覆盖率。
 - `bsend autopost`：找缺口、生成待发、审阅、发布、挂回。
 - `seeding-audit.ps1`：看哪里卡住了。
+- `scripts/imgbox-upload.py`：把本地海报/截图传到 imgbox，输出原图直链；匿名、无需 API key、单图 10MB。
+- `scripts/edit-seed.py`：只改已发布种子的标题/简介；默认演练，`--apply` 才提交，其余表单原样回填。
 - `healthcheck.ps1`：看运行健不健康。
 
 ## 6. 常用命令
@@ -261,6 +263,17 @@ NexusPHP 的简介框是 BBCode 编辑器。源站简介里的 `<fieldset>`、`<
 ```
 
 藏宝阁 43994 已经用 BBCode 重新提交，详情页能正常渲染引用块和海报图。2026-11-23 抽查发现 lajidui、ptcafe、sbpt、luckpt、ptlgs、tangpt、longpt、cyanbug、kufei、xingyunge、city13、shuioudao、xdy、baozi、novahd、ptzone 等站的历史种子简介也是字面 HTML，已用 `scripts/fix-bbcode-descr.py` 批量改成 BBCode（只改简介，不换种子文件）；29 条已发布种子复查时编辑框里都不再是 HTML。
+
+### 7.3 图片门禁与图床
+
+站点审核会逐张打开简介图片。图片 418/HTML、TLS 失败、域名失效都算死图；只在浏览器里能看不算通过。发种前按站点规则执行：
+
+- `pruneDeadImages: true`：带目标站上传页 Referer 逐张 GET，非 2xx 或非图片类型剪掉；豆瓣图床裸请求 418，带 Referer 才出图，所以 Referer 必须带。
+- `requireImages`：剪完死图后少于 N 张就拦，不提交零图/残图简介。
+- `descrOrder`：按标记检查段落顺序，缺段或倒置都拦；只对配置了的站点生效。
+- `titleNoCjk`：主标题含汉字直接拦，中文名放副标题。
+
+藏宝阁 43994 的两张图（豆瓣海报、`imgs.loukky.com` 截图）都不可达；用 `scripts/imgbox-upload.py` 重传后换成 `images4.imgbox.com` 直链，带 Referer 实测 200。熊猫 141276 原来没有海报/截图，重写简介时补了 1 张海报 + 3 张截图，顺序按站点要求。死图不要靠关掉 `pruneDeadImages` 绕过；先重传，再改简介。
 
 ## 8. 出问题按这个顺序查
 

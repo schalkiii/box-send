@@ -137,11 +137,28 @@ qB 没有 tracker，也不等于站上一定没发过。可能是站上已经有
 
 任何一条不满足就中止，不带着疑问上传。
 
+### 5.5.1 简介门禁（2026-11-23 起）
+
+`gates.rs` 读的是**最终要提交的简介**（`apply_site_rules` 剪死图/转 BBCode 之后），不是源页原文。新增四个按站点配置的开关：
+
+| 字段 | 作用 |
+| --- | --- |
+| `titleNoCjk` | 主标题出现汉字即拦；中文名放副标题 |
+| `pruneDeadImages` | 逐张 GET 简介图片，非 2xx/非图片类型就剪掉（带目标站上传页 Referer） |
+| `requireImages` | 最终简介至少几张图；死图被剪掉后数量不够就拦 |
+| `descrOrder` | 按给定标题标记检查顺序，缺标记或位置倒置都拦 |
+
+藏宝阁配 `titleNoCjk=true`、`pruneDeadImages=true`、`requireImages=2`；熊猫高清配 `titleNoCjk=true`、`pruneDeadImages=true`、`requireImages=4`，并要求 `【转载出处】→【制作说明】→【海报】→【简介】→【info】→【截图】`。图片全部失效时不要只关掉清理，先把原图/海报/截图重传到可用图床，再改简介。
+
+图床选择：`imgbox.com` 匿名可用、无需 API key、单图 10MB，实测带藏宝阁/熊猫 Referer 都是 `200 image/jpeg`。仓库脚本 `scripts/imgbox-upload.py` 负责批量上传并输出原图直链；`scripts/edit-seed.py` 负责只改已发布种子的标题/简介，不动种子文件。imgbox 不承诺永久，重要图仍应自建或另存。
+
+`scripts/edit-seed.py` 默认只读演练，`--apply` 才 POST；除指定字段外其余表单原样回填，避免误改分类/媒介/标签。编辑已发布种子后，站点会重新进审核队列，是否通过以站点状态为准。
+
 ### 5.6 上传与挂回
 
 上传成功后，从目标站下载刚发布的 `.torrent`，作为一份**独立种子**加进 qB。上传回包里的 `details.php?id=` 不能单独当证据：成功页常混着侧边栏的相关旧种，实测直接取第一条会挂错。程序现在按 id 配对详情和下载链接，最终跳转是详情页时优先用它；只有一类链接时用唯一那条；详情和下载的 id 对不上就两个都不用，记 `posted_unresolved` 待人工确认。
 
-挂回前还要过两道校验：下载回来的目标种 `info hash` 默认必须等于上传时构造的新 hash（判重/existed 路径没有“新 hash”，只核对 pieces）；目标种 pieces 必须与本地源种一致。已知会改写 `info.source` 的站（ptba、cspt、dubhe、ptsbao、crabpt、hdbao、tey、oshen、ptfans、itzmx）只有在 pieces 和 `info.name` 都一致时才放行 hash 差异，其他站仍拒绝；任何一条不满足就拒绝挂回，宁可人工处理，不往 qB 塞错种。
+挂回前还要过两道校验：下载回来的目标种 `info hash` 默认必须等于上传时构造的新 hash（判重/existed 路径没有“新 hash”，只核对 pieces）；目标种 pieces 必须与本地源种一致。已知会改写 `info.source` 的站（ptba、cspt、dubhe、ptsbao、crabpt、hdbao、tey、oshen、ptfans、itzmx、railgun、lemonhd）只有在 pieces 和 `info.name` 都一致时才放行 hash 差异，其他站仍拒绝；任何一条不满足就拒绝挂回，宁可人工处理，不往 qB 塞错种。
 
 站点上其实已经发布（新发成功或 existed），但下载目标种、校验或挂回 qB 失败时，不记发种失败：格子落 `ReviewPending`，note 前缀 `posted_unresolved` 或 `existed_unresolved`，不进退避、不占发布额度，下一轮或人工按详情页补挂。
 

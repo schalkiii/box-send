@@ -422,12 +422,13 @@ pub fn run_autopost_with(
             .iter()
             .find(|(n, _)| n == "type")
             .map(|(_, l)| l.clone());
+        let descr_final = reseed::submitted_descr(&rep.prepared, &rep.info.descr);
         let results = {
             let input = gates::GateInput {
                 rules: &rules,
                 name: &rep.info.name,
                 subtitle: &rep.info.subtitle,
-                descr: &rep.info.descr,
+                descr: descr_final,
                 mediainfo: &rep.info.mediainfo,
                 has_links: rep.info.has_media_links(),
                 type_label: type_label.as_deref(),

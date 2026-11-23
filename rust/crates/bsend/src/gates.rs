@@ -36,6 +36,13 @@ pub struct GateResult {
 pub struct SiteRules {
     /// 标题最大长度（字符）；超过即 Block
     pub title_max_len: Option<usize>,
+    /// 主标题禁止出现汉字（站点只收英文发布名；中文名放副标题）
+    pub title_no_cjk: Option<bool>,
+    /// 简介至少包含几张图片（BBCode `[img]` 或 HTML `<img>`，按最终提交值计）
+    pub require_images: Option<usize>,
+    /// 简介必须按这些标题/标记的顺序出现（如 `["【转载出处】","【制作说明】","【海报】","【简介】","【info】","【截图】"]`）
+    #[serde(default)]
+    pub descr_order: Vec<String>,
     /// 是否要求简介里带 IMDb/豆瓣/TMDB 链接（缺省 true）
     pub require_links: Option<bool>,
     /// 是否要求 MediaInfo 非空（缺省 true）
@@ -85,6 +92,59 @@ impl SiteRules {
             .as_deref()
             .is_none_or(|f| !f.eq_ignore_ascii_case("html"))
     }
+}
+
+/// 主标题里是否有汉字（CJK Unified Ideographs + 扩展 A + 兼容区）。
+/// 只判汉字，不把中文标点/全角括号当“中文”，避免误伤英文标题里的装饰符号。
+pub fn has_cjk(text: &str) -> bool {
+    text.chars().any(|c| {
+        matches!(
+            c as u32,
+            0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xF900..=0xFAFF
+        )
+    })
+}
+
+/// 简介里图片数量：BBCode `[img]`/`[img=…]` 与 HTML `<img>` 都算。
+/// 按最终提交值统计，所以 `pruneDeadImages` 剪掉死图后这里会同步减少。
+pub fn image_count(descr: &str) -> usize {
+    let lower = descr.to_ascii_lowercase();
+    let mut count = 0usize;
+    let mut from = 0usize;
+    while let Some(p) = lower[from..].find("[img") {
+        let at = from + p + 4;
+        let next = lower.as_bytes().get(at).copied();
+        if matches!(next, Some(b']') | Some(b'=')) {
+            count += 1;
+        }
+        from = at;
+    }
+    from = 0;
+    while let Some(p) = lower[from..].find("<img") {
+        count += 1;
+        from += p + 4;
+    }
+    count
+}
+
+/// 按规则要求的标题标记顺序检查简介；返回（缺失项，顺序错误项）。
+/// 标记按字面匹配（可带中文方括号），这样正文里偶然出现的“简介”不会误判。
+pub fn descr_order_gaps(descr: &str, order: &[String]) -> (Vec<String>, Vec<String>) {
+    let mut missing = Vec::new();
+    let mut out_of_order = Vec::new();
+    let mut last = 0usize;
+    for label in order {
+        match descr.find(label) {
+            None => missing.push(label.clone()),
+            Some(pos) => {
+                if pos < last {
+                    out_of_order.push(label.clone());
+                }
+                last = pos;
+            }
+        }
+    }
+    (missing, out_of_order)
 }
 
 /// 门禁输入（来自审阅结果；不直接碰网络）
@@ -200,7 +260,46 @@ pub fn evaluate(input: &GateInput<'_>) -> Vec<GateResult> {
         },
     );
 
-    // G3 必填：MediaInfo（规则可放宽）
+    // G3 必填：简介图片数量（按最终提交值，死图被剪掉后会在这里暴露）
+    if let Some(min) = input.rules.require_images {
+        let n = image_count(input.descr);
+        add(
+            "G3 简介图片",
+            n >= min,
+            if n >= min {
+                format!("简介图片 {n} 张 ≥ {min}")
+            } else {
+                format!("简介图片仅 {n} 张 < 站点要求 {min}（跑图床重传或补截图）")
+            },
+        );
+    }
+
+    // G3 简介顺序（配置了才检查；标记按字面匹配）
+    if !input.rules.descr_order.is_empty() {
+        let (missing, out_of_order) = descr_order_gaps(input.descr, &input.rules.descr_order);
+        let ok = missing.is_empty() && out_of_order.is_empty();
+        let mut msg = if ok {
+            format!("简介顺序符合：{}", input.rules.descr_order.join(" → "))
+        } else {
+            let mut parts = Vec::new();
+            if !missing.is_empty() {
+                parts.push(format!("缺标记 {}", missing.join("/")));
+            }
+            if !out_of_order.is_empty() {
+                parts.push(format!("顺序错误 {}", out_of_order.join("/")));
+            }
+            format!(
+                "简介顺序不合规：{}；要求 {}",
+                parts.join("；"),
+                input.rules.descr_order.join(" → ")
+            )
+        };
+        if !ok {
+            msg.push_str("（源简介需重排后再发）");
+        }
+        add("G3 简介顺序", ok, msg);
+    }
+
     if input.rules.require_mediainfo() {
         add(
             "G3 MediaInfo",
@@ -236,6 +335,20 @@ pub fn evaluate(input: &GateInput<'_>) -> Vec<GateResult> {
                 format!("标题 {n} 字符 ≤ {max}")
             } else {
                 format!("标题 {n} 字符 > 站点上限 {max}")
+            },
+        );
+    }
+
+    // G4 标题禁中文（站点明确要求主标题纯英文）
+    if input.rules.title_no_cjk.unwrap_or(false) {
+        let bad = has_cjk(input.name);
+        add(
+            "G4 标题禁中文",
+            !bad,
+            if bad {
+                format!("主标题含汉字：{}（中文名请放副标题）", input.name)
+            } else {
+                "主标题不含汉字".into()
             },
         );
     }
@@ -433,6 +546,101 @@ mod tests {
         let mut input = base_input(&rules);
         input.mediainfo = "";
         input.has_links = false;
+        let out = evaluate(&input);
+        assert!(all_passed(&out), "{out:?}");
+    }
+
+    #[test]
+    fn title_no_cjk_blocks_chinese_main_title() {
+        let rules = SiteRules {
+            title_no_cjk: Some(true),
+            ..Default::default()
+        };
+        let mut input = base_input(&rules);
+        input.name = "星球大战9：天行者崛起 Star.Wars.Episode.IX.2019.1080p-GRP";
+        let out = evaluate(&input);
+        let gate = out
+            .iter()
+            .find(|r| r.gate == "G4 标题禁中文")
+            .expect("应出现标题禁中文门禁");
+        assert_eq!(gate.verdict, Verdict::Block);
+        assert!(gate.message.contains("主标题含汉字"));
+    }
+
+    #[test]
+    fn title_no_cjk_allows_english_only() {
+        let rules = SiteRules {
+            title_no_cjk: Some(true),
+            ..Default::default()
+        };
+        let input = base_input(&rules);
+        let out = evaluate(&input);
+        assert!(all_passed(&out), "{out:?}");
+    }
+
+    #[test]
+    fn image_count_handles_bbcode_and_html() {
+        assert_eq!(image_count("无图"), 0);
+        assert_eq!(image_count("[img]https://a/1.jpg[/img]"), 1);
+        assert_eq!(
+            image_count("[img=200x100]https://a/1.jpg[/img]<img src=\"x\">"),
+            2
+        );
+        assert_eq!(image_count("[img]x[/img]\n[IMG]y[/IMG]"), 2);
+        assert_eq!(image_count("[img=]x[/img]"), 1);
+        assert_eq!(image_count("[imgs]x[/imgs]"), 0);
+    }
+
+    #[test]
+    fn require_images_blocks_too_few() {
+        let rules = SiteRules {
+            require_images: Some(3),
+            ..Default::default()
+        };
+        let mut input = base_input(&rules);
+        input.descr = "[img]https://a/1.jpg[/img]\n[img]https://a/2.jpg[/img]";
+        let out = evaluate(&input);
+        let gate = out
+            .iter()
+            .find(|r| r.gate == "G3 简介图片")
+            .expect("应出现简介图片门禁");
+        assert_eq!(gate.verdict, Verdict::Block);
+        assert!(gate.message.contains("仅 2 张"));
+    }
+
+    #[test]
+    fn descr_order_blocks_missing_and_out_of_order() {
+        let rules = SiteRules {
+            descr_order: vec![
+                "【转载出处】".into(),
+                "【制作说明】".into(),
+                "【海报】".into(),
+                "【简介】".into(),
+                "【info】".into(),
+                "【截图】".into(),
+            ],
+            ..Default::default()
+        };
+        let mut input = base_input(&rules);
+        input.descr = "【简介】正文\n【海报】[img]x[/img]\n【截图】[img]y[/img]";
+        let out = evaluate(&input);
+        let gate = out
+            .iter()
+            .find(|r| r.gate == "G3 简介顺序")
+            .expect("应出现简介顺序门禁");
+        assert_eq!(gate.verdict, Verdict::Block);
+        assert!(gate.message.contains("缺标记"));
+        assert!(gate.message.contains("顺序错误"));
+    }
+
+    #[test]
+    fn descr_order_passes_when_sections_in_order() {
+        let rules = SiteRules {
+            descr_order: vec!["【转载出处】".into(), "【海报】".into(), "【截图】".into()],
+            ..Default::default()
+        };
+        let mut input = base_input(&rules);
+        input.descr = "【转载出处】TLF\n【海报】[img]x[/img]\n【截图】[img]y[/img]";
         let out = evaluate(&input);
         assert!(all_passed(&out), "{out:?}");
     }

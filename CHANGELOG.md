@@ -7,6 +7,10 @@
 
 ### Added
 
+- 发布前门禁新增 `titleNoCjk`、`requireImages`、`descrOrder`：主标题含汉字、最终简介图片不足、简介段落乱序都会在上传前拦下；门禁改为读 `apply_site_rules` 之后真正要提交的简介，不再看源页原文。藏宝阁配 2 张图 + 剪死图，熊猫高清配 4 张图和【转载出处-制作说明-海报-简介-info-截图】顺序。
+- `scripts/imgbox-upload.py`：匿名上传 imgbox，返回原图直链；无需 API key，单图 10MB，实测带藏宝阁/熊猫 Referer 均 200。
+- `scripts/edit-seed.py`：只改已发布种子的标题/简介，默认演练，`--apply` 才提交；其余表单原样回填。
+- 2026-11-23 修复藏宝阁 43994：豆瓣海报 418/HTML、`imgs.loukky.com` TLS 失败，重传 imgbox 后详情页两张图正常；修复熊猫 141276：主标题去掉 `[50%] 剩余时间` 中文尾巴，简介重排为六段并补海报 + 3 张截图。
 - 辅种：pieces-hash 批量通道 + 名字检索（严格 / 宽松 / 最大成员种名兜底）。
 - 转种：预检 → 官方预审 → 上传 → 发后自检 → 推种校验全流程；`autopost`
   白名单 + 日限额（北京时间）+ 退避 + 审计（`auto-audit.jsonl`）。

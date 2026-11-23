@@ -165,7 +165,7 @@ luckpt 的候选规则（**还没有写进 `boxsend.json`**）：
 
 ### 6.6 qilin 和 panda
 
-站上其实已经发布（qilin 479362、panda 141276），但旧逻辑拿旧种或错误详情页当结果，记成了失败；新 hash 不在 qB。这是发后定位错误，不是上传失败。新版流程已经改成从回包正文/跳转里按 id 配对详情和下载链接，再下载目标种独立挂回；发后定位缺陷已修（见 `ROADMAP.md` 4.3）。2026-11-23 已补挂：qilin 479362（hash `bd348dfc…`，站点审核仍显示缺图，不影响做种）、panda 141276（hash `3f8ed774…`），两条 qB 校验 100%。
+站上其实已经发布（qilin 479362、panda 141276），但旧逻辑拿旧种或错误详情页当结果，记成了失败；新 hash 不在 qB。这是发后定位错误，不是上传失败。新版流程已经改成从回包正文/跳转里按 id 配对详情和下载链接，再下载目标种独立挂回；发后定位缺陷已修（见 `ROADMAP.md` 4.3）。2026-11-23 已补挂：qilin 479362（hash `bd348dfc…`，站点审核仍显示缺图，不影响做种）、panda 141276（hash `3f8ed774…`），两条 qB 校验 100%。panda 的审核拒绝（主标题中文/简介顺序）已在 6.11 修复并重提，等复审。
 
 ### 6.7 2026-11-23 新实发：ptba、cspt、dubhe、ptsbao、crabpt、hdbao、tey、oshen、ptfans、itzmx
 
@@ -199,6 +199,16 @@ luckpt 的候选规则（**还没有写进 `boxsend.json`**）：
 - 简介：站点简介框是 BBCode 编辑器，源站 hdfans 的简介是裸 HTML；原样提交后数据库里是 `&lt;fieldset&gt;…`，页面显示字面标签，审核端看不到 `<img>`。代码已改为默认把 HTML 简介转 BBCode（`descrFormat=html` 才保留 HTML），43994 已用 `[quote]`/`[img]` 重新提交，详情页正常渲染。
 - 2026-11-23 抽查 29 条已发布种子，lajidui、ptcafe、sbpt、luckpt、ptlgs、tangpt、longpt、cyanbug、kufei、xingyunge、city13、shuioudao、xdy、baozi、novahd、ptzone 等站的历史简介也是字面 HTML；已用 `scripts/fix-bbcode-descr.py` 批量改成 BBCode，只改简介、不换种子文件，29 条复查全部为 BBCode。
 - 修复后先只编辑 43994，不新发种；等审核通过、再考虑恢复藏宝阁自动发种。
+- 2026-11-23 复审仍拒绝，原因变成“简介图片全部无法访问”。用登录 Cookie 读 43994 编辑页确认简介只剩两张图：豆瓣海报 `img9.doubanio.com` 裸请求 418/HTML 防盗链，`imgs.loukky.com` 本机 TLS 失败；都不可达。已用 imgbox 重传海报/截图（`images4.imgbox.com/f6/3a/MpwvlgiL_o.jpg`、`/af/5c/Z9Nm7U76_o.jpg`），带藏宝阁 Referer 均 200 image/jpeg，`edit-seed.py` 只改简介后详情页两张图正常显示。等站审核，不再私信管理。
+- 发种前门禁已加：`pruneDeadImages=true` 逐图探测，`requireImages=2` 少于两张可达图直接拦；不再出现“图片全死但照样提交”。
+
+### 6.11 panda（熊猫高清）审核拒绝
+
+- 141276 `Star Wars Episode IX ... MNHDR-FRDS` 被 `NoCaps` 拒绝：主标题不得含中文、简介框要按【转载出处-制作说明-海报-简介-info-截图】顺序。
+- 旧标题从源站带回了 `[50%] 剩余时间：26年4月`，中文促销尾巴没被剥掉；已在编辑页改成纯英文标题，中文只留在副标题。
+- 源简介只有 `转自KEEPFRDS` + 豆瓣文字 + 两张空 `fieldset`，没有海报/截图，也不符合顺序。已重写为六个显式标记段落：转载出处 → 制作说明 → 海报（imgbox）→ 简介 → info → 截图（3 张 imgbox）；4 张图都带熊猫 Referer 实测 200 image/jpeg。编辑已提交，详情页图片和段落顺序可读，等站审核。
+- 门禁已加：`titleNoCjk=true`、`pruneDeadImages=true`、`requireImages=4`、`descrOrder` 六个标记；源简介缺图/乱序会在上传前被拦，不再靠人工事后补。
+
 
 ### 6.10 2026-11-23 继续实发：railgun、lemonhd
 

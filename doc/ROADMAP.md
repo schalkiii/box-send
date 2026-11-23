@@ -60,12 +60,13 @@
 - 站点侧已发布、但下载目标种或挂回 qB 失败时，记 `ReviewPending`、note 前缀 `posted_unresolved` / `existed_unresolved`，不记失败、不进退避、不占发布额度；
 - 新增 `bsend reattach --site <id> --url <详情页>` 手工补挂：拉详情页/下载目标种（站点拒绝下载时可用 `--file` 给本地 `.torrent`），按 pieces 找本地内容后走同一条挂回逻辑。
 
-已通过：`coverage_e2e` 26 条全部通过；真实发种 luckpt、sbpt 各一条并挂回校验；hdvideo 78856、panda 141276、qilin 479362 三条历史种子已补挂，qB 校验 100%、tracker 正常。2026-11-23 又首次向 `ptba`、`cspt`、`dubhe`、`ptsbao`、`crabpt`、`hdbao`、`tey`、`oshen`、`ptfans`、`itzmx`、`railgun`、`lemonhd` 发种（hdbao 2 条，其余各 1 条），十二站都出现“站上 hash 与构造 hash 不同”，已按 pieces/标题校验补挂成功，并把十二站加入 hash 改写白名单；ptsbao 的 `source_sel` 二级分类也已按 type 父类 + 标题自动填对；hdbao 首次实发还暴露 `autopost --limit` 只数 Posted、不数 `posted_unresolved` 的问题，已修；itzmx 的 torrent 文件上限为 `266,240 bytes`，改用《Liar Game》小种后才打通。
+已通过：`coverage_e2e` 26 条全部通过；真实发种 luckpt、sbpt 各一条并挂回校验；hdvideo 78856、panda 141276、qilin 479362 三条历史种子已补挂，qB 校验 100%、tracker 正常。2026-11-23 又首次向 `ptba`、`cspt`、`dubhe`、`ptsbao`、`crabpt`、`hdbao`、`tey`、`oshen`、`ptfans`、`itzmx`、`railgun`、`lemonhd` 发种（hdbao 2 条，其余各 1 条），十二站都出现“站上 hash 与构造 hash 不同”，已按 pieces/标题校验补挂成功，并把十二站加入 hash 改写白名单；ptsbao 的 `source_sel` 二级分类也已按 type 父类 + 标题自动填对；hdbao 首次实发还暴露 `autopost --limit` 只数 Posted、不数 `posted_unresolved` 的问题，已修；itzmx 的 torrent 文件上限为 `266,240 bytes`，改用《Liar Game》小种后才打通。2026-11-23 发布检查新增 `titleNoCjk`、`requireImages`、`descrOrder`，并让门禁读最终提交的简介（剪死图/转 BBCode 之后），藏宝阁、熊猫高清已启用。
 
 还没完成：
 
 - 用更多真实站点跑完整链路，覆盖“站上已有 / existed / 下载被拒 / 校验失败”等分支；
-- 藏宝阁 43994 仍等站点复审，数据层已改好但审核状态未解除。
+- 藏宝阁 43994 已换 imgbox 图并重提，熊猫 141276 已改英文标题/重排简介，两条都还在等站点复审，审核状态未解除；
+- 死图重传目前是 `scripts/imgbox-upload.py` + `scripts/edit-seed.py` 手工/半自动，尚未接成发布前自动重传；门禁会先拦住，不会带死图上传。
 
 ### 3.2 文档里的站点数据
 
