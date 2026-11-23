@@ -3096,7 +3096,7 @@ fn extract_upload_error(body: &str, status: u16) -> String {
     }
     for marker in ["已经上传", "已存在", "被人上传", "上传失败", "发布失败"] {
         if let Some(p) = body.find(marker) {
-            let seg = strip_tags(&body[p..(p + 120).min(body.len())]);
+            let seg = strip_tags(&body[p..floor_char_boundary(body, p + 120)]);
             let line = seg.lines().next().unwrap_or("").trim().to_string();
             if !line.is_empty() {
                 return line;
@@ -5966,6 +5966,13 @@ Frame rate : 25</pre>
         let body = r#"<div id="errorbox">请填写必填项目</div>"#;
         assert_eq!(extract_upload_error(body, 200), "请填写必填项目");
         assert!(looks_like_lost_post("请填写必填项目"));
+    }
+
+    #[test]
+    fn error_extraction_does_not_split_utf8() {
+        let body = format!("xx上传失败{}", "子".repeat(200));
+        let msg = extract_upload_error(&body, 200);
+        assert!(msg.contains("上传失败"), "{msg}");
     }
 
     #[test]
