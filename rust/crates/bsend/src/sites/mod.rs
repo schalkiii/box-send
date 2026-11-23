@@ -72,6 +72,8 @@ pub fn extra_announce_hosts(site_id: &str) -> &'static [&'static str] {
     match site_id {
         "luckpt" => &["tracker.luckpt.de"],
         "chdbits" => &["chdbits.xyz", "chdbits.co"],
+        // 页面在 www.hdkyl.in，announce 在 tracker.hdkyl.in；不补别名 qB 真值会漏判。
+        "qilin" => &["tracker.hdkyl.in"],
         _ => &[],
     }
 }
@@ -1237,6 +1239,7 @@ mod tests {
         // 实机 41,882 条种子统计出的两处差异，别删（删了预筛会漏 693 条种子）
         assert!(extra_announce_hosts("luckpt").contains(&"tracker.luckpt.de"));
         assert!(extra_announce_hosts("chdbits").contains(&"chdbits.xyz"));
+        assert!(extra_announce_hosts("qilin").contains(&"tracker.hdkyl.in"));
         assert!(extra_announce_hosts("hdsky").is_empty());
     }
 

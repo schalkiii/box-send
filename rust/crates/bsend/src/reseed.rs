@@ -24,7 +24,7 @@ use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE, REFERER};
 use url::Url;
 
 use crate::bencode;
-use crate::config::Config;
+use crate::config::{Config, SiteConf};
 use crate::coverage::now_unix;
 use crate::index::{ContentIndex, CoverageStatus, SiteCoverage};
 use crate::qbittorrent::QBittorrent;
@@ -4550,6 +4550,84 @@ pub fn run_reseed_reviewed(
     run_reseed_impl(cfg, qb, req, index, log, throttle, Some(review))
 }
 
+/// 手工补挂：站上已经发布，qB 里还没有这个站的目标种。
+/// 拉详情页/下载目标种（或直接读本地 `.torrent`），按 pieces 在索引里找本地内容，
+/// 再走与发后同一条 `push_target_torrent`。绝不重新上传、不占发布额度。
+/// 返回最终格子状态和详情页 URL。
+#[allow(clippy::too_many_arguments)]
+pub fn reattach_published(
+    cfg: &Config,
+    qb: &QBittorrent,
+    site_id: &str,
+    detail_url: &str,
+    content_key: Option<&str>,
+    torrent_file: Option<&Path>,
+    index: &mut ContentIndex,
+    log: &mut dyn FnMut(&str),
+) -> Result<(CoverageStatus, String)> {
+    let tgt = adapter_for(cfg, site_id)?;
+    let tdata = match torrent_file {
+        Some(path) => {
+            std::fs::read(path).with_context(|| format!("读本地种子 {} 失败", path.display()))?
+        }
+        None => {
+            log(&format!("拉取目标种：{detail_url}"));
+            let page = tgt.fetch_torrent_page(detail_url)?;
+            tgt.download_torrent(&page, detail_url)?
+        }
+    };
+    let key = match content_key {
+        Some(k) => k.to_string(),
+        None => find_content_key_by_pieces(qb, index, &tdata)?,
+    };
+    let (name, source_site, source_url) = {
+        let entry = index.contents.get(&key).with_context(|| {
+            format!("索引里没有内容 {key}；先用 bsend scan 刷新，或用 --key 指定")
+        })?;
+        (
+            entry.name.clone(),
+            entry
+                .source
+                .as_ref()
+                .map(|s| s.site_id.clone())
+                .unwrap_or_default(),
+            entry
+                .source
+                .as_ref()
+                .map(|s| s.detail_url.clone())
+                .unwrap_or_default(),
+        )
+    };
+    let member = matching_local_member(qb, &index.contents[&key], &tdata)?
+        .with_context(|| format!("目标种分片与本地内容 {key} 不一致，拒绝挂回"))?;
+    let req = ReseedRequest {
+        content_key: key,
+        source_site,
+        source_url,
+        target_site: site_id.to_string(),
+        name: name.clone(),
+    };
+    let status = push_target_torrent(
+        cfg, qb, &req, &name, detail_url, &tdata, None, member, index, log,
+    )?;
+    index.save()?;
+    Ok((status, detail_url.to_string()))
+}
+
+/// 没有给 `--key` 时，按 pieces 在索引里找这段内容；找不到要求用户指定。
+fn find_content_key_by_pieces(
+    qb: &QBittorrent,
+    index: &ContentIndex,
+    tdata: &[u8],
+) -> Result<String> {
+    for (key, entry) in &index.contents {
+        if matching_local_member(qb, entry, tdata)?.is_some() {
+            return Ok(key.clone());
+        }
+    }
+    bail!("索引里找不到分片一致的内容；确认 qB 里有本地源种，或用 --key 指定 contentKey")
+}
+
 fn run_reseed_impl(
     cfg: &Config,
     qb: &QBittorrent,
@@ -4695,6 +4773,7 @@ fn run_reseed_inner(
                     &rel.info.name,
                     &detail_url,
                     &data,
+                    None,
                     member,
                     index,
                     log,
@@ -4734,22 +4813,16 @@ fn run_reseed_inner(
                         }));
                     }
                     Err(e) => {
-                        let why = format!("目标站已有同分片「{title}」，但推进下载器失败（{e:#}）");
+                        let why = format!("站上已有同分片「{title}」，但挂回 qB 失败（{e:#}）");
                         log(&why);
-                        write_cell(
+                        return unresolved_after_site(
                             index,
                             &req.content_key,
                             &req.target_site,
-                            CoverageStatus::Failed,
-                            Some(detail_url.clone()),
+                            "existed_unresolved",
+                            Some(detail_url),
                             &why,
                         );
-                        index.save()?;
-                        return Ok(ReseedOutcome::Duplicate(DuplicateOutcome {
-                            status: CoverageStatus::Failed,
-                            url: Some(detail_url),
-                            note: why,
-                        }));
                     }
                 }
             }
@@ -4987,6 +5060,7 @@ fn run_reseed_inner(
                     &info.name,
                     &detail_url,
                     &data,
+                    None,
                     member,
                     index,
                     log,
@@ -5019,22 +5093,16 @@ fn run_reseed_inner(
                         }))
                     }
                     Err(e) => {
-                        let why = format!("上传回包 existed，但推进下载器失败（{e:#}）");
+                        let why = format!("上传回包 existed，但挂回 qB 失败（{e:#}）");
                         log(&why);
-                        write_cell(
+                        unresolved_after_site(
                             index,
                             &req.content_key,
                             &req.target_site,
-                            CoverageStatus::Failed,
-                            Some(detail_url.clone()),
+                            "existed_unresolved",
+                            Some(detail_url),
                             &why,
-                        );
-                        index.save()?;
-                        Ok(ReseedOutcome::Duplicate(DuplicateOutcome {
-                            status: CoverageStatus::Failed,
-                            url: Some(detail_url),
-                            note: why,
-                        }))
+                        )
                     }
                 }
             }
@@ -5135,19 +5203,42 @@ fn run_reseed_inner(
         uploader_uid: None,
         uploader_name: None,
     };
-    let tdata = tgt.download_torrent(&page, referer)?;
-    push_target_torrent(
+    let reported_url = detail_url.clone().unwrap_or_else(|| download_url.clone());
+    let tdata = match tgt.download_torrent(&page, referer) {
+        Ok(d) => d,
+        Err(e) => {
+            return unresolved_after_site(
+                index,
+                &req.content_key,
+                &req.target_site,
+                "posted_unresolved",
+                Some(reported_url),
+                &format!("站上已发布，但下载目标种失败（{e:#}）"),
+            );
+        }
+    };
+    match push_target_torrent(
         cfg,
         qb,
         req,
         &info.name,
-        detail_url.as_deref().unwrap_or(&download_url),
+        &reported_url,
         &tdata,
+        Some(&rewritten.new_hash),
         matched_member,
         index,
         log,
-    )?;
-    Ok(ReseedOutcome::Posted(detail_url.unwrap_or(download_url)))
+    ) {
+        Ok(_) => Ok(ReseedOutcome::Posted(reported_url)),
+        Err(e) => unresolved_after_site(
+            index,
+            &req.content_key,
+            &req.target_site,
+            "posted_unresolved",
+            Some(reported_url),
+            &format!("站上已发布，但挂回 qB 失败（{e:#}）"),
+        ),
+    }
 }
 
 /// 转种动作日志（JSONL，fail-open）：GUI/CLI/autopost 每次转种都写一行。
@@ -5238,6 +5329,59 @@ fn write_cell(
     }
 }
 
+/// 站点侧已经有结果（新发成功 / existed），但下载或推 qB 失败：
+/// 这不是发种失败，不能记 failed、不能进退避、不能重发；落 ReviewPending，
+/// note 前缀供审计区分（`posted_unresolved` / `existed_unresolved`）。
+fn unresolved_after_site(
+    index: &mut ContentIndex,
+    key: &str,
+    site: &str,
+    prefix: &str,
+    url: Option<String>,
+    why: &str,
+) -> Result<ReseedOutcome> {
+    let note = format!("{prefix}：{why}；勿重发，按详情页补挂");
+    write_cell(
+        index,
+        key,
+        site,
+        CoverageStatus::ReviewPending,
+        url.clone(),
+        &note,
+    );
+    index.save()?;
+    Ok(ReseedOutcome::Duplicate(DuplicateOutcome {
+        status: CoverageStatus::ReviewPending,
+        url,
+        note,
+    }))
+}
+
+/// 挂回后的 tracker 必须全部属于目标站。站点自己的种子可能带两条同站 announce
+/// （如 hdvideo 的 `tracker.hdvideo.top` 和 `hdvideo.top`），这不算多站合并；
+/// 只要出现别站 host 或一条都没有，就拒绝。
+fn ensure_trackers_on_site(site: &SiteConf, urls: &[String]) -> Result<()> {
+    if urls.is_empty() {
+        bail!("新种挂回下载器后没有可用 tracker；中止");
+    }
+    let foreign: Vec<&String> = urls
+        .iter()
+        .filter(|u| {
+            Url::parse(u)
+                .ok()
+                .and_then(|p| p.host_str().map(|h| h.to_lowercase()))
+                .is_none_or(|h| !site.matches_tracker(&h))
+        })
+        .collect();
+    if !foreign.is_empty() {
+        bail!(
+            "单站点策略：新种挂回下载器后包含非目标站 tracker {:?}；中止（不追加 announce、不补挂 tracker）",
+            foreign
+        );
+    }
+    Ok(())
+}
+
 /// 把目标站 `.torrent` 推进下载器并校验：发布成功、或目标站已有同分片条目
 /// （existed / 站内判重命中）时共用——「新站已有条目」也要下载目标种挂到本地数据上，
 /// 否则站点上永远只有发布记录、下载器里没有这个 tracker。
@@ -5251,14 +5395,32 @@ fn push_target_torrent(
     name: &str,
     detail_url: &str,
     tdata: &[u8],
+    expected_hash: Option<&str>,
     matched_member: MatchedMember,
     index: &mut ContentIndex,
     log: &mut dyn FnMut(&str),
 ) -> Result<CoverageStatus> {
     let (rep_hash, meta_save_path, category) = matched_member;
+    // 挂回前先核对：下载回来的必须就是刚上传的新种（hash 对得上），
+    // 分片结构也必须和本地源种一致；否则宁可落人工，不往 qB 里塞错种。
+    let target_hash = bencode::info_hash_v1(tdata).context("目标种缺少 v1 info hash")?;
+    if let Some(expected) = expected_hash {
+        if target_hash != expected {
+            bail!(
+                "下载回的目标种 hash 与上传时构造的新 hash 不一致（期望 {expected}，实际 {target_hash}），拒绝挂回 qB"
+            );
+        }
+    }
+    let target_pieces = bencode::pieces_hash(tdata).context("目标种缺少 pieces，无法确认分片")?;
+    let local = qb
+        .export_torrent(&rep_hash)
+        .with_context(|| format!("导出本地源种 {rep_hash} 失败，无法核对分片"))?;
+    let local_pieces = bencode::pieces_hash(&local).context("本地源种缺少 pieces，无法核对分片")?;
+    if target_pieces != local_pieces {
+        bail!("目标种分片与本地源种不一致，无法跨种做种，拒绝挂回 qB");
+    }
     // 同 hash 绝不碰原种子：qB 不允许同 hash 两条，提前判掉，连 add 请求都不发
-    let target_hash = bencode::info_hash_v1(tdata).unwrap_or_default();
-    if !target_hash.is_empty() && matches!(qb.torrent_progress(&target_hash), Ok(Some(_))) {
+    if matches!(qb.torrent_progress(&target_hash), Ok(Some(_))) {
         let note = "目标种与下载器已有种子 info hash 相同；按策略不改动原种子，跳过该站";
         write_cell(
             index,
@@ -5321,14 +5483,25 @@ fn push_target_torrent(
         add.id
     };
     let _ = qb.set_paused(&[&site_hash], false);
-    // 单 tracker 铁律（ARCH §3.3）：新种挂回后 tracker 列表长度必须为 1。
-    // 读不到列表（网络/404 形态）只记日志放行；读到多条即中止，绝不追加 announce。
-    match qb.tracker_count(&site_hash) {
-        Ok(1) => {}
-        Ok(n) => bail!(
-            "单 tracker 策略：新种挂回下载器后 tracker 数量为 {n}，必须为 1；中止（不追加 announce、不补挂 tracker）"
-        ),
-        Err(e) => log(&format!("tracker 数量核对跳过：{e:#}")),
+    // 单站点铁律（ARCH §3.3）：挂回后的 tracker 必须全部属于目标站。
+    // 站点自己的种子偶尔带两条同站 announce（例如 hdvideo 的 tracker.hdvideo.top
+    // 和 hdvideo.top），这不是多站合并，保留原样；只要出现别的站就中止。
+    // 读不到列表（网络/404 形态）只记日志放行；绝不追加 announce。
+    match qb.trackers(&site_hash) {
+        Ok(urls) if urls.is_empty() => bail!("新种挂回下载器后没有可用 tracker；中止"),
+        Ok(urls) => {
+            let Some(site) = cfg.sites.iter().find(|s| s.id == req.target_site) else {
+                bail!("目标站 {} 不在配置里，无法核对 tracker", req.target_site);
+            };
+            ensure_trackers_on_site(site, &urls)?;
+            if urls.len() > 1 {
+                log(&format!(
+                    "目标种自带 {} 条同站 announce，保留站点原始 tracker 列表",
+                    urls.len()
+                ));
+            }
+        }
+        Err(e) => log(&format!("tracker 列表核对跳过：{e:#}")),
     }
     log("已加入下载器并启动校验…");
     let poll = cfg.coverage.verify_poll_sec.max(1);
@@ -7235,6 +7408,82 @@ Language : Chinese"));
         let links = extract_posted_links(body, "https://x.example/takeupload.php", &base);
         assert!(links.detail.is_none());
         assert!(links.download.is_none());
+    }
+
+    #[test]
+    fn tracker_check_allows_same_site_aliases_but_rejects_foreign() {
+        let site = SiteConf {
+            id: "hdvideo".into(),
+            name: "HDVideo".into(),
+            url: "https://hdvideo.top/".into(),
+            announce_hosts: vec!["hdvideo.top".into()],
+            announce_url: None,
+            framework: crate::sites::Framework::NexusPHP,
+            search_url: None,
+            api_key: None,
+        };
+        let same_site = vec![
+            "https://tracker.hdvideo.top/announce.php?passkey=a".to_string(),
+            "https://hdvideo.top/announce.php?passkey=a".to_string(),
+        ];
+        assert!(ensure_trackers_on_site(&site, &same_site).is_ok());
+        let foreign = vec!["https://tracker.other.example/announce".to_string()];
+        assert!(ensure_trackers_on_site(&site, &foreign).is_err());
+        assert!(ensure_trackers_on_site(&site, &[]).is_err());
+    }
+
+    #[test]
+    fn unresolved_after_site_persists_review_pending_not_failed() {
+        let path = std::env::temp_dir().join(format!(
+            "bsend-unresolved-{}-{}.json",
+            std::process::id(),
+            now_unix()
+        ));
+        let seed = serde_json::json!({
+            "contents": {
+                "m:test": {
+                    "name": "x",
+                    "totalSize": 1,
+                    "fileCount": 0,
+                    "manifestDigest": "",
+                    "torrents": {},
+                    "trackerHosts": [],
+                    "firstSeen": 0,
+                    "goneSince": null,
+                    "coverage": {},
+                    "source": null,
+                    "forbidReseed": false
+                }
+            }
+        });
+        std::fs::write(&path, seed.to_string()).unwrap();
+        let mut index = ContentIndex::load(&path);
+        let out = unresolved_after_site(
+            &mut index,
+            "m:test",
+            "hdvideo",
+            "posted_unresolved",
+            Some("https://hdvideo.top/details.php?id=1".into()),
+            "站上已发布，但挂回 qB 失败",
+        )
+        .unwrap();
+        match out {
+            ReseedOutcome::Duplicate(d) => {
+                assert_eq!(d.status, CoverageStatus::ReviewPending);
+                assert!(d.note.starts_with("posted_unresolved"));
+                assert!(d.note.contains("勿重发"));
+            }
+            other => panic!("expected duplicate outcome, got {other:?}"),
+        }
+        let reloaded = ContentIndex::load(&path);
+        let cell = &reloaded.contents["m:test"].coverage["hdvideo"];
+        assert_eq!(cell.status, CoverageStatus::ReviewPending);
+        assert!(cell
+            .note
+            .as_deref()
+            .unwrap_or("")
+            .starts_with("posted_unresolved"));
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

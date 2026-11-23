@@ -35,6 +35,8 @@
 - 转种链路改为单种子单站点：从 qB 导出源种后字节级改写 tracker、删 `announce-list`、
   写目标站专属 `info.source` 生成新 hash；上传后从目标站下载 `.torrent` 独立挂回 qB，
   不再调用 `addTrackers`，也不把多个站的 announce 合并进同一个种子。
+- 新增 `bsend reattach --site <id> --url <详情页>`：补挂站上已发布、qB 未挂回的种子；
+  `--key` 指定内容，`--file` 在站点拒绝下载时给本地构造的 `.torrent`。
 
 ### Changed
 
@@ -66,6 +68,17 @@
   只改简介、不换种子文件；`scripts/fix-bbcode-descr.py` 保留为可重复执行的维护脚本。
 - GUI 概览页 clippy：`sort_by` 改 `sort_by_key(Reverse(...))`，图例查找去掉多余借用。
 
+- 发后挂回不再把“站上已发、qB 没挂上”记成发种失败：下载目标种失败、hash/pieces 校验
+  不过或挂回 qB 失败时，格子落 `review_pending`，note 前缀 `posted_unresolved` /
+  `existed_unresolved`，不进退避、不占发布额度。
+- 挂回后 tracker 校验从“数量必须 == 1”改为“每条 tracker 的 host 都必须属于目标站”：
+  站点自己的种子带多条同站 announce（如 hdvideo 的 `tracker.hdvideo.top` + `hdvideo.top`）
+  原样保留，出现别站 host 才中止。
+- 挂回前新增目标种校验：新发种下载回来的 `.torrent` 必须等于上传构造的新 hash；
+ 目标种 pieces 必须与本地源种一致，否则拒绝加入 qB。
+- hdvideo 78856、panda 141276、qilin 479362 三条历史“站上已发、qB 未挂回”已补挂，
+  qB 校验 100%、tracker 正常（hdvideo 站点种自带双 announce，panda/qilin 各 1 条）；
+  qilin 站点审核仍显示“缺图”，不影响做种。
 - 发后定位不再取回包里的第一条详情链接：详情和下载必须按 id 配对，最终跳转是详情页时优先用它；
   详情和下载 id 对不上就留空转 `posted_unresolved`，避免把成功页里的相关旧种（hdvideo 14469）挂进 qB。
   `userdetails.php?id=` 也不再被当成种子详情。
@@ -79,6 +92,8 @@
   `--limit` 在演练下限制审阅条数（此前不生效，会跑完全部草稿）。
 - 站内判重命中（同分片）/ 上传回包 existed 时，下载目标种并推入下载器做种
   （此前只记「已覆盖/待确认」，qB 里没有目标站 tracker）。
+- qB 真值匹配补 qilin 的 announce 别名 `tracker.hdkyl.in`：页面在 `www.hdkyl.in`，
+  tracker 在子域，之前 664 条已有 qilin tracker 的内容被误算成缺口。
 - GUI 双击启动：配置文件默认回退到 `%LOCALAPPDATA%\BoxSend\boxsend.json`；
   加载失败弹可见错误框（此前无控制台，双击后静默退出）。
 - **自动发种改为「审阅产物直发」**（BUG-M7）：发布检查通过后直接把 `ReviewReport`

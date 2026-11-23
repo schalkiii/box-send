@@ -187,6 +187,8 @@ fn qb_server(
     adds: CapturedRequests,
 ) -> MockSite {
     let present = Arc::new(AtomicBool::new(false));
+    let added_hash: Arc<std::sync::Mutex<Option<String>>> = Arc::new(std::sync::Mutex::new(None));
+    let added_for_add = added_hash.clone();
     MockSite::start(Arc::new(move |method, path, body| {
         let lh = local_hash.as_ref();
         let th = target_hash.as_ref();
@@ -198,14 +200,31 @@ fn qb_server(
         }
         if path.starts_with("/api/v2/torrents/info") {
             if path.contains("hashes=") {
+                let new_hash = added_hash.lock().unwrap().clone();
+                if let Some(ref nh) = new_hash {
+                    if path.contains(nh.as_str()) {
+                        let json = format!(
+                            r#"[{{"hash":"{nh}","progress":1.0,"state":"pausedUP","up_limit":-1,"name":"Pack","save_path":"/data/"}}]"#
+                        );
+                        return (200, "application/json", json.into_bytes());
+                    }
+                }
                 if path.contains(th.as_str()) && !present.load(Ordering::SeqCst) {
                     return (200, "application/json", b"[]".to_vec());
                 }
-                let hash = if path.contains(th.as_str()) { th } else { lh };
-                let json = format!(
-                    r#"[{{"hash":"{hash}","progress":1.0,"state":"pausedUP","up_limit":-1,"name":"Pack","save_path":"/data/"}}]"#
-                );
-                return (200, "application/json", json.into_bytes());
+                if path.contains(th.as_str()) {
+                    let json = format!(
+                        r#"[{{"hash":"{th}","progress":1.0,"state":"pausedUP","up_limit":-1,"name":"Pack","save_path":"/data/"}}]"#
+                    );
+                    return (200, "application/json", json.into_bytes());
+                }
+                if path.contains(lh.as_str()) {
+                    let json = format!(
+                        r#"[{{"hash":"{lh}","progress":1.0,"state":"pausedUP","up_limit":-1,"name":"Pack","save_path":"/data/"}}]"#
+                    );
+                    return (200, "application/json", json.into_bytes());
+                }
+                return (200, "application/json", b"[]".to_vec());
             }
             let json = format!(
                 r#"[{{"hash":"{lh}","infohash_v2":"","name":"Pack","save_path":"/data/","category":"","tags":"","size":105,"progress":1.0,"tracker":"http://localhost/announce?passkey=ZZZ","tracker_hosts":[]}}]"#
@@ -233,6 +252,9 @@ fn qb_server(
         if path.starts_with("/api/v2/torrents/add") {
             assert_eq!(method, "POST");
             adds.lock().unwrap().push((path.to_string(), body.to_vec()));
+            if let Some(file) = multipart_file(body) {
+                *added_for_add.lock().unwrap() = bencode::info_hash_v1(&file);
+            }
             present.store(true, Ordering::SeqCst);
             return (200, "text/plain", b"Ok.".to_vec());
         }
@@ -270,7 +292,9 @@ Height : 1080 pixels</pre>
 /// details page + downloadable (different pieces) torrent; plain upload form;
 /// takeupload returns a success page with the new detail link.
 fn tgt_server(torrent: Arc<Vec<u8>>, uploads: CapturedRequests) -> MockSite {
-    MockSite::start(Arc::new(move |_method, path, _body| {
+    let uploaded: Arc<std::sync::Mutex<Option<Vec<u8>>>> = Arc::new(std::sync::Mutex::new(None));
+    let uploaded_for_upload = uploaded.clone();
+    MockSite::start(Arc::new(move |_method, path, body| {
         if path.starts_with("/torrents.php") {
             // IMDb-area lookup (search_area=4) must miss; the name search below hits.
             if path.contains("search_area=4") {
@@ -292,7 +316,12 @@ Height : 1080</pre>
             return (200, "text/html", html.into_bytes());
         }
         if path.starts_with("/download.php") {
-            return (200, "application/x-bittorrent", torrent.as_ref().clone());
+            let picked = uploaded
+                .lock()
+                .unwrap()
+                .clone()
+                .unwrap_or_else(|| torrent.as_ref().clone());
+            return (200, "application/x-bittorrent", picked);
         }
         if path.starts_with("/upload.php") {
             let form = r#"<html><body><form action="takeupload.php" method="post" enctype="multipart/form-data">
@@ -307,7 +336,13 @@ Height : 1080</pre>
             return (200, "text/html", form.as_bytes().to_vec());
         }
         if path.starts_with("/takeupload.php") {
-            uploads.lock().unwrap().push((path.to_string(), Vec::new()));
+            uploads
+                .lock()
+                .unwrap()
+                .push((path.to_string(), body.to_vec()));
+            if let Some(file) = multipart_file(body) {
+                *uploaded_for_upload.lock().unwrap() = Some(file);
+            }
             let html = format!(r#"<p>发布成功</p><a href="details.php?id=1002">{NAME}</a>"#);
             return (200, "text/html", html.into_bytes());
         }
@@ -573,4 +608,32 @@ fn other_version_stops_when_disabled() {
     );
     let cell = &index.contents[key].coverage["hdsky"];
     assert_eq!(cell.status, CoverageStatus::OtherVersion, "{cell:?}");
+}
+
+/// 从 multipart 请求体里取 `name="file"` 的种子字节（站点上传表单的字段名）。
+fn multipart_file(body: &[u8]) -> Option<Vec<u8>> {
+    let first_line_end = body.windows(2).position(|w| w == b"\r\n")?;
+    let boundary = &body[..first_line_end];
+    let delim = [b"\r\n".as_slice(), boundary].concat();
+    let mut rest = body;
+    while let Some(pos) = rest
+        .windows(delim.len())
+        .position(|w| w == delim.as_slice())
+    {
+        rest = &rest[pos + delim.len()..];
+        let part = rest.strip_prefix(b"\r\n").unwrap_or(rest);
+        if part.starts_with(b"--") {
+            break;
+        }
+        let Some(hdr_end) = part.windows(4).position(|w| w == b"\r\n\r\n") else {
+            continue;
+        };
+        let headers = String::from_utf8_lossy(&part[..hdr_end]);
+        if headers.contains("name=\"file\"") || headers.contains("name=\"torrents\"") {
+            let data = &part[hdr_end + 4..];
+            let data = data.strip_suffix(b"\r\n").unwrap_or(data);
+            return Some(data.to_vec());
+        }
+    }
+    None
 }

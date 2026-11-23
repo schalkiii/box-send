@@ -72,8 +72,8 @@ status / at / url / note / verifyHash
 | `skipped_duplicate` | 目标站已经有同分片条目，不是站点拒绝上传 |
 | `same_hash_skip` | 目标种子和 qB 已有种子完全同 hash，不改原种子 |
 | `other_version` | 站上同内容但分片不同，不是“重复” |
-| `existed_pending` | 回包说重复，但回包里没有可核对的详情页/下载链接；回包 id 经常是错的 |
-| `posted_unresolved` | 上传很像成功，但回包里没有可核对的详情页/下载链接；待人工确认，不记失败、不进退避、不占发布额度 |
+| `existed_pending` | 回包说重复，但回包里没有可核对的详情页/下载链接；回包 id 经常是错的。note 以 `existed_unresolved` 开头时，表示站上已有、下载/挂回 qB 失败 |
+| `posted_unresolved` | 站上已发布（新发或 existed），但下载目标种、校验或挂回 qB 失败；待人工补挂，不记失败、不进退避、不占发布额度 |
 | `wait_source` | 没有任何可用成员种子，导不出源文件 |
 | `review_pending` | 站上命中了，但清单或 hash 对不上，等人核对 |
 
@@ -193,6 +193,22 @@ cargo build --release -p bsend-cli
 ```
 
 `--dry-run` 是试运行：会连站点做审阅和发布检查，但不上传、不写覆盖记录。
+
+补挂站上已发、qB 里没有的记录（不重发、不占发布额度）：
+
+```powershell
+# 详情页可下载：自动拉详情页、下载目标种、按 pieces 找本地内容并挂回
+.\target\release\bsend.exe --config "$env:LOCALAPPDATA\BoxSend\boxsend.json" reattach `
+  --site hdvideo --url https://hdvideo.top/details.php?id=78856
+
+# 索引里同一内容有多条、或要指定内容：加 --key
+... reattach --site qilin --url https://www.hdkyl.in/details.php?id=479362 --key m:5826983b00126e58
+
+# 站点拒绝下载：用 qB 导出后改 source/announce 构造的本地 .torrent
+... reattach --site qilin --url https://www.hdkyl.in/details.php?id=479362 --file .\qilin-built.torrent
+```
+
+`reattach` 只核对 hash/pieces 和挂回 qB，不会调用上传接口；目标种 pieces 与本地内容对不上会直接拒绝。
 
 ## 7. 发布相关配置
 
