@@ -426,6 +426,7 @@ fn cmd_status(cfg: &Config) -> Result<()> {
     let mut member_torrents = 0usize;
     let mut gone = 0usize;
     let mut resolved_sources = 0usize;
+    let mut posted_unresolved = 0usize;
     let mut drafts = Vec::new();
     let mut pending_by_status: BTreeMap<CoverageStatus, usize> = BTreeMap::new();
     for e in index.contents.values() {
@@ -438,6 +439,14 @@ fn cmd_status(cfg: &Config) -> Result<()> {
         }
         for (site, cell) in &e.coverage {
             *by_status.entry(cell.status).or_insert(0) += 1;
+            if cell.status == CoverageStatus::ReviewPending
+                && cell
+                    .note
+                    .as_deref()
+                    .is_some_and(|n| n.starts_with("posted_unresolved"))
+            {
+                posted_unresolved += 1;
+            }
             match cell.status {
                 CoverageStatus::ReseedDraft => {
                     drafts.push(format!("「{}」→ {}", e.name, site));
@@ -522,6 +531,11 @@ fn cmd_status(cfg: &Config) -> Result<()> {
     println!("覆盖分布：");
     for (st, n) in &by_status {
         println!("  {} {}", st.label(), n);
+    }
+    if posted_unresolved > 0 {
+        println!(
+            "  其中发后未解决：{posted_unresolved}（站上可能已发、qB 未挂回；按详情页手工核对，勿重发）"
+        );
     }
 
     // 草稿按白名单拆分：未启用组只计数、不改覆盖记录，不算待发

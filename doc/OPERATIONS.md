@@ -77,6 +77,8 @@ status / at / url / note / verifyHash
 | `wait_source` | 没有任何可用成员种子，导不出源文件 |
 | `review_pending` | 站上命中了，但清单或 hash 对不上，等人核对 |
 
+`bsend status` 有这类记录时，会在“覆盖分布”下面单独给出“其中发后未解决 N”，只统计 note 以 `posted_unresolved` 开头的条目；它和普通 `review_pending` 不是一回事，不能拿普通待核对的处置方式去重发。
+
 ## 3. 覆盖率怎么读
 
 `status` 和 `report` 的主口径已经从“判过多少”改成“qB 里有没有”：
