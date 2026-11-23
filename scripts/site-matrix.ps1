@@ -267,7 +267,7 @@ if ($untested.Count -eq 0) {
 [void]$sb.AppendLine('- **停转种**：`reseedPausedSites`，辅种仍做、只停转种/发布。')
 [void]$sb.AppendLine('- **实测**：最近一次 `bsend sites` 记录的上传页演练结论（`ok`/`fail`/未测）；只拉 `upload.php` 核对字段，绝不 POST。')
 [void]$sb.AppendLine('- **formcheck**：`formcheck.json` 每站最新一条的字段核对结论与规模：`结论·字段数f/下拉数s·硬缺N`。')
-[void]$sb.AppendLine('- **pieces**：站点种子分片格式兼容性（`ok` / `unsupported` / 未测）。')
+[void]$sb.AppendLine('- **pieces**：目标站 `POST /api/pieces-hash` 分片反查通道（`ok` / `unsupported` / 未测）；`unsupported` 只影响源种精确定位，不阻断直接发种。')
 [void]$sb.AppendLine('- **cookie**：`cookies.json` 中该 host 的 cookie 条数（只显示数量，不显示值）。')
 $text = $sb.ToString()
 

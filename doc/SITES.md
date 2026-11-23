@@ -81,10 +81,10 @@ tjupt, ubits, xingyunge
 - **只停发种**：`reseedPausedSites`，辅种照常；
 - **表单检查**：最近一次 `formcheck` 的结论，`ok` 表示能拿到表单，`fail` 表示拿不到，`gap` 表示表单有缺口，`未测` 表示没查过；
 - **检查结论**：那次检查的具体原因；
-- **分片校验**：`ok` 表示能用分片比对，`unsupported` 表示当前不支持，“未测”表示还没验证；
+- **pieces 反查**：`ok` 表示站点实现了 `POST /api/pieces-hash`，可用分片 hash 精确定位源种；`unsupported` 表示站点没有这个接口（404/405），只是退回名字检索；`未测` 表示还没验证。它不决定能否直接发种，挂回前仍会下载目标种核对 pieces 与 `info.name`；
 - **Cookie 数**：本地保存的该站 Cookie 条数，不是登录状态。
 
-| 站点 | 名称 | 域名 | 站点程序 | 参与扫描 | 整站暂停 | 只停发种 | 表单检查 | 检查结论 | 分片校验 | Cookie 数 | 备注 |
+| 站点 | 名称 | 域名 | 站点程序 | 参与扫描 | 整站暂停 | 只停发种 | 表单检查 | 检查结论 | pieces 反查 | Cookie 数 | 备注 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | btschool | 学校 | pt.btschool.club | NexusPHP | 是 | — | 是 | fail | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://pt.btschool.club/upload.php | unsupported | 6 |  |
 | carpt | 车站 | carpt.net | NexusPHP | 是 | — | 是 | fail | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://carpt.net/upload.php | ok | 5 |  |
