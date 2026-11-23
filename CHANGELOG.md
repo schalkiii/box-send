@@ -37,15 +37,17 @@
   不再调用 `addTrackers`，也不把多个站的 announce 合并进同一个种子。
 - 新增 `bsend reattach --site <id> --url <详情页>`：补挂站上已发布、qB 未挂回的种子；
   `--key` 指定内容，`--file` 在站点拒绝下载时给本地构造的 `.torrent`。
-- 2026-11-23 首次向 `ptba`、`cspt`、`dubhe`、`ptsbao`、`crabpt`、`hdbao`、`tey`、`oshen`、`ptfans` 发种（hdbao 2 条，其余各 1 条）
-  并挂回：九站都出现站上 hash 与上传构造 hash 不同（ptba 已确认是 `info.source` 被改写，
-  cspt/dubhe/ptsbao/crabpt/hdbao/tey/oshen/ptfans 具体字段未逐字节核对）；按 pieces + `info.name`
+- 2026-11-23 首次向 `ptba`、`cspt`、`dubhe`、`ptsbao`、`crabpt`、`hdbao`、`tey`、`oshen`、`ptfans`、`itzmx` 发种（hdbao 2 条，其余各 1 条）
+  并挂回：十站都出现站上 hash 与上传构造 hash 不同（ptba 已确认是 `info.source` 被改写，
+  cspt/dubhe/ptsbao/crabpt/hdbao/tey/oshen/ptfans/itzmx 具体字段未逐字节核对）；按 pieces + `info.name`
   校验后补挂成功，qB 校验 100%。hdbao 的 `autopost --limit 1` 曾连发两条，已修：
   `posted_unresolved` 也是一次上传，必须计入 limit。tey 的 qB 老种走 `tracker.tey.cc`，
   已补 announce 别名，qB 已有从 0 变 5，新种挂回后为 6；该站 `medium_sel` 没有 Blu-ray 档，
   蓝光/Remux 会被选档门禁拦，HDTV/WEB-DL 可发，新种当前状态“未审”。oshen 前两次站点抖动，
   第三次恢复并发布，详情 `57082`，qB 校验 100%；ptfans 上传页/判重回稳后一次通过，
-  详情 `11111`，qB 校验 100%。
+  详情 `11111`，qB 校验 100%。itzmx 的 torrent 文件上限为 `266,240 bytes`，大合集候选会被拒；
+  改用 `ubits` 源的《Liar Game》小种（源种 96,934 bytes）首次发布 `13134` 并挂回，
+  qB 校验 100%，详情页无“完结/中字”标签，需人工补。
 
 ### Changed
 
@@ -115,8 +117,11 @@
   片源词错填成「电影-WEB-DL」；type 选完后再按父子关系填，实测《知否》选到「剧集-大陆」。
 - 新站首次实发暴露的 cspt tracker 别名 `tracker.cspt.cc` 已补；不补时目标种加进 qB 后
   会被“非目标站 tracker”校验中止，补挂失败。
-- 其余未打通站：`itzmx` 两条大合集上传都被站点前置 Kangle 以 `input filter` 403 拒绝；
-  `ptfans` 上传页和 IMDb 判重搜索都超时。两者都没上传、没写覆盖记录，待换候选或站点恢复。
+- 其余未打通站：`itzmx` 早期大合集上传被 Kangle 以 `input filter` 403 拒绝，后续确认真正门槛是
+  torrent 文件超过 `266,240 bytes`，已换小种打通（见上）；`ptfans` 上传页和 IMDb 判重搜索此前都超时，
+  站点恢复后已一次通过，两者都已补挂成功。
+- 上传错误文本提取的 UTF-8 切片 panic：错误文本含中文时，`body[p..p+120]` 会切在字符中间导致进程
+  崩溃；改为 `floor_char_boundary` 并新增回归测试 `error_extraction_does_not_split_utf8`。
 - GUI 双击启动：配置文件默认回退到 `%LOCALAPPDATA%\BoxSend\boxsend.json`；
   加载失败弹可见错误框（此前无控制台，双击后静默退出）。
 - **自动发种改为「审阅产物直发」**（BUG-M7）：发布检查通过后直接把 `ReviewReport`
