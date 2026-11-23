@@ -104,7 +104,7 @@ qB 没有 tracker，也不等于站上一定没发过。可能是站上已经有
 
 `info.source` 是种子信息块里的来源标记，PT 站通常用它区分不同站的同内容种子。写入目标站的值以后，新种子的 info hash 会和源种子不同，qB 才能把两份种子同时挂住。
 
-少数站点在 `takeupload.php` 阶段会自己改写种子元信息（1ptba 已逐字节确认是把 `info.source` 写成 `[1ptba.com] 1PTBA.COM`；cspt、dubhe、ptsbao、crabpt、hdbao 实测也出现 hash 差异，pieces 和 `info.name` 未变，但具体改写字段没有逐字节核对），此时站上返回的 hash 和本地构造的 hash 必然不同。程序默认仍要求 hash 相等；只有实测确认的站点白名单、且 pieces 与 `info.name` 都一致时才放行，并在日志里写明原因。
+少数站点在 `takeupload.php` 阶段会自己改写种子元信息（1ptba 已逐字节确认是把 `info.source` 写成 `[1ptba.com] 1PTBA.COM`；cspt、dubhe、ptsbao、crabpt、hdbao、tey 实测也出现 hash 差异，pieces 和 `info.name` 未变，但具体改写字段没有逐字节核对），此时站上返回的 hash 和本地构造的 hash 必然不同。程序默认仍要求 hash 相等；只有实测确认的站点白名单、且 pieces 与 `info.name` 都一致时才放行，并在日志里写明原因。
 
 ### 5.4 目标站的 tracker 地址从哪来
 
@@ -139,7 +139,7 @@ qB 没有 tracker，也不等于站上一定没发过。可能是站上已经有
 
 上传成功后，从目标站下载刚发布的 `.torrent`，作为一份**独立种子**加进 qB。上传回包里的 `details.php?id=` 不能单独当证据：成功页常混着侧边栏的相关旧种，实测直接取第一条会挂错。程序现在按 id 配对详情和下载链接，最终跳转是详情页时优先用它；只有一类链接时用唯一那条；详情和下载的 id 对不上就两个都不用，记 `posted_unresolved` 待人工确认。
 
-挂回前还要过两道校验：下载回来的目标种 `info hash` 默认必须等于上传时构造的新 hash（判重/existed 路径没有“新 hash”，只核对 pieces）；目标种 pieces 必须与本地源种一致。已知会改写 `info.source` 的站（ptba、cspt、dubhe、ptsbao、crabpt、hdbao）只有在 pieces 和 `info.name` 都一致时才放行 hash 差异，其他站仍拒绝；任何一条不满足就拒绝挂回，宁可人工处理，不往 qB 塞错种。
+挂回前还要过两道校验：下载回来的目标种 `info hash` 默认必须等于上传时构造的新 hash（判重/existed 路径没有“新 hash”，只核对 pieces）；目标种 pieces 必须与本地源种一致。已知会改写 `info.source` 的站（ptba、cspt、dubhe、ptsbao、crabpt、hdbao、tey）只有在 pieces 和 `info.name` 都一致时才放行 hash 差异，其他站仍拒绝；任何一条不满足就拒绝挂回，宁可人工处理，不往 qB 塞错种。
 
 站点上其实已经发布（新发成功或 existed），但下载目标种、校验或挂回 qB 失败时，不记发种失败：格子落 `ReviewPending`，note 前缀 `posted_unresolved` 或 `existed_unresolved`，不进退避、不占发布额度，下一轮或人工按详情页补挂。
 
@@ -147,7 +147,7 @@ qB 没有 tracker，也不等于站上一定没发过。可能是站上已经有
 
 挂回 qB 时沿用源内容的保存目录，并处理“多文件种子是否带根目录”的差异，否则 qB 会新建一个空目录，校验一直是 0%。这部分见 7.2。
 
-挂回后核对 tracker：全部 tracker 的 host 必须属于目标站。站点自己的种子偶尔带两条同站 announce（例如 hdvideo 的 `tracker.hdvideo.top` 和 `hdvideo.top`），这不是多站合并，保留站点原样；只要出现别的站 host 就中止，不补挂、不改原种子。`host_matches` 会把 `www.` 剥掉再比，并认站点配置里的 announce 别名；例如 cspt 页面在 `cspt.top`、种子 tracker 在 `tracker.cspt.cc`，不补别名会被误判成别站。
+挂回后核对 tracker：全部 tracker 的 host 必须属于目标站。站点自己的种子偶尔带两条同站 announce（例如 hdvideo 的 `tracker.hdvideo.top` 和 `hdvideo.top`），这不是多站合并，保留站点原样；只要出现别的站 host 就中止，不补挂、不改原种子。`host_matches` 会把 `www.` 剥掉再比，并认站点配置里的 announce 别名；例如 cspt 页面在 `cspt.top`、种子 tracker 在 `tracker.cspt.cc`，tey 页面在 `pt.tey.cc`、种子 tracker 在 `tracker.tey.cc`，不补别名会被误判成别站或 qB 覆盖 0。
 
 ### 5.7 校验
 

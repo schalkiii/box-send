@@ -72,6 +72,8 @@ pub struct SiteDef {
 /// - pthome：页面在 `www.pthome.net`，announce 在 `t.pthome.org`（411 条种子）；
 /// - agsvpt：页面在 `agsvpt.com`，announce 在 `tracker.agsvpt.cn`（806 条种子）；
 /// - cspt：页面在 `cspt.top`，站上种子的 announce 在 `tracker.cspt.cc`。
+/// - tey：页面在 `pt.tey.cc`，qB 里 5 条种子全走 `tracker.tey.cc`；
+///   不补别名会误判成「qB 覆盖 0」，连 passkey 都抄不到。
 ///
 /// 不补这些别名，「已在做种」预筛会把它们当成未覆盖去逐站检索（hdsky 那种 60 秒/次的站，
 /// 代价极高）。配置里 `overrides.announceHosts` 可以再追加（GUI 写的配置没有这一项也能跑）。
@@ -88,6 +90,7 @@ pub fn extra_announce_hosts(site_id: &str) -> &'static [&'static str] {
         "pthome" => &["t.pthome.org"],
         "agsvpt" => &["tracker.agsvpt.cn"],
         "cspt" => &["tracker.cspt.cc"],
+        "tey" => &["tracker.tey.cc"],
         _ => &[],
     }
 }
@@ -95,13 +98,13 @@ pub fn extra_announce_hosts(site_id: &str) -> &'static [&'static str] {
 /// 该站发布后会不会改写种子元信息，导致目标种 hash 与上传构造的 hash 不同。
 ///
 /// 只认实机验证过的站：1ptba 的 takeupload.php 会把 `info.source` 改成
-/// `[1ptba.com] 1PTBA.COM`；cspt、dubhe、ptsbao、crabpt、hdbao 实测也出现 hash 差异，
-/// pieces 和 `info.name` 未变，但具体被改写的字段没有逐字节核对。挂回时按分片+标题校验放行，
+/// `[1ptba.com] 1PTBA.COM`；cspt、dubhe、ptsbao、crabpt、hdbao、tey 实测也出现 hash
+/// 差异，pieces 和 `info.name` 未变，但具体被改写的字段没有逐字节核对。挂回时按分片+标题校验放行，
 /// 仍拒绝分片不一致的种。不能把它推广成「hash 不一致就放行」，否则会把别的版本塞进 qB。
 pub fn allows_target_hash_rewrite(site_id: &str) -> bool {
     matches!(
         site_id,
-        "ptba" | "cspt" | "dubhe" | "ptsbao" | "crabpt" | "hdbao"
+        "ptba" | "cspt" | "dubhe" | "ptsbao" | "crabpt" | "hdbao" | "tey"
     )
 }
 
@@ -1278,6 +1281,7 @@ mod tests {
         assert!(extra_announce_hosts("pthome").contains(&"t.pthome.org"));
         assert!(extra_announce_hosts("agsvpt").contains(&"tracker.agsvpt.cn"));
         assert!(extra_announce_hosts("cspt").contains(&"tracker.cspt.cc"));
+        assert!(extra_announce_hosts("tey").contains(&"tracker.tey.cc"));
         assert!(extra_announce_hosts("hdsky").is_empty());
     }
 
@@ -1289,6 +1293,7 @@ mod tests {
         assert!(allows_target_hash_rewrite("ptsbao"));
         assert!(allows_target_hash_rewrite("crabpt"));
         assert!(allows_target_hash_rewrite("hdbao"));
+        assert!(allows_target_hash_rewrite("tey"));
         assert!(!allows_target_hash_rewrite("hdvideo"));
         assert!(!allows_target_hash_rewrite("qilin"));
     }

@@ -161,15 +161,15 @@ luckpt 的候选规则（**还没有写进 `boxsend.json`**）：
 ### 6.5 agsvpt、tey
 
 - agsvpt：提交域和登录域不一致，返回“你没有该权限”并跳登录页，建议剔除。
-- tey：发布检查报 `medium_sel` 没选，不是站点拒绝；补质量档规则后再评估。
+- tey：发布检查曾报 `medium_sel` 没选，根因是该站 `medium_sel[4]` 只有 WEB-DL/HDTV/DVDR/CD/Track，蓝光/Remux 源没有对应项；HDTV/WEB-DL 源可正常选档。2026-11-23 已用 HDTV 源实发成功，见 6.7。
 
 ### 6.6 qilin 和 panda
 
 站上其实已经发布（qilin 479362、panda 141276），但旧逻辑拿旧种或错误详情页当结果，记成了失败；新 hash 不在 qB。这是发后定位错误，不是上传失败。新版流程已经改成从回包正文/跳转里按 id 配对详情和下载链接，再下载目标种独立挂回；发后定位缺陷已修（见 `ROADMAP.md` 4.3）。2026-11-23 已补挂：qilin 479362（hash `bd348dfc…`，站点审核仍显示缺图，不影响做种）、panda 141276（hash `3f8ed774…`），两条 qB 校验 100%。
 
-### 6.7 2026-11-23 新实发：ptba、cspt、dubhe、ptsbao、crabpt、hdbao
+### 6.7 2026-11-23 新实发：ptba、cspt、dubhe、ptsbao、crabpt、hdbao、tey
 
-六站都是第一次向目标站发种，上传本身成功；站上返回的 `.torrent` hash 与本地上传构造的 hash 不同。ptba 已确认是站点改写了 `info.source`；cspt、dubhe、ptsbao、crabpt、hdbao 的 pieces 和 `info.name` 未变，但具体改写字段没有逐字节核对。程序默认拒绝 hash 不一致；六站经 pieces 和 `info.name` 核对后加入白名单，后续同站发种直接放行，不再落 `posted_unresolved`。
+七站都是第一次向目标站发种，上传本身成功；站上返回的 `.torrent` hash 与本地上传构造的 hash 不同。ptba 已确认是站点改写了 `info.source`；cspt、dubhe、ptsbao、crabpt、hdbao、tey 的 pieces 和 `info.name` 未变，但具体改写字段没有逐字节核对。程序默认拒绝 hash 不一致；七站经 pieces 和 `info.name` 核对后加入白名单，后续同站发种直接放行，不再落 `posted_unresolved`。
 
 - **ptba**：源 `luckpt` 的 `金枝欲孽`（51.9 GB）→ `https://1ptba.com/details.php?id=106718`，站上 hash `abf41c82…`，构造 hash `4f8b63e2…`。站上 `info.source` 为 `[1ptba.com] 1PTBA.COM`，本地构造写的是 `ptba`。已用 `reattach` 补挂，qB 校验 100%。
 - **cspt**：源 `ptba` 的 `Mad Men S01-S07`（95.1 GB）→ `https://cspt.top/details.php?id=259870`，站上 hash `cf568e1a…`，构造 hash `516522da…`。第一次补挂被 tracker 校验拦住：站上种子的 announce 在 `tracker.cspt.cc`，页面域是 `cspt.top`，`extra_announce_hosts` 缺别名。补 `cspt => ["tracker.cspt.cc"]` 后重新补挂成功；站上种子自带两条同站 announce，保留原样。
@@ -177,8 +177,9 @@ luckpt 的候选规则（**还没有写进 `boxsend.json`**）：
 - **ptsbao**：源 `soulvoice` 的同一条《知否知否应是绿肥红瘦》→ `https://ptsbao.club/details.php?id=135787`，站上 hash `0b0087f7…`，构造 hash `bf6e43ae…`。`source_sel[1]` 是二级分类（`剧集-美剧` / `电影-WEB-DL`），旧逻辑会按“WEB-DL”错填成 `电影-WEB-DL`；已改成先识别二级分类、type 选完后再按父子关系填，实发时选到 `剧集-大陆(23)`。已用 `reattach` 补挂，qB 校验 100%；表单没有“完结”标签，发布后需要人工补。
 - **crabpt**：源 `hdsky` 的 `The Disguiser`（88.9 GB）→ `https://crabpt.vip/details.php?id=240242`，站上 hash `732e2c99…`，构造 hash `fe9204e8…`。此前候选《人民的名义》卡在源站 `hdfans` 502（6 小时退避），这次改选 `hdsky` 源后一次通过；站上已有同片 2160p 其他版本 214580，按策略继续发布。已用 `reattach` 补挂，qB 校验 100%。
 - **hdbao**：`autopost --sites hdbao --limit 1` 实际发了 2 条：源 `ptba` 的 `Mad Men S01-S07`（102.1 GB）→ `https://hdbao.cc/details.php?id=54402`，站上 hash `95eacf24…`，构造 hash `e88d740e…`；源 `hdfans` 的《人民的名义》（95.8 GB）→ `https://hdbao.cc/details.php?id=54403`，站上 hash `51ededb2…`，构造 hash `1f8a0104…`。两条都先落 `posted_unresolved`，`reattach` 后 qB 校验 100%。`--limit` 少算 `posted_unresolved` 的缺陷已修，后续同站不再连发。
+- **tey**：源 `hdsky` 的 `The Disguiser`（HDTV 1080p，82.8 GB）→ `https://pt.tey.cc/details.php?id=623`，站上 hash `c9570904…`，构造 hash `465916fd…`。该站 `medium_sel[4]` 没有 Blu-ray，蓝光/Remux 候选会被选档门禁拦住；这次改用 HDTV 源才通过。qB 里 5 条老种全走 `tracker.tey.cc`，页面域是 `pt.tey.cc`，补 announce 别名后 qB 覆盖从 0 变 5，也能抄到 passkey。上传回包同样没给详情链接，落 `posted_unresolved`；`reattach` 后 qB 校验 100%。新种在站上暂时显示“未审”，等站点审核。
 
-六站共同的结论：站点改写种子元信息是正常行为，不能把 hash 不一致一概当错种；但只对实测确认的站放行，且必须 pieces 和标题同时一致。新增站先按默认严格模式跑，出现 hash 不一致再核对，不要预先扩大白名单。
+七站共同的结论：站点改写种子元信息是正常行为，不能把 hash 不一致一概当错种；但只对实测确认的站放行，且必须 pieces 和标题同时一致。新增站先按默认严格模式跑，出现 hash 不一致再核对，不要预先扩大白名单。
 
 ### 6.8 2026-11-23 未打通的站：oshen、itzmx、ptfans
 

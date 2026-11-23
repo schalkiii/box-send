@@ -37,11 +37,13 @@
   不再调用 `addTrackers`，也不把多个站的 announce 合并进同一个种子。
 - 新增 `bsend reattach --site <id> --url <详情页>`：补挂站上已发布、qB 未挂回的种子；
   `--key` 指定内容，`--file` 在站点拒绝下载时给本地构造的 `.torrent`。
-- 2026-11-23 首次向 `ptba`、`cspt`、`dubhe`、`ptsbao`、`crabpt`、`hdbao` 发种（hdbao 2 条，其余各 1 条）
-  并挂回：六站都出现站上 hash 与上传构造 hash 不同（ptba 已确认是 `info.source` 被改写，
-  cspt/dubhe/ptsbao/crabpt/hdbao 具体字段未逐字节核对）；按 pieces + `info.name`
+- 2026-11-23 首次向 `ptba`、`cspt`、`dubhe`、`ptsbao`、`crabpt`、`hdbao`、`tey` 发种（hdbao 2 条、tey 1 条，其余各 1 条）
+  并挂回：七站都出现站上 hash 与上传构造 hash 不同（ptba 已确认是 `info.source` 被改写，
+  cspt/dubhe/ptsbao/crabpt/hdbao/tey 具体字段未逐字节核对）；按 pieces + `info.name`
   校验后补挂成功，qB 校验 100%。hdbao 的 `autopost --limit 1` 曾连发两条，已修：
-  `posted_unresolved` 也是一次上传，必须计入 limit。
+  `posted_unresolved` 也是一次上传，必须计入 limit。tey 的 qB 老种走 `tracker.tey.cc`，
+  已补 announce 别名，qB 已有从 0 变 5，新种挂回后为 6；该站 `medium_sel` 没有 Blu-ray 档，
+  蓝光/Remux 会被选档门禁拦，HDTV/WEB-DL 可发，新种当前状态“未审”。
 
 ### Changed
 
