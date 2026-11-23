@@ -1313,6 +1313,107 @@ pub fn build_upload_fields(
     (fields, picked, notes)
 }
 
+/// 站点专属的静态字段补齐。tjupt 的剧集分类在 `showcategorydetail.php?catid=402`
+/// 动态插入 `cname` / `ename` / `specificcat`，上传页静态 HTML 里没有这三个控件；
+/// 只提交通用字段会被 takeupload.php 以“上传失败！”拒绝。
+pub fn build_upload_fields_for_site(
+    info: &ReleaseInfo,
+    page: &str,
+    tags_wanted: &[&str],
+    site_id: &str,
+) -> (Vec<Field>, Vec<String>, Vec<String>) {
+    let (mut fields, picked, notes) = build_upload_fields(info, page, tags_wanted);
+    if site_id == "tjupt" {
+        fill_tjupt_series_fields(&mut fields, info, page);
+    }
+    if site_id == "ubits" {
+        fill_ubits_quality_fields(&mut fields, info, page);
+    }
+    (fields, picked, notes)
+}
+
+/// UBits 的 `source_sel`（地区）和 `team_sel`（制作组）没有默认值，
+/// 通用选档只填媒介/编码/音频/分辨率；不补这两项会被 takeupload 拒绝：
+/// “一个或多个质量区域未选择”。
+fn fill_ubits_quality_fields(fields: &mut Vec<Field>, info: &ReleaseInfo, _page: &str) {
+    let hay = format!("{} {} {}", info.subtitle, info.descr, info.name);
+    let region = if hay.contains("中国大陆") || hay.contains("大陆") {
+        "1"
+    } else if hay.contains("香港") {
+        "2"
+    } else if hay.contains("台湾") {
+        "3"
+    } else if hay.contains("日本") {
+        "5"
+    } else if hay.contains("韩国") {
+        "6"
+    } else if hay.contains("泰国") {
+        "7"
+    } else {
+        "11" // 其它
+    };
+    if fields.iter().any(|(n, _)| n == "source_sel[4]") {
+        set_field(fields, "source_sel[4]", region.to_string());
+    }
+    if fields.iter().any(|(n, _)| n == "team_sel[4]") {
+        // 源组不是 UBits 自家组，按 Other 提交，避免冒充驻站组。
+        set_field(fields, "team_sel[4]", "5".to_string());
+    }
+}
+
+fn fill_tjupt_series_fields(fields: &mut Vec<Field>, info: &ReleaseInfo, _page: &str) {
+    let type_val = fields
+        .iter()
+        .find(|(n, _)| n == "type")
+        .map(|(_, v)| v.clone());
+    let Some(type_val) = type_val else {
+        return;
+    };
+    if type_val != "402" {
+        return;
+    }
+    // 剧集必填：中文名、英文名、剧集类型。
+    if let Some(cname) = first_bracket_name(&info.subtitle).or_else(|| {
+        info.descr
+            .split(['●', '◎', '\n'])
+            .find(|s| s.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c)))
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    }) {
+        set_field(fields, "cname", cname);
+    }
+    if !info.name.is_empty() {
+        set_field(fields, "ename", info.name.clone());
+    }
+    const SERIES_REGIONS: &[&str] = &["大陆", "港台", "美剧", "日剧", "韩剧", "英剧", "泰剧"];
+    let hay = format!("{} {} {}", info.subtitle, info.descr, info.name);
+    if let Some(region) = SERIES_REGIONS.iter().find(|r| hay.contains(**r)) {
+        set_field(fields, "specificcat", (*region).to_string());
+        // 页面上的复选框会同时提交同名 value；服务端两种都认。
+        if !fields.iter().any(|(n, _)| n == region) {
+            fields.push(((*region).to_string(), (*region).to_string()));
+        }
+    } else {
+        // 页面有该必填项但内容没线索时留空会造成静默退回，直接用“其他”。
+        set_field(fields, "specificcat", "其他".to_string());
+    }
+}
+
+fn first_bracket_name(s: &str) -> Option<String> {
+    for (open, close) in [('【', '】'), ('[', ']'), ('《', '》')] {
+        if let Some(start) = s.find(open) {
+            let body_start = start + open.len_utf8();
+            if let Some(end) = s[body_start..].find(close) {
+                let name = s[body_start..body_start + end].trim();
+                if !name.is_empty() {
+                    return Some(name.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
 /// 覆盖式设置字段：同名先删再推
 fn set_field(fields: &mut Vec<Field>, name: &str, value: String) {
     fields.retain(|(n, _)| n != name);
@@ -2897,7 +2998,8 @@ pub fn prepare_upload(target: &NexusPhp, info: &ReleaseInfo) -> Result<PreparedU
     }
 
     let tags_wanted = wanted_tags(info);
-    let (fields, picked_tags, select_notes) = build_upload_fields(info, &form_html, &tags_wanted);
+    let (fields, picked_tags, select_notes) =
+        build_upload_fields_for_site(info, &form_html, &tags_wanted, &target.site_id);
     // 想勾的标签一个都没匹配上才警告（复选框 value 多是数字编码，
     // 拿 value 里含不含关键词来判会把勾上了的误报成漏勾）
     let tag_warn = if !tags_wanted.is_empty() && picked_tags.is_empty() {
@@ -3642,8 +3744,9 @@ fn locate_posted_by_search(
                 continue;
             }
         };
-        if !search_names_match(&page.name, &info.name, true)
-            && norm_post_title(&page.name) != norm_post_title(&info.name)
+        let page_title = strip_site_title_badges(&page.name);
+        if !search_names_match(page_title, &info.name, true)
+            && norm_post_title(page_title) != norm_post_title(&info.name)
         {
             log(&format!(
                 "发后定位·候选标题不符：页面「{}」，期望「{}」",
@@ -3697,12 +3800,13 @@ fn locate_existing_target(
     }
     match tgt.fetch_torrent_page(hint) {
         Ok(p) => {
-            if norm_post_title(&p.name) == norm_post_title(&info.name) {
+            let page_title = strip_site_title_badges(&p.name);
+            if norm_post_title(page_title) == norm_post_title(&info.name) {
                 Some(hint.to_string())
             } else {
                 log(&format!(
-                    "existed 回包详情页标题不符（页面「{}」），弃用该线索",
-                    p.name
+                    "existed 回包详情页标题不符（页面「{}」，用于比对「{}」），弃用该线索",
+                    p.name, page_title
                 ));
                 None
             }
@@ -3712,6 +3816,34 @@ fn locate_existing_target(
             None
         }
     }
+}
+
+/// 详情页标题常被站点追加促销/剩余时间等后缀（如 `[免费] 剩余时间：23时59分钟`）。
+/// 这些不是标题正文，比对 existed 线索前先裁掉，避免把真重复误判成“标题不符”。
+fn strip_site_title_badges(title: &str) -> &str {
+    const BADGES: [&str; 12] = [
+        "[免费]",
+        "[免費]",
+        "[Free]",
+        "[FREE]",
+        "[2x]",
+        "[2X]",
+        "[50%]",
+        "[促销]",
+        "[Promotion]",
+        "[HR]",
+        "[官方]",
+        "剩余时间",
+    ];
+    for badge in BADGES {
+        if let Some(pos) = title.find(badge) {
+            let core = title[..pos].trim();
+            if !core.is_empty() {
+                return core;
+            }
+        }
+    }
+    title.trim()
 }
 
 pub fn verify_posted(target: &NexusPhp, detail_url: &str, info: &ReleaseInfo) -> Vec<String> {
@@ -6097,6 +6229,55 @@ Frame rate : 25</pre>
     }
 
     #[test]
+    fn tjupt_series_fields_are_filled_from_subtitle_and_tags() {
+        let form = r#"<form action="takeupload.php" method="post">
+<select name="type"><option value="402" selected>剧集</option></select>
+<input type="text" name="small_descr" value="">
+<textarea name="descr"></textarea>
+</form>"#;
+        let info = ReleaseInfo {
+            name: "Agatha Christies Poirot S01-S13 Collection Bluray 1080p x265 10bit MNHD-FRDS".into(),
+            subtitle: "【大侦探波洛】国英双配 外挂中英ass字幕 10bit HEVC版本".into(),
+            descr: "◎标　　签　英剧 | 推理".into(),
+            ..Default::default()
+        };
+        let (fields, _, _) = build_upload_fields_for_site(&info, form, &[], "tjupt");
+        assert!(fields.contains(&("cname".into(), "大侦探波洛".into())));
+        assert!(fields.contains(&("ename".into(), info.name.clone())));
+        assert!(fields.contains(&("specificcat".into(), "英剧".into())));
+        assert!(fields.contains(&("英剧".into(), "英剧".into())));
+    }
+
+    #[test]
+    fn ubits_quality_fields_get_region_and_team_defaults() {
+        let form = r#"<form action="takeupload.php" method="post">
+<select name="source_sel[4]"><option value="0" selected>请选择一项</option><option value="1">中国大陆</option></select>
+<select name="team_sel[4]"><option value="0" selected>请选择一项</option><option value="5">Other</option></select>
+<select name="medium_sel[4]"><option value="4" selected>WEB-DL</option></select>
+<input type="text" name="name" value="">
+<textarea name="descr"></textarea>
+</form>"#;
+        let info = ReleaseInfo {
+            name: "The Story Of Ming Lan 2018 WEB-DL 4k H265 60fps 10bit AAC-HDSWEB".into(),
+            subtitle: "知否知否应是绿肥红瘦".into(),
+            descr: "中国大陆 古装".into(),
+            ..Default::default()
+        };
+        let (fields, _, _) = build_upload_fields_for_site(&info, form, &[], "ubits");
+        assert!(fields.contains(&("source_sel[4]".into(), "1".into())));
+        assert!(fields.contains(&("team_sel[4]".into(), "5".into())));
+    }
+
+    #[test]
+    fn bracket_name_handles_multibyte_brackets() {
+        assert_eq!(
+            first_bracket_name("【大侦探波洛】国英双配"),
+            Some("大侦探波洛".to_string())
+        );
+        assert_eq!(first_bracket_name("no brackets"), None);
+    }
+
+    #[test]
     fn chinese_subs_detection() {
         let mut info = ReleaseInfo {
             name: "Show.S01.1080p".into(),
@@ -6908,6 +7089,19 @@ Height : 1080</pre></div>"#;
             norm_post_title("Dark City 1998"),
             norm_post_title("Dark City 1999")
         );
+    }
+
+    #[test]
+    fn site_title_badges_are_stripped_before_matching() {
+        let want = "The Disguiser Complete HDTV 1080p AAC x264-JING";
+        let got = "The Disguiser Complete HDTV 1080p AAC x264-JING [免费] 剩余时间：23时59分钟";
+        assert_eq!(strip_site_title_badges(got), want);
+        assert_eq!(
+            norm_post_title(strip_site_title_badges(got)),
+            norm_post_title(want)
+        );
+        // 正常不带促销后缀的标题不能误裁
+        assert_eq!(strip_site_title_badges(want), want);
     }
 
     #[test]

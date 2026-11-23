@@ -91,6 +91,8 @@ pub fn extra_announce_hosts(site_id: &str) -> &'static [&'static str] {
         "agsvpt" => &["tracker.agsvpt.cn"],
         "cspt" => &["tracker.cspt.cc"],
         "tey" => &["tracker.tey.cc"],
+        // 页面在 www.tjupt.org，announce 只在 IPv6 tracker 子域；HTTPS 握手失败，HTTP 可用。
+        "tjupt" => &["pttracker6.tjupt.org", "pttracker.tjupt.org"],
         _ => &[],
     }
 }
