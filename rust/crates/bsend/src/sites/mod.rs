@@ -95,11 +95,14 @@ pub fn extra_announce_hosts(site_id: &str) -> &'static [&'static str] {
 /// 该站发布后会不会改写种子元信息，导致目标种 hash 与上传构造的 hash 不同。
 ///
 /// 只认实机验证过的站：1ptba 的 takeupload.php 会把 `info.source` 改成
-/// `[1ptba.com] 1PTBA.COM`；cspt、dubhe、ptsbao、crabpt 实测也出现 hash 差异，
+/// `[1ptba.com] 1PTBA.COM`；cspt、dubhe、ptsbao、crabpt、hdbao 实测也出现 hash 差异，
 /// pieces 和 `info.name` 未变，但具体被改写的字段没有逐字节核对。挂回时按分片+标题校验放行，
 /// 仍拒绝分片不一致的种。不能把它推广成「hash 不一致就放行」，否则会把别的版本塞进 qB。
 pub fn allows_target_hash_rewrite(site_id: &str) -> bool {
-    matches!(site_id, "ptba" | "cspt" | "dubhe" | "ptsbao" | "crabpt")
+    matches!(
+        site_id,
+        "ptba" | "cspt" | "dubhe" | "ptsbao" | "crabpt" | "hdbao"
+    )
 }
 
 /// tracker host 是否属于这个站点：相等，或 tracker 在站点域名的子域上。
@@ -1285,6 +1288,7 @@ mod tests {
         assert!(allows_target_hash_rewrite("dubhe"));
         assert!(allows_target_hash_rewrite("ptsbao"));
         assert!(allows_target_hash_rewrite("crabpt"));
+        assert!(allows_target_hash_rewrite("hdbao"));
         assert!(!allows_target_hash_rewrite("hdvideo"));
         assert!(!allows_target_hash_rewrite("qilin"));
     }

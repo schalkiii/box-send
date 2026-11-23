@@ -288,11 +288,16 @@ pub fn run_autopost_with(
     // 演练模式不会 posted，`limit` 改为限制「实际审阅的草稿条数」，
     // 否则 --dry-run --limit N 会审完全部草稿，既慢又白耗站点请求。
     let mut drilled = 0usize;
+    // `--limit` 是“本轮最多处理多少条”的执行上限，不是只看 Posted：
+    // `posted_unresolved`（已上传但定位不到详情）同样消耗一次上传，必须计数，
+    // 否则 hdbao 实测 `--limit 1` 会连发两条。
+    let mut attempted = 0usize;
     for d in &report.drafts {
         // 长任务跨午夜时，退避/日限额要按当前时刻算，不能用本轮开跑时的时间
         let now = now_unix();
         if let Some(l) = opts.limit {
-            if summary.posted >= l {
+            let used = if opts.dry_run { drilled } else { attempted };
+            if used >= l {
                 break;
             }
         }
@@ -465,6 +470,9 @@ pub fn run_autopost_with(
                 error: None,
             });
             continue;
+        }
+        if !opts.dry_run {
+            attempted += 1;
         }
         match runner(
             cfg,
@@ -1213,6 +1221,50 @@ mod tests {
         .unwrap();
         assert_eq!(reviewed, 0);
         assert!(logs.iter().any(|l| l.contains("没有转种草稿")));
+    }
+
+    #[test]
+    fn autopost_limit_counts_posted_unresolved_attempts() {
+        // 已上传但定位不到详情（posted_unresolved）不记 posted 限额，但仍是
+        // 一次真实上传，`--limit` 必须计数；hdbao 实测 --limit 1 连发两条。
+        let dir = temp_dir("limit-unresolved");
+        let cfg = cfg_with_drafts(&dir, 2, 2);
+        let mut runner_calls = 0usize;
+        let mut runner = |_: &Config,
+                          _: &reseed::ReseedRequest,
+                          _: &mut ContentIndex,
+                          _: &mut dyn FnMut(&str),
+                          _: Option<&crate::throttle::SiteThrottle>,
+                          _: Option<reseed::ReviewReport>| {
+            runner_calls += 1;
+            Ok(reseed::ReseedOutcome::Duplicate(reseed::DuplicateOutcome {
+                status: CoverageStatus::ReviewPending,
+                url: None,
+                note: "posted_unresolved：站上已发布但没定位到详情".into(),
+            }))
+        };
+        let mut logs = Vec::new();
+        let summary = run_autopost_with(
+            &cfg,
+            &AutopostOptions {
+                dry_run: false,
+                limit: Some(1),
+                sites: None,
+                ..Default::default()
+            },
+            None,
+            &mut collect_logs(&mut logs),
+            &mut |_: &Config,
+                  req: &reseed::ReseedRequest,
+                  _: &mut dyn FnMut(&str),
+                  _: Option<&crate::throttle::SiteThrottle>| {
+                Ok(passing_review(&req.name))
+            },
+            &mut runner,
+        )
+        .unwrap();
+        assert_eq!(runner_calls, 1, "--limit 1 只能上传一次");
+        assert_eq!(summary.posted, 0, "posted_unresolved 仍不应占日限额");
     }
 
     #[test]

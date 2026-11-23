@@ -37,9 +37,11 @@
   不再调用 `addTrackers`，也不把多个站的 announce 合并进同一个种子。
 - 新增 `bsend reattach --site <id> --url <详情页>`：补挂站上已发布、qB 未挂回的种子；
   `--key` 指定内容，`--file` 在站点拒绝下载时给本地构造的 `.torrent`。
-- 2026-11-23 首次向 `ptba`、`cspt`、`dubhe`、`ptsbao`、`crabpt` 各实发 1 条并挂回：五站都出现站上 hash 与上传构造 hash
-  不同（ptba 已确认是 `info.source` 被改写，cspt/dubhe/ptsbao/crabpt 具体字段未逐字节核对）；按 pieces + `info.name`
-  校验后补挂成功，qB 校验 100%。
+- 2026-11-23 首次向 `ptba`、`cspt`、`dubhe`、`ptsbao`、`crabpt`、`hdbao` 发种（hdbao 2 条，其余各 1 条）
+  并挂回：六站都出现站上 hash 与上传构造 hash 不同（ptba 已确认是 `info.source` 被改写，
+  cspt/dubhe/ptsbao/crabpt/hdbao 具体字段未逐字节核对）；按 pieces + `info.name`
+  校验后补挂成功，qB 校验 100%。hdbao 的 `autopost --limit 1` 曾连发两条，已修：
+  `posted_unresolved` 也是一次上传，必须计入 limit。
 
 ### Changed
 
@@ -100,7 +102,7 @@
 - qB 真值再补 7 个 announce 别名（baozi/novahd/xingyunge/ptlgs/pthome/agsvpt/cspt），
   并让 `host_matches` 把 `www.` 与裸域视为同一站（tjupt）；实机 qB 覆盖率从大面积 0
   恢复到真实值，避免把已有站点误当缺口去发重种。
-- 站点改写种子元信息的 hash 例外：ptba、cspt、dubhe、ptsbao、crabpt 实机确认会被站点重写，
+- 站点改写种子元信息的 hash 例外：ptba、cspt、dubhe、ptsbao、crabpt、hdbao 实机确认会被站点重写，
   目标种 hash 与上传构造不同时，只有 pieces、`info.name` 都一致且站点在白名单内才放行；
   其他站仍严格拒绝，避免把别的版本塞进 qB。
 - oshen 这类没 `WEB-DL` 媒介选项的站：标题是 WEB-DL/WEBRip、站点只有 Encode 时，
