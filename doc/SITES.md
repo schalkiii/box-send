@@ -41,7 +41,7 @@ tjupt, ubits, xingyunge
 | haitang | 类目不符 | 没有发布 | — | 只有曲艺、有声书类目；已移出白名单，规则留档 |
 | haoxue | 需要重做 | 检索路由 404 | — | Next.js/Flux 单页应用；已移出白名单，需要按前端接口重做 |
 
-扩容候选里，city13、novahd、xingyunge、cyanbug 这 4 个站已经实测发布并挂回成功；hdvideo（78856）、qilin（479362）、panda（141276）站上已经发布，2026-11-23 已全部补挂到 qB 并校验 100%；hdbao、tey、oshen、ptfans、itzmx、railgun、lemonhd 也在 2026-11-23 首次实发（见 2.1、2.2）；agsvpt 权限不足；ubits 是站上已有、无缺口；其余没测或类目不符。证据见 `SITE-DEBUG.md`。
+扩容候选里，city13、novahd、xingyunge、cyanbug 这 4 个站已经实测发布并挂回成功；hdvideo（78856）、qilin（479362）、panda（141276）站上已经发布，2026-11-23 已全部补挂到 qB 并校验 100%；hdbao、tey、oshen、ptfans、itzmx、railgun、lemonhd 也在 2026-11-23 首次实发（见 2.1、2.2）；agsvpt 无发布权限，已 disable；qingwa、ubits 不是“无缺口”，最新 qB 口径分别是 402/3,388、656/3,388，缺口 2,986、2,732；其余没测或类目不符。证据见 `SITE-DEBUG.md`。
 
 ### 2.1 2026-11-23 新实发的 10 个站
 
@@ -136,7 +136,7 @@ tjupt, ubits, xingyunge
 | musopia | 音乐乌托邦 | musopia.vip | NexusPHP | 是 | — | — | gap | medium_sel 未选 | 未测 | 1 |  |
 | muxuege | 慕雪阁 | pt.muxuege.org | NexusPHP | 是 | — | — | gap | audiocodec_sel 未选 | ok | 1 |  |
 | ptfans | PTFans | ptfans.cc | NexusPHP | 是 | — | — | ok | medium_sel 未选 | ok | 1 | 2026-11-23 已实发 `11111`，`fdf27b29…`，补挂 qB 校验 100%；站上改写 hash，已入白名单；站上已有 720p 其他版本，按策略继续发；表单无“完结”标签，人工补 |
-| agsvpt | 末日 | agsvpt.com | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | 未测 | 1 |  |
+| agsvpt | 末日 | www.agsvpt.com | NexusPHP | 否 | — | — | ok | team_sel[4] 未选 | 未测 | 1 | 无发布权限，2026-11-23 已 disable 并移出自动发种白名单 |
 | aling | 爱玲 | pt.aling.de | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | 未测 | 1 |  |
 | audiences | 观众 | audiences.me | NexusPHP | 是 | — | — | ok |  | unsupported | 6 |  |
 | baozi | 包子 | p.t-baozi.cc | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 1 |  |

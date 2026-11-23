@@ -160,7 +160,7 @@ luckpt 的候选规则（**还没有写进 `boxsend.json`**）：
 
 ### 6.5 agsvpt、tey
 
-- agsvpt：提交域和登录域不一致，返回“你没有该权限”并跳登录页，建议剔除。
+- agsvpt：提交域和登录域不一致，返回“你没有该权限”并跳登录页；2026-11-23 已 `enabled=false` 并移出自动发种白名单。
 - tey：发布检查曾报 `medium_sel` 没选，根因是该站 `medium_sel[4]` 只有 WEB-DL/HDTV/DVDR/CD/Track，蓝光/Remux 源没有对应项；HDTV/WEB-DL 源可正常选档。2026-11-23 已用 HDTV 源实发成功，见 6.7。
 
 ### 6.6 qilin 和 panda
