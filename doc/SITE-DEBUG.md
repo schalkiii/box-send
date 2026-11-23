@@ -200,6 +200,12 @@ luckpt 的候选规则（**还没有写进 `boxsend.json`**）：
 - 2026-11-23 抽查 29 条已发布种子，lajidui、ptcafe、sbpt、luckpt、ptlgs、tangpt、longpt、cyanbug、kufei、xingyunge、city13、shuioudao、xdy、baozi、novahd、ptzone 等站的历史简介也是字面 HTML；已用 `scripts/fix-bbcode-descr.py` 批量改成 BBCode，只改简介、不换种子文件，29 条复查全部为 BBCode。
 - 修复后先只编辑 43994，不新发种；等审核通过、再考虑恢复藏宝阁自动发种。
 
+### 6.10 2026-11-23 继续实发：railgun、lemonhd
+
+- **railgun**：源 `carpt` 的 `Agatha.Christies.Poirot.S01-S13.Collection`（294.3 GB）→ `https://bilibili.download/details.php?id=60632`，站上 hash `72889498…`，构造 hash `6debbce8…`。目标站已有其他版本 4414，按策略继续发布；上传回包没给详情链接，落 `posted_unresolved`；补 `railgun` 到 hash 改写白名单后 `reattach`，qB 校验 100%，tracker 为 `https://bilibili.download/announce.php?...`。第一次 `reattach` 读 tracker 列表时 qB 返回 404，日志“tracker 列表核对跳过”；已确认这是刚 add 后的瞬态，`reattach` 读列表增加 3 次短重试。
+- **lemonhd**：同源同内容 → `https://lemonhd.net/details.php?id=48970`，站上 hash `3c00cbb2…`，构造 hash `d50dfa19…`。站上已有其他版本 13452，按策略继续发布；上传回包没给详情链接，落 `posted_unresolved`；补 `lemonhd` 到 hash 改写白名单后 `reattach`，qB 校验 100%，tracker 为 `https://tracker.lemonhd.net/announce.php?...`。
+- 两站都只改写了元信息，pieces 和 `info.name` 与本地源种一致；仍按“白名单 + pieces + 标题”三重校验放行，不扩大成通用规则。
+
 ## 7. 复现模板
 
 ```powershell

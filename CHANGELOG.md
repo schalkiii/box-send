@@ -37,8 +37,14 @@
   不再调用 `addTrackers`，也不把多个站的 announce 合并进同一个种子。
 - 新增 `bsend reattach --site <id> --url <详情页>`：补挂站上已发布、qB 未挂回的种子；
   `--key` 指定内容，`--file` 在站点拒绝下载时给本地构造的 `.torrent`。
-- 2026-11-23 首次向 `ptba`、`cspt`、`dubhe`、`ptsbao`、`crabpt`、`hdbao`、`tey`、`oshen`、`ptfans`、`itzmx` 发种（hdbao 2 条，其余各 1 条）
-  并挂回：十站都出现站上 hash 与上传构造 hash 不同（ptba 已确认是 `info.source` 被改写，
+- 2026-11-23 继续首次向 `railgun`、`lemonhd` 发种并挂回：两站都发布 `carpt` 的 Poirot 合集，
+  站上详情分别为 `60632`、`48970`，站上 hash 与构造 hash 不同（railgun `72889498…` vs 构造 `6debbce8…`，
+  lemonhd `3c00cbb2…` vs 构造 `d50dfa19…`）；两站上传回包都没给详情链接，先落 `posted_unresolved`，
+  加入 hash 改写白名单后 `reattach`，qB 校验 100%，tracker 分别只有 `bilibili.download`、
+  `tracker.lemonhd.net`。两站目标站都已有其他版本，按“同名其他版本照样发”策略继续发布。
+  累计首次实发 12 站、13 颗目标种。`reattach` 挂回后读 tracker 列表增加 3 次短重试，
+  避免刚 add 的种子在 qB 里还没建好 tracker 列表时被误跳过单站点核对（railgun 实发时出现过一次）。
+- 2026-11-23 首次向 `ptba`、`cspt`、`dubhe`、`ptsbao`、`crabpt`、`hdbao`、`tey`、`oshen`、`ptfans`、`itzmx` 发种（hdbao 2 条，其余各 1 条）并挂回：十站都出现站上 hash 与上传构造 hash 不同（ptba 已确认是 `info.source` 被改写，
   cspt/dubhe/ptsbao/crabpt/hdbao/tey/oshen/ptfans/itzmx 具体字段未逐字节核对）；按 pieces + `info.name`
   校验后补挂成功，qB 校验 100%。hdbao 的 `autopost --limit 1` 曾连发两条，已修：
   `posted_unresolved` 也是一次上传，必须计入 limit。tey 的 qB 老种走 `tracker.tey.cc`，

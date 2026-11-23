@@ -5667,10 +5667,33 @@ fn push_target_torrent(
     // 单站点铁律（ARCH §3.3）：挂回后的 tracker 必须全部属于目标站。
     // 站点自己的种子偶尔带两条同站 announce（例如 hdvideo 的 tracker.hdvideo.top
     // 和 hdvideo.top），这不是多站合并，保留原样；只要出现别的站就中止。
-    // 读不到列表（网络/404 形态）只记日志放行；绝不追加 announce。
-    match qb.trackers(&site_hash) {
-        Ok(urls) if urls.is_empty() => bail!("新种挂回下载器后没有可用 tracker；中止"),
-        Ok(urls) => {
+    // 读不到列表（网络/404 形态）重试后只记日志放行；空列表仍视为异常并中止。绝不追加 announce。
+    // 刚 add 的种子，qB 偶尔还没建好 tracker 列表，接口会返回 404 或空数组；
+    // 短重试三次再判断，避免误跳过单站点核对（railgun 2026-11-23 实发时出现过一次）。
+    let mut tracker_check: Option<Vec<String>> = None;
+    let mut tracker_error: Option<anyhow::Error> = None;
+    let mut tracker_empty = false;
+    for attempt in 0..3 {
+        match qb.trackers(&site_hash) {
+            Ok(urls) if !urls.is_empty() => {
+                tracker_check = Some(urls);
+                break;
+            }
+            Ok(_) => {
+                tracker_empty = true;
+                tracker_error = Some(anyhow!("qB 返回空 tracker 列表"));
+            }
+            Err(e) => {
+                tracker_empty = false;
+                tracker_error = Some(e);
+            }
+        }
+        if attempt < 2 {
+            thread::sleep(Duration::from_secs(2));
+        }
+    }
+    match tracker_check {
+        Some(urls) => {
             let Some(site) = cfg.sites.iter().find(|s| s.id == req.target_site) else {
                 bail!("目标站 {} 不在配置里，无法核对 tracker", req.target_site);
             };
@@ -5682,7 +5705,14 @@ fn push_target_torrent(
                 ));
             }
         }
-        Err(e) => log(&format!("tracker 列表核对跳过：{e:#}")),
+        None => {
+            if let Some(e) = tracker_error {
+                log(&format!("tracker 列表核对跳过：{e:#}"));
+            }
+            if tracker_empty {
+                bail!("新种挂回下载器后没有可用 tracker；中止");
+            }
+        }
     }
     log("已加入下载器并启动校验…");
     let poll = cfg.coverage.verify_poll_sec.max(1);

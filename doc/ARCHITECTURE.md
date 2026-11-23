@@ -104,7 +104,7 @@ qB 没有 tracker，也不等于站上一定没发过。可能是站上已经有
 
 `info.source` 是种子信息块里的来源标记，PT 站通常用它区分不同站的同内容种子。写入目标站的值以后，新种子的 info hash 会和源种子不同，qB 才能把两份种子同时挂住。
 
-少数站点在 `takeupload.php` 阶段会自己改写种子元信息（1ptba 已逐字节确认是把 `info.source` 写成 `[1ptba.com] 1PTBA.COM`；cspt、dubhe、ptsbao、crabpt、hdbao、tey、oshen、ptfans、itzmx 实测也出现 hash 差异，pieces 和 `info.name` 未变，但具体改写字段没有逐字节核对），此时站上返回的 hash 和本地构造的 hash 必然不同。程序默认仍要求 hash 相等；只有实测确认的站点白名单、且 pieces 与 `info.name` 都一致时才放行，并在日志里写明原因。
+少数站点在 `takeupload.php` 阶段会自己改写种子元信息（1ptba 已逐字节确认是把 `info.source` 写成 `[1ptba.com] 1PTBA.COM`；cspt、dubhe、ptsbao、crabpt、hdbao、tey、oshen、ptfans、itzmx、railgun、lemonhd 实测也出现 hash 差异，pieces 和 `info.name` 未变，但具体改写字段没有逐字节核对），此时站上返回的 hash 和本地构造的 hash 必然不同。程序默认仍要求 hash 相等；只有实测确认的站点白名单、且 pieces 与 `info.name` 都一致时才放行，并在日志里写明原因。
 
 个别站另有上传文件本身的大小上限。`itzmx` 的 `takeupload.php` 只收不超过 `266,240 bytes` 的 `.torrent`，大合集/大剧包会在上传后被业务错误框拒绝；给这类站选种时先看源种导出的 `.torrent` 大小，不要只看内容体积。
 
