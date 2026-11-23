@@ -91,6 +91,9 @@ pub fn extra_announce_hosts(site_id: &str) -> &'static [&'static str] {
         "agsvpt" => &["tracker.agsvpt.cn"],
         "cspt" => &["tracker.cspt.cc"],
         "tey" => &["tracker.tey.cc"],
+        // 页面在 qingwapt.com，qB 里的 tracker 是 tracker.qingwapt.org；
+        // 不补别名会把已在做种的青蛙种子当成缺口，重复走发种。
+        "qingwa" => &["tracker.qingwapt.org", "qingwapt.org"],
         // 页面在 www.tjupt.org，announce 只在 IPv6 tracker 子域；HTTPS 握手失败，HTTP 可用。
         "tjupt" => &["pttracker6.tjupt.org", "pttracker.tjupt.org"],
         _ => &[],
