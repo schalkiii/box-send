@@ -198,7 +198,7 @@ luckpt 的候选规则（**还没有写进 `boxsend.json`**）：
 - 分辨率：标题没有 `1080p`/`720p`，旧逻辑不从 MediaInfo 取值；实际 MediaInfo 是 1290x696，按长边归 `720p(3)`（裁黑边的 720p 编码）。
 - 简介：站点简介框是 BBCode 编辑器，源站 hdfans 的简介是裸 HTML；原样提交后数据库里是 `&lt;fieldset&gt;…`，页面显示字面标签，审核端看不到 `<img>`。代码已改为默认把 HTML 简介转 BBCode（`descrFormat=html` 才保留 HTML），43994 已用 `[quote]`/`[img]` 重新提交，详情页正常渲染。
 - 2026-11-23 抽查 29 条已发布种子，lajidui、ptcafe、sbpt、luckpt、ptlgs、tangpt、longpt、cyanbug、kufei、xingyunge、city13、shuioudao、xdy、baozi、novahd、ptzone 等站的历史简介也是字面 HTML；已用 `scripts/fix-bbcode-descr.py` 批量改成 BBCode，只改简介、不换种子文件，29 条复查全部为 BBCode。
-- 修复后先只编辑 43994，不新发种；等审核通过、再考虑恢复藏宝阁自动发种。
+- 修复后先只编辑 43994，不新发种；2026-11-23 已重提，等复审再考虑恢复藏宝阁自动发种。
 - 2026-11-23 复审仍拒绝，原因变成“简介图片全部无法访问”。用登录 Cookie 读 43994 编辑页确认简介只剩两张图：豆瓣海报 `img9.doubanio.com` 裸请求 418/HTML 防盗链，`imgs.loukky.com` 本机 TLS 失败；都不可达。已用 imgbox 重传海报/截图（`images4.imgbox.com/f6/3a/MpwvlgiL_o.jpg`、`/af/5c/Z9Nm7U76_o.jpg`），带藏宝阁 Referer 均 200 image/jpeg，`edit-seed.py` 只改简介后详情页两张图正常显示。等站审核，不再私信管理。
 - 发种前门禁已加：`pruneDeadImages=true` 逐图探测，`requireImages=2` 少于两张可达图直接拦；不再出现“图片全死但照样提交”。
 

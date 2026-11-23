@@ -84,7 +84,8 @@
 
 - 藏宝阁 43994 审核驳回修复：BDRip+x264 归 `Encode(3)`，标题无分辨率时按 MediaInfo 长边归档
   （1290x696 → `720p(3)`）；源站 HTML 简介提交前默认转 BBCode，避免站点把 `<fieldset>`/`<img>`
-  转义成字面标签。已在线编辑 43994，未新发种。
+  转义成字面标签。已在线编辑 43994，未新发种；2026-11-23 复审又因图片全失效拒绝，
+  豆瓣海报和图床截图改用 imgbox 直链后重新提交，等复审。
 - 历史已发布种子简介批量转 BBCode：29 条（sbpt/luckpt/lajidui/ptcafe/tangpt/xdy 等）逐个编辑复查，
   只改简介、不换种子文件；`scripts/fix-bbcode-descr.py` 保留为可重复执行的维护脚本。
 - GUI 概览页 clippy：`sort_by` 改 `sort_by_key(Reverse(...))`，图例查找去掉多余借用。
