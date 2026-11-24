@@ -25,7 +25,7 @@ Rust 2021；crate：`bsend`（引擎）、`bsend-cli`、`bsend-gui`。错误用 
 
 ## 目录与约定
 - `rust/crates/bsend/src/`：`reseed.rs`（审阅/上传/挂回主流程，单文件 5k+ 行）、`autopost.rs`（自动发种编排）、`coverage.rs` / `report.rs`（覆盖记录与统计）、`matcher.rs`（判重）、`sites/nexusphp.rs`（站点适配）、`config.rs`、`gates.rs`。
-- 代码注释用英文；日志与文档用中文。
+- 注释语言跟随所在文件既有习惯（现状以中文为主）；日志与文档用中文。
 
 ## 不能违反的规则
 - **判断目标站有没有，以 qB 为准（2026-11-22 起）**：qB 里有目标站 tracker 就视为站上已有，没有就视为大概率没有；不再逐站搜索。只有真要发某条之前，才对目标站再确认一次。详见 `doc/ARCHITECTURE.md`。

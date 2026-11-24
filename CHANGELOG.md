@@ -58,13 +58,20 @@
   详情 `11111`，qB 校验 100%。itzmx 的 torrent 文件上限为 `266,240 bytes`，大合集候选会被拒；
   改用 `ubits` 源的《Liar Game》小种（源种 96,934 bytes）首次发布 `13134` 并挂回，
   qB 校验 100%，详情页无“完结/中字”标签，需人工补。
-- 2026-11-24 凌晨继续向 `pthome`、`nanyang`、`ubits` 发种，三站都上传成功、站上 hash 与构造 hash 不同，
-  落 `posted_unresolved` 待补挂：pthome `284701`（源 hdfans 133877《人民的名义》）、
-  nanyang `226159`（源 soulvoice 54682《知否知否应是绿肥红瘦》）、ubits `379266`（源 hdsky 27637《伪装者》）。
-  三站尚未加入 hash 改写白名单，qB 里也还没有挂回。同一批里 `hdfans` 上传回包带 `existed=1`
-  （指向 287791，未验证），落 `existed_pending`；`tjupt` 先后被 announce host 校验和动态字段拦住，
-  补齐字段后 `takeupload.php` 请求超时，未发布；`qingwa` 一次“HTTP 200 未识别的返回”、一次“已存在！”
-  （格子已在做种）；`audiences` 判重检索被人机验证拦住，按“没确认重复就不上传”中止。
+- 2026-11-24 凌晨向 `pthome`、`nanyang`、`ubits` 发种：三站上传成功、站上 hash 与构造 hash 不同，
+  分别是 pthome `284701`（源 hdfans 133877《人民的名义》）、nanyang `226159`（源 soulvoice 54682《知否知否应是绿肥红瘦》）、
+  ubits `379266`（源 hdsky 27637《伪装者》）。三站已加入 hash 改写白名单（连同此前十二站共十五站），
+  并用 `bsend reattach` 补挂：qB 校验 100%、只挂单站 tracker、状态 `seeding`（补挂后覆盖记录一度被写成
+  `same_hash_skip`，已用 `bsend prime` 按 qB 真值改回）。同一批的 `hdfans` 回包带 `existed=1` 已核实：
+  `287791` 就是同一条《伪装者》，qB 里 11-23 23:49 就在做种、校验 100%，覆盖记录 `reseeded`，没有重发。
+- 2026-11-24 `tjupt`：announce 地址改为以站点下载的种子为准（`tracker-public.tjupt.org`，https + passkey），
+  写进 `overrides.announceURL`；上传仍撞 `takeupload.php` 超时，上传单步超时已放宽到 120s。
+  站上已有 `416154`（FLAC/DDP5.1 版本）与 `236519`（同名 FRDS 合集、pieces 与本地不同），属实不同内容。
+- 2026-11-24 `qingwa`：Poirot 合集的“未识别回包”已定性——回包是 `torrent_too_large` 表单自动 submit 到
+  `offers.php?add_offer=1`，站点要求改走候选入口；代码已识别并落 `Skipped`（终态、不自动重试）。
+  同站《伪装者》发布 `208575`，自动挂回因站上 hash（`d1eeec5c…`）与构造 hash（`c78e9cb2…`）不同被拒，
+  改用 `reattach` 补挂，qB 校验 100%。`audiences` 判重检索被人机验证拦住，且无头 HTTP 复用不了浏览器会话
+  （cookie 里没有 `uid/pass` 类鉴权字段、直连被跳 `login.php`），该站只能人工发。
 
 ### Changed
 

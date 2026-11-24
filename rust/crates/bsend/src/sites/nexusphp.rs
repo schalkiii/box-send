@@ -249,6 +249,10 @@ impl NexusPhp {
         let mut req = self
             .client
             .post(action)
+            // 上传页比列表页慢得多：站点要在服务端解 bencode、算 hash、查重再落库，
+            // 北洋园（tjupt）实测 30s 全局超时会在回包前断开（2026-11-24 连挂两次）。
+            // 只给上传这一步放宽，列表/检索仍用全局 30s。
+            .timeout(std::time::Duration::from_secs(120))
             .header(REFERER, referer)
             .header("User-Agent", &self.user_agent)
             .multipart(form);

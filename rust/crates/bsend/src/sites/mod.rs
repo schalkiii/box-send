@@ -122,6 +122,11 @@ pub fn allows_target_hash_rewrite(site_id: &str) -> bool {
             | "itzmx"
             | "railgun"
             | "lemonhd"
+            // 2026-11-24 首次实发时下载回的目标种 hash 与构造不同（分片和标题一致），
+            // 三站都是上传成功、挂回被拒；加白名单后由 reattach 逐条补挂，具体改写字段未核对。
+            | "pthome"
+            | "nanyang"
+            | "ubits"
     )
 }
 
@@ -1316,6 +1321,9 @@ mod tests {
         assert!(allows_target_hash_rewrite("itzmx"));
         assert!(allows_target_hash_rewrite("railgun"));
         assert!(allows_target_hash_rewrite("lemonhd"));
+        assert!(allows_target_hash_rewrite("pthome"));
+        assert!(allows_target_hash_rewrite("nanyang"));
+        assert!(allows_target_hash_rewrite("ubits"));
         assert!(!allows_target_hash_rewrite("hdvideo"));
         assert!(!allows_target_hash_rewrite("qilin"));
     }

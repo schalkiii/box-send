@@ -3201,6 +3201,12 @@ pub fn submit_upload(
 
 /// 上传未成功时提取错误（errorbox → 常见错误特征 → 兜底）
 fn extract_upload_error(body: &str, status: u16) -> String {
+    // 种子过大：NexusPHP 系不回错误框，而是回一个 `torrent_too_large` 表单自动跳
+    // offers.php（候选区）。按普通“未识别返回”记会把站点明确的结论埋掉。
+    if body.contains("torrent_too_large") || body.contains("add_offer=1") {
+        return "站点判定种子过大（torrent_too_large），要求改走候选（offers.php）；不自动重试"
+            .into();
+    }
     if let Some(t) = div_inner(body, "errorbox") {
         let t = strip_tags(&t).trim().to_string();
         if !t.is_empty() {
@@ -3223,6 +3229,11 @@ fn extract_upload_error(body: &str, status: u16) -> String {
         return "服务器未跳转到详情页（必填字段缺失或校验失败）".into();
     }
     format!("HTTP {status} 未识别的返回")
+}
+
+/// 上传错误信息是不是“站点嫌种子太大、要求走候选”（终态，不重试）。
+fn site_rejects_size(msg: &str) -> bool {
+    msg.contains("torrent_too_large") || msg.contains("种子过大")
 }
 
 /// 站点「种子已存在」判定。返回命中的证据描述（写进审计，便于回溯）。
@@ -5392,13 +5403,37 @@ fn run_reseed_inner(
     if !throttle.acquire(&tgt.site_id, BudgetKind::Upload) {
         bail!("上传预算用完（assist.roundBudget / uploadBudget），拒绝继续上传");
     }
-    let up = submit_upload(
+    let up = match submit_upload(
         &tgt,
         &prep,
         &rewritten.data,
         &filename,
         cfg.data_dir.as_deref(),
-    )?;
+    ) {
+        Ok(u) => u,
+        // 站点嫌种子太大时不会报错，而是回一个自动跳 offers.php 的表单
+        // （`id='torrent_too_large'`、`add_offer=1`）：这不是可重试的失败，
+        // 转候选要人工走投票流程。落 Skipped（终态，不会再排队重试）。
+        Err(e) if site_rejects_size(&format!("{e:#}")) => {
+            let note = format!("站点上限拒绝：{e:#}；候选（offers.php）需人工处理，不自动重试");
+            write_cell(
+                index,
+                &req.content_key,
+                &req.target_site,
+                CoverageStatus::Skipped,
+                None,
+                &note,
+            );
+            index.save()?;
+            log(&note);
+            return Ok(ReseedOutcome::Duplicate(DuplicateOutcome {
+                status: CoverageStatus::Skipped,
+                url: None,
+                note,
+            }));
+        }
+        Err(e) => return Err(e),
+    };
     log(&format!("上传结果：{}", up.message));
 
     // 站点回包带 duplicate 标志时，回包链接可能只是 existed 跳转（不可信），
@@ -6313,6 +6348,22 @@ Frame rate : 25</pre>
         let body = format!("xx上传失败{}", "子".repeat(200));
         let msg = extract_upload_error(&body, 200);
         assert!(msg.contains("上传失败"), "{msg}");
+        assert!(!site_rejects_size(&msg), "{msg}");
+    }
+
+    #[test]
+    fn too_large_torrent_is_a_site_limit_not_an_unknown_response() {
+        // qingwa/CarPT 的真实回包：不是错误框，而是一个自动跳 offers.php 的表单
+        let body = r#"<form id='torrent_too_large' action='/offers.php?add_offer=1&torrent_too_large=1' method='POST'>
+            <input type='hidden' name='name' value='X' />
+        </form>"#;
+        let msg = extract_upload_error(body, 200);
+        assert!(
+            msg.contains("种子过大") && msg.contains("offers.php"),
+            "{msg}"
+        );
+        assert!(!msg.contains("未识别的返回"), "{msg}");
+        assert!(site_rejects_size(&msg), "{msg}");
     }
 
     #[test]
