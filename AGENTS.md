@@ -40,5 +40,5 @@ Rust 2021；crate：`bsend`（引擎）、`bsend-cli`、`bsend-gui`。错误用 
 - 待发条数从 qB 的实时缺口生成：`autopost` 读下载器种子列表，`--dry-run` 读索引里最后一次扫描结果。旧 `reseed_draft` 记录只作过渡期兼容。加白名单不会凭空产生待发条目。
 - 内容范围由 `assist.skipKeywords` 拦教育/成人，命中不占上传额度。
 - **未经用户明确允许，不得给站点管理发站内信/PM**（包括“问审核原因”“申请复审”）。审核被拒时只改种子、改代码、补证据；需要沟通先问用户。
-- 发种前门禁按站点配置执行：`titleNoCjk` 拦主标题汉字，`pruneDeadImages` 逐图探测并剪死图，`requireImages` 要求最终简介有足够可达图片，`descrOrder` 校验简介标题顺序。藏宝阁、熊猫高清已启用；死图先用 `scripts/imgbox-upload.py` 重传到 imgbox，再改简介，不能靠关掉门禁绕过。
+- 发种前门禁按站点配置执行：`titleNoCjk` 拦主标题汉字，`pruneDeadImages` 逐图探测并剪死图，`requireImages` 要求最终简介有足够可达图片，`descrOrder` 校验简介标题顺序。藏宝阁（2 张图）、熊猫高清（4 张图 + 段序）、优堡/太乙/麒麟（2 张图）已启用；死图先用 `scripts/imgbox-upload.py` 重传到 imgbox、`scripts/swap-descr-images.py` 按顺序换链接，再改简介，不能靠关掉门禁绕过。
 - 详细规则见 `doc/ARCHITECTURE.md`；运行数据与巡检见 `doc/OPERATIONS.md`；站点清单见 `doc/SITES.md`；未完成项见 `doc/ROADMAP.md`。历史审计与批次报告已并入这些文档，不再单独保留。

@@ -60,7 +60,7 @@
 - 站点侧已发布、但下载目标种或挂回 qB 失败时，记 `ReviewPending`、note 前缀 `posted_unresolved` / `existed_unresolved`，不记失败、不进失败冷却、不占发布额度；
 - 手工挂回：只拉详情页、下载站点生成的 `.torrent`，按 pieces 找本地内容后走同一条挂回逻辑（命令 `bsend pull --site <id> --url <详情页>`，2026-11-24 由 `reattach` 改名）；已移除本地构造种的 `--file` 入口。
 
-已通过：`coverage_e2e` 26 条全部通过；真实发种 luckpt、sbpt 各一条并挂回校验；hdvideo 78856、panda 141276、qilin 479362 三条历史种子已补挂，qB 校验 100%、tracker 正常。2026-11-23 又首次向 `ptba`、`cspt`、`dubhe`、`ptsbao`、`crabpt`、`hdbao`、`tey`、`oshen`、`ptfans`、`itzmx`、`railgun`、`lemonhd` 发种（hdbao 2 条，其余各 1 条），十二站都出现“站上 hash 与构造 hash 不同”，已按 pieces/标题校验补挂成功，并把十二站加入 hash 改写白名单；ptsbao 的 `source_sel` 二级分类也已按 type 父类 + 标题自动填对；hdbao 首次实发还暴露 `autopost --limit` 只数 Posted、不数 `posted_unresolved` 的问题，已修；itzmx 的 torrent 文件上限为 `266,240 bytes`，改用《Liar Game》小种后才打通。2026-11-23 发布检查新增 `titleNoCjk`、`requireImages`、`descrOrder`，并让门禁读最终提交的简介（剪死图/转 BBCode 之后），藏宝阁、熊猫高清已启用。
+已通过：`coverage_e2e` 26 条全部通过；真实发种 luckpt、sbpt 各一条并挂回校验；hdvideo 78856、panda 141276、qilin 479362 三条历史种子已补挂，qB 校验 100%、tracker 正常。2026-11-23 又首次向 `ptba`、`cspt`、`dubhe`、`ptsbao`、`crabpt`、`hdbao`、`tey`、`oshen`、`ptfans`、`itzmx`、`railgun`、`lemonhd` 发种（hdbao 2 条，其余各 1 条），十二站都出现“站上 hash 与构造 hash 不同”，已按 pieces/标题校验补挂成功，并把十二站加入 hash 改写白名单；ptsbao 的 `source_sel` 二级分类也已按 type 父类 + 标题自动填对；hdbao 首次实发还暴露 `autopost --limit` 只数 Posted、不数 `posted_unresolved` 的问题，已修；itzmx 的 torrent 文件上限为 `266,240 bytes`，改用《Liar Game》小种后才打通。2026-11-23 发布检查新增 `titleNoCjk`、`requireImages`、`descrOrder`，并让门禁读最终提交的简介（剪死图/转 BBCode 之后），藏宝阁、熊猫高清已启用；2026-11-24 ubits、tey、麒麟因审核退回补开 `pruneDeadImages` + `requireImages=2`。
 
 还没完成：
 
@@ -70,8 +70,9 @@
 - **tjupt**：announce 地址按站点下载的种子定案为 `tracker-public.tjupt.org`（https、带 passkey），已写进 `overrides.announceURL`；上传撞 `takeupload.php` 超时——先放宽到 120s，2026-11-24 11:35 再跑仍是超时且没留下回包，同时手工请求 `takeupload.php` / `details.php` 都被 302 到 `login.php`，当前登录态已失效。下一步要先刷新 tjupt 登录态，再判断是超时还是站点拒收。站上已有 `416154`（FLAC/DDP5.1）与 `236519`（同名 FRDS 合集，pieces 与本地不同），属实不同内容，不算重复。
 - **audiences**：判重检索被人机验证拦住，程序按“未确认重复不上传”中止。浏览器里过了验证也救不了无头请求：cookie 里没有 `uid/pass` 类鉴权字段，直连会被跳 `login.php`。后续不改无头请求，改成走 Kimi WebBridge 复用用户浏览器的登录态做判重（可行性待验证，验证前这个站仍只人工发）。
 - **qingwa 的 Poirot 合集**：不是“回包未识别”，回包是 `torrent_too_large` 表单（自动 submit 到 `offers.php?add_offer=1`），站点要求改走候选入口；程序记 `pending_offers`（待走候选入口），不算失败、不自动重试，`bsend status` 单列“待跟进”，等人去候选页提交（2026-11-24 已真跑复现，覆盖记录与审计都落这个新状态）。
-- 站点审核的四条结论已由回访落进覆盖记录（2026-11-24 晚，`bsend followup --all` 限定五站实跑，14 条详情页全部打开、0 条打不开）：藏宝阁 43994 详情页审核图标已标“通过”，审核已过，格子仍是 `reseeded`，不用动；tey 623 仍标 `title="未审"` → `pending_review`；麒麟 479362 横幅仍写“审核不通过，原因：缺少海报或截图（图片少于 2 张）” → `review_rejected`；熊猫 141276 详情页报“没有该ID的种子” → `gone_from_site`，重提的那版没留在站上，qB 里那条还挂着 tracker。之后不用人工盯：自动发种每轮开头会回访（已用 `autopost --limit 0` 实跑验证，看了 3 条、没发任何东西），审完自动挂回。还剩两件要人定：麒麟这条要补海报/截图后在线编辑（不私信管理）；熊猫这条从 qB 删掉还是重发。
-- 死图重传目前是 `scripts/imgbox-upload.py` + `scripts/edit-seed.py` 手工/半自动，尚未接成发布前自动重传；门禁会先拦住，不会带死图上传。
+- 站点审核的结论已由回访落进覆盖记录（2026-11-24 晚，`bsend followup --all` 限定五站实跑，14 条详情页全部打开、0 条打不开）：藏宝阁 43994 详情页审核图标已标“通过”，审核已过，格子仍是 `reseeded`，不用动；tey 623 仍标 `title="未审"` → `pending_review`；麒麟 479362 横幅仍写“审核不通过，原因：缺少海报或截图（图片少于 2 张）” → `review_rejected`；熊猫 141276 详情页报“没有该ID的种子” → `gone_from_site`，重提的那版没留在站上，qB 里那条还挂着 tracker。之后不用人工盯：自动发种每轮开头会回访（已用 `autopost --limit 0` 实跑验证，看了 3 条、没发任何东西），审完自动挂回。
+- **图片类的审核退回已处理（2026-11-24 深夜）**：ubits 379266 站内信判“海报与截图均无法访问”，简介 9 张图全是已失效的 `i13.tietuku.com`；同一条内容的 tey 623 带着同样的死图、只是还在“未审”；麒麟 479362 判“缺少海报或截图”，实际 7 张图全不可达（豆瓣海报防盗链 418 + `img.pterclub.com` TLS 失败）。三条都已换成 imgbox 新图并提交（ubits 1 海报 + 8 截图、tey 同一条 9 张、麒麟 1 海报 + 6 截图），详情页复查旧图站点 0 处、imgbox 张数对上；ubits/麒麟页面仍挂着“不通过”，站点没有用户侧重提入口，等管理复审，程序不重发、不私信。覆盖记录对应用 `scripts/set-cell-note.py` 写明了“已换图、等复审、别重发”，回访继续盯。
+- 死图重传现在是半自动流水：`scripts/fetch-descr.py`（取原简介）→ 本地备图（海报带豆瓣 Referer、截图用 cv2 从正片抓）→ `scripts/imgbox-upload.py`（传图拿直链）→ `scripts/swap-descr-images.py`（按出现顺序 1:1 换链接，BBCode/HTML 都支持）→ `scripts/edit-seed.py`（演练后提交）；发布前门禁会先剪死图/拦残图。尚未接成发布前自动重传（要能自动找海报才行）。
 
 ### 3.2 文档里的站点数据
 
@@ -116,7 +117,7 @@
 - 文档口径统一（2026-11-24）：正文不再把命令名当动词/术语，先讲做什么再给命令；AGENTS.md 补了这条规则。同日把 `bsend reattach` 改名为 `bsend pull`，旧名留作隐藏别名。
 - 手工挂回入口：`bsend pull --site <id> --url <详情页>`，可用 `--key` 指定内容；不再接受本地构造的 `.torrent`，避免挂上站点没通过的废种。
 - “等站点审核”做成机器可跟踪（2026-11-24）：新增覆盖状态 `pending_review`（等站点审核）、`review_rejected`（站点审核没过）、`gone_from_site`（站上已找不到）；发种时站点不给下载且提示是审核没放行、或页面标着未审 / 不通过，就落对应格子，不做站内检索兜底、不记失败、不重发。新命令 `bsend followup` 回访详情页，自动发种每轮开头也跑一次：审完了自动把站点种子下回来挂进 qB，没过就记原因，站上没了就记下来。页面标记按真实页面样本写（tey `title="未审"`、麒麟“审核不通过，原因：缺少海报或截图”、藏宝阁 `title="通过"`、熊猫“没有该ID的种子”），五张真实页面离线核对全部识别正确；判断顺序改成“明写的压过含糊的”，导航项“审核中心”不再被当成“审核中”。`bsend status` 的待跟进按类逐条点名，`bsend audit` 带“待跟进”一行，GUI 图例补齐。
-- hdvideo 78856、qilin 479362、panda 141276 三条历史结果已补挂完成，qB 校验 100%；qilin 站点仍显示审核不通过（缺图），不影响做种。
+- hdvideo 78856、qilin 479362、panda 141276 三条历史结果已补挂完成，qB 校验 100%；qilin 站点仍显示审核不通过，2026-11-24 已把简介里 7 张不可达图换成 imgbox 图并提交，等复审（不影响做种）。
 
 ### 4.4 旧“没有”记录不再新增
 

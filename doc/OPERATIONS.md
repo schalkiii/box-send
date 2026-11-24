@@ -180,6 +180,9 @@ pwsh scripts/seeding-audit.ps1 -Json -OutFile audit.json
 - `seeding-audit.ps1`：看哪里卡住了。
 - `scripts/imgbox-upload.py`：把本地海报/截图传到 imgbox，输出原图直链；匿名、无需 API key、单图 10MB。
 - `scripts/edit-seed.py`：只改已发布种子的标题/简介；默认演练，`--apply` 才提交，其余表单原样回填。
+- `scripts/fetch-descr.py`：读已发布种子的编辑页，把简介字段原样落到 `%TEMP%\bsend-review\`，给换图/改简介做准备；只读，不提交。
+- `scripts/swap-descr-images.py`：按出现顺序把简介里的图片链接 1:1 换成新直链；BBCode 与 HTML 都支持，张数对不上直接报错不写文件。
+- `scripts/set-cell-note.py`：按内容键 + 站点改覆盖记录里那一格的说明（区间替换、保持原换行），改完自动备份并复核。
 - `healthcheck.ps1`：看运行健不健康。
 
 ## 6. 常用命令
@@ -291,6 +294,10 @@ NexusPHP 的简介框是 BBCode 编辑器。源站简介里的 `<fieldset>`、`<
 - `titleNoCjk`：主标题含汉字直接拦，中文名放副标题。
 
 藏宝阁 43994 的两张图（豆瓣海报、`imgs.loukky.com` 截图）都不可达；用 `scripts/imgbox-upload.py` 重传后换成 `images4.imgbox.com` 直链，带 Referer 实测 200。熊猫 141276 原来没有海报/截图，重写简介时补了 1 张海报 + 3 张截图，顺序按站点要求。死图不要靠关掉 `pruneDeadImages` 绕过；先重传，再改简介。
+
+2026-11-24 又碰上三次：ubits 379266 的 9 张图全在已失效的 `i13.tietuku.com`（站内信判“海报与截图均无法访问”），同一条内容的 tey 623 带着同样的死图还没审到；麒麟 479362 被判“缺少海报或截图”，实际 7 张图全不可达（豆瓣海报裸请求 418、`img.pterclub.com` TLS 失败）。三条都按同一套流程修：`fetch-descr.py` 取原简介 → 本地备图（海报带 `Referer: https://movie.douban.com/` 取，截图用 cv2 从正片抓）→ `imgbox-upload.py` 传图 → `swap-descr-images.py` 按顺序换链接 → `edit-seed.py` 演练再提交 → 详情页数 imgbox 张数、旧图站点应为 0。三站已补 `pruneDeadImages=true` + `requireImages=2`，细节见 `SITE-DEBUG.md` 6.12。
+
+页面仍显示“不通过”时不用重发：站点没有用户侧“重新提交审核”入口，由 `bsend followup` 接着盯；覆盖记录用 `set-cell-note.py` 写明“已换图、等复审、别重发”。
 
 ## 8. 出问题按这个顺序查
 

@@ -216,6 +216,22 @@ luckpt 的候选规则（**还没有写进 `boxsend.json`**）：
 - **lemonhd**：同源同内容 → `https://lemonhd.net/details.php?id=48970`，站上 hash `3c00cbb2…`，构造 hash `d50dfa19…`。站上已有其他版本 13452，按策略继续发布；上传回包没给详情链接，落 `posted_unresolved`；补 `lemonhd` 到 hash 改写白名单后挂回，qB 校验 100%，tracker 为 `https://tracker.lemonhd.net/announce.php?...`。
 - 两站都只改写了元信息，pieces 和 `info.name` 与本地源种一致；仍按“白名单 + pieces + 标题”三重校验放行，不扩大成通用规则。
 
+### 6.12 2026-11-24 图片类的审核退回：ubits 379266、tey 623、麒麟 479362
+
+- **ubits 379266**（《伪装者》1080p HDTV，源 hdsky）：站内信写“种子审核拒绝，原因：海报与截图均无法访问（图床域名已失效）”。详情页简介是 9 张 `http://i13.tietuku.com/*.jpg`（1 海报 + 8 截图），域名 DNS 无记录、http/https 都连不上，站点说得对。
+- **tey 623**（同一条内容发到太乙）：简介同样是从源站带来的那 9 张贴图库链接，只是当时页面还标着 `title="未审"`，没到拒的阶段。
+- 为什么藏宝阁没事：11-23 那次只修了藏宝阁 43994 自己那一份简介，也只给 cangbao/panda/sbpt/luckpt/ptlgs 开了死图门禁。这条内容 11-24 凌晨发到 ubits/tey 时，两站都没开门禁，于是带着死图照样提交。
+- **麒麟 479362**（《铁拳男人》2005 BluRay）：横幅写“审核不通过，原因：缺少海报或截图（图片少于 2 张）”。简介其实有 7 张图，但 1 张豆瓣海报 `img9.doubanio.com` 裸请求回 418/HTML（防盗链），6 张 `img.pterclub.com` 本机 TLS 连不上——站审时等于 0 张可达图。
+- 修法三站一样（新脚本都进了 `scripts/`）：
+  1. `py -3 scripts/fetch-descr.py <站点> <id>`：读编辑页 takeedit 表单，把简介字段原样落盘（默认只读，不提交）；
+  2. 备图：海报按原简介里的豆瓣图 id 带 `Referer: https://movie.douban.com/` 取；截图用 Python + cv2 从本地正片按时间比例抓（本机没有 ffmpeg）。《伪装者》41 集取 EP01/EP06/EP11 各 3 帧，《铁拳男人》单文件取 6 帧；
+  3. `py -3 scripts/imgbox-upload.py --json <图...>`：拿 `images4.imgbox.com` 直链；
+  4. `py -3 scripts/swap-descr-images.py --descr-file 原简介 --urls 直链,直链,... --out 新简介`：按出现顺序 1:1 只换链接、不动排版；BBCode 与 HTML 都支持，张数对不上直接报错不写文件；
+  5. `py -3 scripts/edit-seed.py --site <站点> --id <id> --descr-file 新简介` 先演练，再加 `--apply` 提交；
+  6. 复查详情页：`imgbox.com` 出现次数等于张数（tey 那条每张在简介里出现两次，所以是 18）、旧图站点计数 0；覆盖记录用 `py -3 scripts/set-cell-note.py <内容键> <站点> "说明"` 写成“已换图、等复审、别重发”，状态留 `review_rejected`，交给 `bsend followup` 盯。
+- 结果：ubits 379266 详情页 tietuku 0 处 / imgbox 9 处；tey 623 tietuku 0 / imgbox 18；麒麟 479362 豆瓣与 pterclub 都 0 / imgbox 14（7 张 ×2）。三站页面还挂着“不通过 / 未审”，站点没有用户侧“重新提交审核”的入口，等管理复审；程序不重发、不私信管理。
+- 门禁补上：ubits、tey、麒麟三站 `pruneDeadImages=true` + `requireImages=2`（藏宝阁仍是 2 张、熊猫 4 张 + 段落顺序）。以后再发同类内容，死图会在上传前被剪掉或拦下，不会等到站审才发现。
+
 ## 7. 复现模板
 
 ```powershell
