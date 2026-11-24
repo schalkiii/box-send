@@ -3452,12 +3452,7 @@ pub fn review_reseed(
     }
     log("抓目标站上传表单，构造提交字段…");
     let mut prepared = prepare_upload(&rel.tgt, &rel.info)?;
-    let rules = cfg
-        .coverage
-        .reseed_rules
-        .get(&req.target_site)
-        .cloned()
-        .unwrap_or_default();
+    let rules = cfg.coverage.rules_for(&req.target_site);
     apply_site_rules(&mut prepared, &rules);
     log(&format!(
         "审阅完成：{} 个字段 → {}（未提交）",
@@ -5029,15 +5024,8 @@ fn prepare_released(
         .into_iter()
         .map(|s| s.to_string())
         .collect();
-    let pf = preflight(
-        &mut info,
-        &tags,
-        &cfg.coverage
-            .reseed_rules
-            .get(&req.target_site)
-            .cloned()
-            .unwrap_or_default(),
-    );
+    let site_rules = cfg.coverage.rules_for(&req.target_site);
+    let pf = preflight(&mut info, &tags, &site_rules);
     for f in &pf.fixes {
         log(&format!("预检·已自动补：{f}"));
     }
@@ -5441,12 +5429,7 @@ fn run_reseed_inner(
         }
         None => {
             let mut prep = prepare_upload(&tgt, &info)?;
-            let rules = cfg
-                .coverage
-                .reseed_rules
-                .get(&req.target_site)
-                .cloned()
-                .unwrap_or_default();
+            let rules = cfg.coverage.rules_for(&req.target_site);
             apply_site_rules(&mut prep, &rules);
             if pre_audit_supported(&prep.form_html) {
                 log("调用站点官方预审（LuckAudit）…");

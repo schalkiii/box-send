@@ -238,12 +238,7 @@ pub fn run_autopost_with(
         .sites
         .iter()
         .map(|site| {
-            let rules = cfg
-                .coverage
-                .reseed_rules
-                .get(&site.id)
-                .cloned()
-                .unwrap_or_default();
+            let rules = cfg.coverage.rules_for(&site.id);
             (site.id.clone(), rules.daily_limit() as usize)
         })
         .collect();
@@ -376,12 +371,7 @@ pub fn run_autopost_with(
             )));
             continue;
         }
-        let rules = cfg
-            .coverage
-            .reseed_rules
-            .get(site)
-            .cloned()
-            .unwrap_or_default();
+        let rules = cfg.coverage.rules_for(site);
         let used = posted_today.get(site).copied().unwrap_or(0);
         if used >= rules.daily_limit() {
             emit(AutopostEvent::Log(format!(

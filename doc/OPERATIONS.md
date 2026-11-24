@@ -288,7 +288,7 @@ NexusPHP 的简介框是 BBCode 编辑器。源站简介里的 `<fieldset>`、`<
 
 站点审核会逐张打开简介图片。图片 418/HTML、TLS 失败、域名失效都算死图；只在浏览器里能看不算通过。发种前按站点规则执行：
 
-- `pruneDeadImages: true`：带目标站上传页 Referer 逐张 GET，非 2xx 或非图片类型剪掉；豆瓣图床裸请求 418，带 Referer 才出图，所以 Referer 必须带。
+- `pruneDeadImages`：带目标站上传页 Referer 逐张 GET，非 2xx 或非图片类型剪掉；豆瓣图床裸请求 418，带 Referer 才出图，所以 Referer 必须带。**2026-11-24 起是全局默认**：配置里 `assist.pruneDeadImages: true`，所有站点发布前都会先剪；个别站要关就在 `assist.reseedRules.<站点>.pruneDeadImages` 写 `false`（站点规则优先于全局）。
 - `requireImages`：剪完死图后少于 N 张就拦，不提交零图/残图简介。
 - `descrOrder`：按标记检查段落顺序，缺段或倒置都拦；只对配置了的站点生效。
 - `titleNoCjk`：主标题含汉字直接拦，中文名放副标题。
@@ -298,6 +298,8 @@ NexusPHP 的简介框是 BBCode 编辑器。源站简介里的 `<fieldset>`、`<
 2026-11-24 又碰上三次：ubits 379266 的 9 张图全在已失效的 `i13.tietuku.com`（站内信判“海报与截图均无法访问”），同一条内容的 tey 623 带着同样的死图还没审到；麒麟 479362 被判“缺少海报或截图”，实际 7 张图全不可达（豆瓣海报裸请求 418、`img.pterclub.com` TLS 失败）。三条都按同一套流程修：`fetch-descr.py` 取原简介 → 本地备图（海报带 `Referer: https://movie.douban.com/` 取，截图用 cv2 从正片抓）→ `imgbox-upload.py` 传图 → `swap-descr-images.py` 按顺序换链接 → `edit-seed.py` 演练再提交 → 详情页数 imgbox 张数、旧图站点应为 0。三站已补 `pruneDeadImages=true` + `requireImages=2`，细节见 `SITE-DEBUG.md` 6.12。
 
 页面仍显示“不通过”时不用重发：站点没有用户侧“重新提交审核”入口，由 `bsend followup` 接着盯；覆盖记录用 `set-cell-note.py` 写明“已换图、等复审、别重发”。
+
+2026-11-24 起 `assist.pruneDeadImages` 打开后，所有站点上传前都会做这一遍；以后新加的站也自动带上，不用逐站配。真要关某站：`assist.reseedRules.<站点>.pruneDeadImages: false`。
 
 ## 8. 出问题按这个顺序查
 

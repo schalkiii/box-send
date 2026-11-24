@@ -580,12 +580,7 @@ fn cmd_status(cfg: &Config) -> Result<()> {
     let allow: HashSet<String> = cfg.coverage.auto_reseed_sites.iter().cloned().collect();
     let mut limits: HashMap<String, usize> = HashMap::new();
     for site in &cfg.sites {
-        let rules = cfg
-            .coverage
-            .reseed_rules
-            .get(&site.id)
-            .cloned()
-            .unwrap_or_default();
+        let rules = cfg.coverage.rules_for(&site.id);
         limits.insert(site.id.clone(), rules.daily_limit() as usize);
     }
     report.derive_qb_gap_drafts_from_index(&index, &cfg.sites, &allow, &limits);
@@ -771,12 +766,7 @@ fn cmd_reseed(cfg: &Config, draft: Option<usize>, yes: bool) -> Result<()> {
     let allow: HashSet<String> = cfg.coverage.auto_reseed_sites.iter().cloned().collect();
     let mut limits: HashMap<String, usize> = HashMap::new();
     for site in &cfg.sites {
-        let rules = cfg
-            .coverage
-            .reseed_rules
-            .get(&site.id)
-            .cloned()
-            .unwrap_or_default();
+        let rules = cfg.coverage.rules_for(&site.id);
         limits.insert(site.id.clone(), rules.daily_limit() as usize);
     }
     report.derive_qb_gap_drafts_from_index(&index, &cfg.sites, &allow, &limits);
@@ -1180,12 +1170,7 @@ fn cmd_report(
     let allowed: HashSet<String> = cfg.coverage.auto_reseed_sites.iter().cloned().collect();
     let mut limits: HashMap<String, usize> = HashMap::new();
     for site in &picked {
-        let rules = cfg
-            .coverage
-            .reseed_rules
-            .get(&site.id)
-            .cloned()
-            .unwrap_or_default();
+        let rules = cfg.coverage.rules_for(&site.id);
         limits.insert(site.id.clone(), rules.daily_limit() as usize);
     }
     report.derive_qb_gap_drafts_from_index(&index, &picked, &allowed, &limits);
@@ -1955,12 +1940,7 @@ fn cmd_gatecheck(cfg: &Config, sites: Option<Vec<String>>, as_json: bool) -> Res
                 continue;
             }
         };
-        let site_rules = cfg
-            .coverage
-            .reseed_rules
-            .get(&a.site_id)
-            .cloned()
-            .unwrap_or_default();
+        let site_rules = cfg.coverage.rules_for(&a.site_id);
         bsend::reseed::apply_site_rules(&mut prep, &site_rules);
         let drill = bsend::reseed::analyze_prepared(&a.site_id, &a.site_name, &prep, &info);
         let core = drill.core_gaps();

@@ -184,7 +184,7 @@ tjupt, ubits, xingyunge
 | nicept | 老师 | nicept.net | NexusPHP | 是 | — | — | ok | type 未选 | ok | 1 |  |
 | novahd | nova | pt.novahd.top | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 2 |  |
 | oshen | 奥申 | oshen.win | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 1 | 2026-11-23 已实发 `57082`，`22e3dd63…`，补挂 qB 校验 100%；站上改写 hash，已入白名单；表单没有“完结”标签，人工补 |
-| panda | 熊猫 | pandapt.net | NexusPHP | 是 | — | — | ok | medium_sel[5] 未选 | 未测 | 5 | 141276 已补挂 qB/校验 100%；主标题已去 `[50%] 剩余时间` 中文，简介按【转载出处-制作说明-海报-简介-info-截图】重排并换 imgbox 图；门禁 `titleNoCjk+pruneDeadImages+requireImages=4+descrOrder`；2026-11-24 回访详情页报“没有该ID的种子”（重提的那版没留在站上），qB 里那条还挂着 tracker，覆盖记录落 `gone_from_site`，删不删由人定 |
+| panda | 熊猫 | pandapt.net | NexusPHP | 是 | — | — | ok | medium_sel[5] 未选 | 未测 | 5 | 141276（《星球大战9：天行者崛起》UHD BluRay 1080p 单文件 11.56G，https://pandapt.net/details.php?id=141276 ）已补挂 qB/校验 100%，主标题去掉了 `[50%] 剩余时间` 中文、简介按【转载出处-制作说明-海报-简介-info-截图】重排并换 imgbox 图；门禁 `titleNoCjk+pruneDeadImages+requireImages=4+descrOrder`。2026-11-24 查清去向：第一次被 NoCaps 判主标题含中文 + 简介顺序不合规；重提的那版被站点当“候选种子”，24 小时内没做种被系统自动删除（不是审核不过被删）。qB 里那条还挂着 tracker，tracker 报 `torrent not registered`；删还是重发待定 |
 | ptba | 1PT | 1ptba.com | NexusPHP | 是 | — | — | ok | processing_sel[4] 未选 | ok | 2 | 2026-11-23 已实发 106718，`abf4…`；站点改写 `info.source`，已加入 hash 改写白名单，挂回校验 100% |
 | ptcafe | 咖啡 | ptcafe.club | NexusPHP | 是 | — | — | ok | source_sel[4] 未选 | ok | 1 |  |
 | pthome | 铂金家 | pthome.net | NexusPHP | 是 | — | — | ok | team_sel 未选 | unsupported | 1 | 2026-11-24 首次实发 `284701`（《人民的名义》，源 hdfans）；站上 hash 与构造不同（构造 `b31d8eaf…`，站上 `ebaa6dd9…`），已加入白名单，补挂时确认 qB 里 11-23 23:56 就在做种、校验 100%（见 2.3） |
