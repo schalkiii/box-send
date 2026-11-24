@@ -3837,12 +3837,15 @@ fn strip_site_title_badges(title: &str) -> &str {
         "[官方]",
         "剩余时间",
     ];
-    for badge in BADGES {
-        if let Some(pos) = title.find(badge) {
-            let core = title[..pos].trim();
-            if !core.is_empty() {
-                return core;
-            }
+    // 裁在标题里最早出现的角标上，而不是内置列表里靠前的那个：
+    // 标题是 `X [2X] [Free]` 时若先按列表顺序裁 [Free]，会留下 `X [2X]` 仍带着角标。
+    let mut cuts: Vec<usize> = BADGES.iter().filter_map(|b| title.find(b)).collect();
+    cuts.sort_unstable();
+    cuts.dedup();
+    for pos in cuts {
+        let core = title[..pos].trim();
+        if !core.is_empty() {
+            return core;
         }
     }
     title.trim()
@@ -5343,10 +5346,7 @@ fn run_reseed_inner(
                 .ok()
                 .and_then(|p| p.host_str().map(|h| h.to_lowercase()))
                 .unwrap_or_default();
-            let host_ok = tgt.announce_hosts.iter().any(|h| {
-                let h = h.to_lowercase();
-                host == h || host.ends_with(&format!(".{h}"))
-            });
+            let host_ok = crate::qbittorrent::announce_host_matches(&host, &tgt.announce_hosts);
             if !host_ok {
                 bail!(
                     "站点 {} 配置的 announceURL host（{host}）不在 announceHosts 里，拒绝上传到错误 tracker",
@@ -7106,6 +7106,20 @@ Height : 1080</pre></div>"#;
         );
         // 正常不带促销后缀的标题不能误裁
         assert_eq!(strip_site_title_badges(want), want);
+        // 多个角标的顺序和内置列表不同时，要裁在标题里最早出现的那个角标上
+        assert_eq!(
+            strip_site_title_badges("Some Pack 2020 1080p [2X] [Free]"),
+            "Some Pack 2020 1080p"
+        );
+        assert_eq!(
+            strip_site_title_badges("Some Pack 2020 1080p [50%] [Promotion] 剩余时间：1时"),
+            "Some Pack 2020 1080p"
+        );
+        // 角标在最前面时没有可返回的标题前缀，保持原样
+        assert_eq!(
+            strip_site_title_badges("[Free] Some Pack 2020 1080p"),
+            "[Free] Some Pack 2020 1080p"
+        );
     }
 
     #[test]

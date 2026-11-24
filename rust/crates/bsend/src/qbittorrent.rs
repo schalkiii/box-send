@@ -418,7 +418,6 @@ impl QBittorrent {
             .ok()?
             .as_array()
             .cloned()?;
-        let want: Vec<String> = hosts.iter().map(|h| h.to_lowercase()).collect();
         for t in arr {
             let Some(u) = t.get("tracker").and_then(|v| v.as_str()) else {
                 continue;
@@ -428,10 +427,7 @@ impl QBittorrent {
                 continue;
             }
             let host = url::Url::parse(u).ok()?.host_str()?.to_lowercase();
-            if want
-                .iter()
-                .any(|w| &host == w || host.ends_with(&format!(".{w}")))
-            {
+            if announce_host_matches(&host, hosts) {
                 return Some(u.to_string());
             }
         }
@@ -908,10 +904,56 @@ fn parse_files_value(obj: &Value) -> Option<Vec<(String, i64)>> {
     Some(out)
 }
 
+/// tracker host 是否属于 `hosts` 里的站点。口径与“已在做种预筛”一致（`sites::host_matches`）：
+/// `www.` 只是页面前缀，站点自己任意子域上的 tracker 都算本站。
+///
+/// 这里原来写成“相等或以 `.host` 结尾”，站点地址带 `www.` 时（`www.pthome.net`）
+/// 永远匹配不上 `t.pthome.net` 这类 tracker，只能靠内置别名兜底；选 announce 和
+/// 校验 `overrides.announceURL` 用的是同一套，改一处要同时改另一处。
+pub fn announce_host_matches(tracker_host: &str, hosts: &[String]) -> bool {
+    let tracker_host = tracker_host.to_lowercase();
+    hosts
+        .iter()
+        .any(|w| crate::sites::host_matches(&tracker_host, &w.to_lowercase()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn announce_host_matching_ignores_www_and_accepts_site_subdomains() {
+        let hosts = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        // 站点地址带 www. 时，站点自己子域上的 tracker 也算本站
+        assert!(announce_host_matches(
+            "t.pthome.net",
+            &hosts(&["www.pthome.net"])
+        ));
+        assert!(announce_host_matches(
+            "pttracker6.tjupt.org",
+            &hosts(&["www.tjupt.org"])
+        ));
+        assert!(announce_host_matches(
+            "tracker.luckpt.de",
+            &hosts(&["luckpt.de", "tracker.luckpt.de"])
+        ));
+        // 别的站的子域不算，反过来站点域也不算 tracker 子域
+        assert!(!announce_host_matches(
+            "tracker.pterclub.com",
+            &hosts(&["www.pterclub.net"])
+        ));
+        assert!(!announce_host_matches(
+            "pterclub.com",
+            &hosts(&["tracker.pterclub.com"])
+        ));
+        assert!(!announce_host_matches("tracker.a.com", &hosts(&[])));
+        // 配置里大小写不敏感
+        assert!(announce_host_matches(
+            "t.PTHOME.net",
+            &hosts(&["WWW.Pthome.Net"])
+        ));
+    }
 
     #[test]
     fn add_form_uses_seed_mode_for_skip_checking() {
