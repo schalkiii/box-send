@@ -57,6 +57,8 @@ pub struct ReleaseInfo {
     pub douban: Option<String>,
     /// TMDB 规范链接
     pub tmdb: Option<String>,
+    /// 标题清洗时已经判定为完结剧集（去掉标题里的 Complete 后仍要能勾「完结」标签）
+    pub completed_hint: bool,
 }
 
 impl ReleaseInfo {
@@ -123,6 +125,9 @@ impl ReleaseInfo {
 
     /// 完结剧集特征：完结 / 全集 / Complete（拉丁词边界）
     pub fn is_completed_series(&self) -> bool {
+        if self.completed_hint {
+            return true;
+        }
         let hay = format!("{} {}", self.name, self.subtitle).to_ascii_lowercase();
         if hay.contains("完结") || hay.contains("全集") || hay.contains("全剧终") {
             return true;
@@ -424,6 +429,182 @@ fn normalize_release_title(name: &str) -> String {
     }
 }
 
+/// 标题技术参数的固定顺序：分辨率 → 帧率/HDR → 片源 → 视频编码 → 位深 → 音频 → 压制组。
+/// 站点审核反复指出「HDTV 1080p」「AAC x264」这类倒序，发布前统一排好。
+fn tech_rank(token: &str) -> Option<u8> {
+    let t = token.to_ascii_lowercase();
+    const RES: [&str; 9] = [
+        "2160p", "1080p", "1080i", "720p", "576p", "480p", "4k", "8k", "uhd",
+    ];
+    const FPS_HDR: [&str; 8] = [
+        "60fps", "50fps", "48fps", "30fps", "25fps", "24fps", "hdr", "hdr10",
+    ];
+    const SOURCE: [&str; 15] = [
+        "bluray", "blu-ray", "web-dl", "webdl", "webrip", "hdtv", "hdrip", "bdrip", "dvdrip",
+        "tvrip", "remux", "dvd", "bd", "hdtvrip", "uhd",
+    ];
+    const VIDEO: [&str; 12] = [
+        "x264", "x265", "h264", "h.264", "h265", "h.265", "hevc", "avc", "vc-1", "mpeg2", "mpeg-2",
+        "av1",
+    ];
+    const DEPTH: [&str; 5] = ["10bit", "8bit", "12bit", "10-bit", "8-bit"];
+    const AUDIO: [&str; 18] = [
+        "aac",
+        "ac3",
+        "eac3",
+        "e-ac3",
+        "dts",
+        "dts-hd",
+        "dtshd",
+        "dts-hd.ma",
+        "truehd",
+        "flac",
+        "mp3",
+        "opus",
+        "atmos",
+        "lpcm",
+        "pcm",
+        "dd",
+        "dd+",
+        "ddp",
+    ];
+    if RES.contains(&t.as_str()) {
+        Some(0)
+    } else if FPS_HDR.contains(&t.as_str()) {
+        Some(1)
+    } else if SOURCE.contains(&t.as_str()) {
+        Some(2)
+    } else if VIDEO.contains(&t.as_str()) {
+        Some(3)
+    } else if DEPTH.contains(&t.as_str()) {
+        Some(4)
+    } else if AUDIO.contains(&t.as_str()) {
+        Some(5)
+    } else {
+        None
+    }
+}
+
+fn has_series_marker(name: &str) -> bool {
+    let low = name.to_ascii_lowercase();
+    let bytes = low.as_bytes();
+    if low.contains("season") || low.contains("complete series") {
+        return true;
+    }
+    for i in 0..bytes.len().saturating_sub(1) {
+        if bytes[i] == b's' && bytes[i + 1].is_ascii_digit() {
+            let is_word_start = i == 0 || !bytes[i - 1].is_ascii_alphanumeric();
+            if is_word_start {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn explicit_series(name: &str, subtitle: &str) -> bool {
+    let hay = format!("{} {}", name, subtitle);
+    if has_series_marker(&hay) || hay.contains("完结") || hay.contains("全集") {
+        return true;
+    }
+    let chars: Vec<char> = hay.chars().collect();
+    for (i, c) in chars.iter().enumerate() {
+        if *c == '全' {
+            let digits: String = chars[i + 1..]
+                .iter()
+                .take_while(|x| x.is_ascii_digit())
+                .collect();
+            if !digits.is_empty() && chars.get(i + 1 + digits.len()) == Some(&'集') {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// 按站点通行规范重排标题里的技术参数；只有识别出至少两个技术词才动，
+/// 且遇到 `[...]` 前缀的中文标题直接原样返回，避免打乱方括号结构。
+fn reorder_release_title(name: &str, completed: bool) -> String {
+    if name.contains('[') || name.contains(']') {
+        return name.to_string();
+    }
+    let sep = if name.contains(' ') {
+        ' '
+    } else if name.contains('.') {
+        '.'
+    } else {
+        return name.to_string();
+    };
+    let tokens: Vec<&str> = name.split(sep).filter(|t| !t.is_empty()).collect();
+    let mut base: Vec<&str> = Vec::new();
+    let mut tech: Vec<(u8, usize, &str)> = Vec::new();
+    let mut group: Option<&str> = None;
+    let mut tail: Vec<&str> = Vec::new();
+    let mut seen_tech = false;
+    let mut dropped_complete = false;
+    for (idx, token) in tokens.iter().enumerate() {
+        if completed && token.eq_ignore_ascii_case("complete") {
+            dropped_complete = true;
+            continue;
+        }
+        if let Some(rank) = tech_rank(token) {
+            seen_tech = true;
+            tech.push((rank, idx, *token));
+            continue;
+        }
+        // `x264-JING` / `AAC-GRP`：左边是技术词、右边是压制组，拆开各归各位。
+        if let Some((left, right)) = token.rsplit_once('-') {
+            if !left.is_empty() && !right.is_empty() {
+                if let Some(rank) = tech_rank(left) {
+                    seen_tech = true;
+                    tech.push((rank, idx, left));
+                    group = Some(right);
+                    continue;
+                }
+            }
+        }
+        // 技术词后面剩下的内容（如 `AC3￡cXcY@FRDS`、`2Audio`、`MNHD-FRDS`）
+        // 按原顺序整体留在最后，不要塞回标题主体前面。
+        if seen_tech {
+            tail.push(*token);
+            continue;
+        }
+        base.push(*token);
+    }
+    if tech.len() < 2 && !dropped_complete {
+        return name.to_string();
+    }
+    tech.sort_by_key(|(rank, idx, _)| (*rank, *idx));
+    let mut out = base.join(&sep.to_string());
+    let tech_join = tech
+        .iter()
+        .map(|(_, _, t)| *t)
+        .collect::<Vec<_>>()
+        .join(&sep.to_string());
+    if !tech_join.is_empty() {
+        if !out.is_empty() {
+            out.push(sep);
+        }
+        out.push_str(&tech_join);
+    }
+    if let Some(g) = group {
+        out.push('-');
+        out.push_str(g.trim_start_matches('-'));
+    }
+    if !tail.is_empty() {
+        if !out.is_empty() {
+            out.push(sep);
+        }
+        out.push_str(&tail.join(&sep.to_string()));
+    }
+    out
+}
+
+fn normalize_release_title_for(name: &str, completed: bool) -> String {
+    let cleaned = normalize_release_title(name);
+    reorder_release_title(&cleaned, completed)
+}
+
 /// 详情页解析：发布名/副标题/简介/MediaInfo/条目链接（Swift `parse` 的通用子集）
 pub fn parse_release_page(html: &str, name_fallback: &str) -> ReleaseInfo {
     let raw_name = first_tag_text(html, "h1").unwrap_or_else(|| name_fallback.to_string());
@@ -431,12 +612,14 @@ pub fn parse_release_page(html: &str, name_fallback: &str) -> ReleaseInfo {
         name: strip_promo_suffix(&raw_name),
         ..Default::default()
     };
-    info.name = normalize_release_title(&info.name);
     // 副标题：行内「副标题」表行，或 small_descr 输入框
     info.subtitle = detail_row_value(html, "副标题")
         .or_else(|| detail_row_value(html, "副標題"))
         .or_else(|| input_value(html, "small_descr"))
         .unwrap_or_default();
+    let completed = explicit_series(&raw_name, &info.subtitle);
+    info.name = normalize_release_title_for(&info.name, completed);
+    info.completed_hint = completed;
     // 简介容器（配对 div，常见 id）
     for id in ["kdescr", "largedescribe", "kt_d", "descr", "description"] {
         if let Some(d) = div_inner(html, id) {
@@ -674,7 +857,12 @@ fn strip_promo_suffix(name: &str) -> String {
             )
             || (low.ends_with('x')
                 && low.len() <= 4
-                && low[..low.len() - 1].chars().all(|c| c.is_ascii_digit()));
+                && low[..low.len() - 1].chars().all(|c| c.is_ascii_digit()))
+            || low.split_once('x').is_some_and(|(n, tail)| {
+                !n.is_empty()
+                    && n.chars().all(|c| c.is_ascii_digit())
+                    && matches!(tail, "免费" | "免費" | "free")
+            });
         if !promo {
             break;
         }
@@ -3261,10 +3449,6 @@ fn exist_marker(final_url: &str, body: &str) -> Option<&'static str> {
     if final_url.to_ascii_lowercase().contains("existed=1") {
         return Some("跳转 URL 带 existed=1");
     }
-    // 返回体还是上传表单（multipart）：这是校验失败重填，不是重复提示
-    if body.contains("multipart/form-data") {
-        return None;
-    }
     const MARKERS: &[&str] = &[
         "已经上传",
         "已存在",
@@ -3272,10 +3456,16 @@ fn exist_marker(final_url: &str, body: &str) -> Option<&'static str> {
         "already exists",
         "Torrent already",
     ];
+    // 错误框里的明确重复措辞优先：有的站会把错误框和上传表单一起返回（重填页），
+    // 不能因为看到 multipart 就忽略站点说过的「已存在」。
     if let Some(boxed) = div_inner(body, "errorbox") {
         if let Some(m) = MARKERS.iter().find(|m| boxed.contains(**m)) {
             return Some(*m);
         }
+    }
+    // 返回体还是上传表单（multipart）：这是校验失败重填，不是重复提示
+    if body.contains("multipart/form-data") {
+        return None;
     }
     // 提示页通常很短；长页面里的零散措辞多半是模板/简介文本
     if body.len() <= 8192 {
@@ -4122,6 +4312,7 @@ pub fn drill_release() -> ReleaseInfo {
         imdb: Some("tt5154296".into()),
         douban: Some("25823432".into()),
         tmdb: None,
+        completed_hint: true,
     }
 }
 
@@ -6391,7 +6582,7 @@ Frame rate : 25</pre>
     #[test]
     fn parses_release_page() {
         let info = parse_release_page(PAGE, "fallback");
-        assert_eq!(info.name, "The.Disguiser.Complete.HDTV.1080p.AAC.x264-JING");
+        assert_eq!(info.name, "The.Disguiser.1080p.HDTV.x264.AAC-JING");
         assert_eq!(info.subtitle, "伪装者 全41集");
         assert!(info.mediainfo.contains("Unique ID"));
         assert_eq!(info.imdb.as_deref(), Some("tt4823720"));
@@ -6419,6 +6610,17 @@ Frame rate : 25</pre>
         body.push_str(&"y".repeat(12_000));
         body.push_str("<p>规则：重复上传会提示已存在</p></body></html>");
         assert_eq!(exist_marker("https://x/details.php?id=1", &body), None);
+    }
+
+    #[test]
+    fn exist_marker_reads_errorbox_even_when_form_is_rerendered() {
+        // pthome 实测：重复上传会把错误框和上传表单一起返回
+        let body = r#"<form action="takeupload.php" method="post" enctype="multipart/form-data">
+<div id="errorbox">该种子已存在！</div></form>"#;
+        assert_eq!(
+            exist_marker("https://x/takeupload.php", body),
+            Some("已存在")
+        );
     }
 
     #[test]
@@ -6639,6 +6841,10 @@ Frame rate : 25</pre>
         assert_eq!(strip_promo_suffix("Movie.2024 [FREE]"), "Movie.2024");
         assert_eq!(strip_promo_suffix("Movie.2024 [2x]"), "Movie.2024");
         assert_eq!(strip_promo_suffix("Movie.2024 [免费]"), "Movie.2024");
+        assert_eq!(
+            strip_promo_suffix("Movie.2024 [2X免費] 剩餘時間：2天23時"),
+            "Movie.2024"
+        );
         assert_eq!(strip_promo_suffix("Movie.2024 [未审]"), "Movie.2024");
         assert_eq!(strip_promo_suffix("Movie.2024 [未审核]"), "Movie.2024");
         // 内容标签保留
@@ -7497,6 +7703,52 @@ Language : English"
         assert_eq!(
             normalize_release_title("纯中文标题.2018.1080p"),
             "纯中文标题.2018.1080p"
+        );
+    }
+
+    #[test]
+    fn release_tech_tokens_are_reordered_in_place() {
+        assert_eq!(
+            normalize_release_title_for("The.Disguiser.Complete.HDTV.1080p.AAC.x264-JING", true),
+            "The.Disguiser.1080p.HDTV.x264.AAC-JING"
+        );
+        assert_eq!(
+            normalize_release_title_for(
+                "The Story Of Ming Lan 2018 WEB-DL 4k H265 60fps 10bit AAC-HDSWEB",
+                true
+            ),
+            "The Story Of Ming Lan 2018 4k 60fps WEB-DL H265 10bit AAC-HDSWEB"
+        );
+        assert_eq!(
+            normalize_release_title_for(
+                "Agatha Christies Poirot S01-S13 Collection Bluray 1080p x265 10bit MNHD-FRDS",
+                true
+            ),
+            "Agatha Christies Poirot S01-S13 Collection 1080p Bluray x265 10bit MNHD-FRDS"
+        );
+        // 技术词之后的末段整体保留在最后，不要被挪到标题主体前面
+        assert_eq!(
+            normalize_release_title_for(
+                "S07 Mad Men 2007-2014 1080p Blu-ray x265 AC3￡cXcY@FRDS",
+                true
+            ),
+            "S07 Mad Men 2007-2014 1080p Blu-ray x265 AC3￡cXcY@FRDS"
+        );
+        // 技术词之后不认识的字样（2Audio、MNHD-FRDS）整体留在最后
+        assert_eq!(
+            normalize_release_title_for(
+                "Stephen.Chow.1988-2017.BluRay.1080p.x265.10bit.2Audio.MNHD-FRDS",
+                true
+            ),
+            "Stephen.Chow.1988-2017.1080p.BluRay.x265.10bit.2Audio.MNHD-FRDS"
+        );
+        // 方括号中文前缀先按既有规则去掉，再重排技术参数
+        assert_eq!(
+            normalize_release_title_for(
+                "[人民的名义].In.the.Name.of.People.2017.S01.Complete.2160p.60fps.WEB-DL.HEVC.10bit.AAC-QHstudIo",
+                true
+            ),
+            "In.the.Name.of.People.2017.S01.2160p.60fps.WEB-DL.HEVC.10bit.AAC-QHstudIo"
         );
     }
 
