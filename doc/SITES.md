@@ -6,20 +6,20 @@
 
 - 配置里一共 **147** 个站；
 - 参与扫描的 **101** 个；
-- 允许自动发种的 **42** 个（`assist.autoReseedSites`）。
+- 允许自动发种的 **40** 个（`assist.autoReseedSites`）。
 
 白名单只是“允许发”，不等于“一定发得出去”。实际发布还要过站点权限、字段检查、当天额度和失败冷却（默认关闭）。
 
 2026-11-22 起，不再为了判断“站上有没有”逐个搜索，也不再日常批量跑表单检查。表单检查只在新站第一次接入时做一次，用来拿上传页字段和下拉选项。以前的检查结论只作参考，站点改版后可能失效。
 
-当前白名单（42 站）：
+当前白名单（40 站）：
 
 ```
 audiences, baozi, cangbao, dragonhd, hdfans, hdtime, hdvideo, kufei, lajidui,
 lemonhd, longpt, luckpt, ptba, ptcafe, ptfans, pthome, ptlgs, ptsbao, ptzone,
-qingwa, sbpt, shuioudao, tangpt, xdy, agsvpt, city13, crabpt, cspt, cyanbug,
-dubhe, hdbao, itzmx, nanyang, novahd, oshen, panda, qilin, railgun, tey,
-tjupt, ubits, xingyunge
+qingwa, sbpt, shuioudao, tangpt, xdy, city13, crabpt, cspt, cyanbug, dubhe,
+hdbao, itzmx, nanyang, novahd, oshen, qilin, railgun, tey, tjupt, ubits,
+xingyunge
 ```
 
 ## 2. 2026-11-22 夜间接入的 12 个站
@@ -84,6 +84,49 @@ tjupt, ubits, xingyunge
 | audiences | 判重路线已验证，未接入程序 | Kimi WebBridge 复用浏览器登录态实站检索成功 | — | 程序按“没确认重复就不上传”中止，没有盲发；无头 HTTP 复用不了浏览器会话。**2026-11-24 晚可行性实验通过**：Kimi WebBridge 驱动本机真实 Chrome，audiences 已登录 `Schalkiii`；页面内 `fetch('/torrents.php?search=…')` 返回 200、未跳登录、命中 2 个 `details.php?id=`、无人机验证。只做了只读检索，未提交任何判重。下一步把这条路线接进程序的判重流程（见下方 2.3 末尾） |
 
 **audiences 的后续方案（2026-11-24 更新）**：不再折腾无头 HTTP 复用 cookie，改走 Kimi WebBridge 接管用户已登录的浏览器：判重检索交给人机已经登录的窗口做，拿到结果再回到程序决定发不发。可行性实验已通过（登录态复用 + 站内检索都成功），但还没接进程序；接入前 audiences 仍按“只人工发”处理。
+
+### 2.4 2026-11-25 调试期小批量回归
+
+这一轮对白名单站点逐站再发，原则是“先确认上一次到底发没发出去，再决定重不重发”。有代表性的结果：
+
+| 站点 | 结果 | 详情页 | 备注 |
+| --- | --- | --- | --- |
+| baozi | 2 条，等审核 | https://p.t-baozi.cc/details.php?id=83738 | 波洛 294GB、知否；已挂回 qB |
+| longpt | 1 条，等审核 | https://longpt.org/details.php?id=51248 | 知否；第二条上传页跳到 bonusrain.php，未发 |
+| ptcafe | 1 条新发 + 1 条同 hash | https://ptcafe.club/details.php?id=137250 | 伪装者 |
+| ptfans | 2 条已发布 | https://ptfans.cc/details.php?id=11125 | 知否、人民的名义 |
+| pthome | 1 条已发布 + 1 条已存在补挂 | https://www.pthome.net/details.php?id=284810 | 金枝欲孽 78566 已补挂 |
+| ptlgs | 2 条，等审核 | https://ptlgs.org/details.php?id=115313 | 伪装者、Coraline |
+| ptsbao | 2 条已发布 | https://ptsbao.club/details.php?id=135824 | 广告狂人、伪装者 |
+| shuioudao | 2 条，1 条补图后复审 | https://sewerpt.com/details.php?id=72463 | 波洛补 4 张 imgbox |
+| tangpt | 2 条，等审核 | https://www.tangpt.top/details.php?id=73679 | 波洛、广告狂人 |
+| xdy | 2 条已发布 | https://xdypt.vip/details.php?id=8049 | 知否、人民的名义 |
+| nanyang | 2 条已发布 | https://nanyangpt.com/details.php?id=226221 | 广告狂人、伪装者 |
+| oshen | 2 条已发布 | http://www.oshen.win/details.php?id=57209 | 人民的名义、伪装者 |
+| xingyunge | 2 条，等审核 | https://pt.xingyungept.org/details.php?id=192560 | 知否、人民的名义 |
+| hdvideo | 1 条，等审核 + 1 条同 hash | https://hdvideo.top/details.php?id=79023 | 知否 |
+| ptba | 2 条已发布 | https://1ptba.com/details.php?id=106938 | 伪装者、绝世天劫 |
+| railgun | 2 条已发布 | https://bilibili.download/details.php?id=60734 | 知否、广告狂人；完结标签缺复选框 |
+| crabpt | 2 条，等审核 | https://crabpt.vip/details.php?id=240795 | 人民的名义、Liar Game |
+| dragonhd | 2 条已发布 | https://www.dragonhd.xyz/details.php?id=48987 | 知否、广告狂人；完结/中字标签缺复选框 |
+| dubhe | 2 条已发布 | https://dubhe.site/details.php?id=55718 | 波洛、广告狂人；新种页面已标“通过” |
+| hdbao | 2 条已发布 | https://hdbao.cc/details.php?id=54657 | 伪装者、Coraline；Coraline 标题已手工修正 |
+| lajidui | 2 条，等审核 | https://pt.lajidui.top/details.php?id=85000 | 知否、广告狂人 |
+| lemonhd | 2 条已发布 | https://lemonhd.net/details.php?id=49077 | 知否、广告狂人 |
+| city13 | 1 条已发布 | https://13city.org/details.php?id=88256 | 上传回 200 未识别，站内搜索确认已发出后补挂 |
+| novahd | 2 条已发布 | https://pt.novahd.top/details.php?id=227655 | 伪装者、人民的名义；4K 60fps 选档已修 |
+| qingwa | 1 条新发，等审核 | https://qingwapt.com/details.php?id=208692 | Bitter Moon；伪装者同内容已存在 |
+| cspt | 2 条已发布，补清 MediaInfo | https://cspt.top/details.php?id=260050 | 站点不收 MediaInfo 和图片外 URL 标签，已清 `technical_info` |
+| luckpt | 2 条，等审核 | https://pt.luckpt.de/details.php?id=61666 | 波洛、广告狂人；伪装者 61102 已补 MediaInfo |
+| hdfans | 同 hash 跳过 | http://hdfans.org/details.php?id=287874 | Liar Game 已在做种 |
+| sbpt | 同 hash / existed 补挂 | https://sbpt.link/details.php?id=21767 | 知否、广告狂人、A Touch of Zen |
+| cyanbug | 判重复核超时 | https://cyanbug.net/details.php?id=32829 | 未上传；不盲目重发 |
+| ubits | 上传被图床黑名单拦下 | https://ubits.club/details.php?id=379266 | 简介含 imgbox，站点要求换 pixhost 等图床 |
+| qilin | 审核未过，简介已转 BBCode | https://www.hdkyl.in/details.php?id=479362 | 等站点重审 |
+| tey | 缺 3 张图，未上传 | https://pt.tey.cc/details.php?id=623 | 待补图 |
+| tjupt | 294GB 大合集超时，未重发 | https://www.tjupt.org/details.php?id=236519 | 站点同名旧种不是我们的 |
+| itzmx | 大种 403 / 超 266,240 字节 | https://pt.itzmx.com/details.php?id=13134 | 换小种再试 |
+| audiences | 人机验证挡住判重 | — | 需浏览器登录态，暂不盲发 |
 
 ## 3. 全部站点（147 个）
 
@@ -184,7 +227,7 @@ tjupt, ubits, xingyunge
 | nicept | 老师 | nicept.net | NexusPHP | 是 | — | — | ok | type 未选 | ok | 1 |  |
 | novahd | nova | pt.novahd.top | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 2 |  |
 | oshen | 奥申 | oshen.win | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 1 | 2026-11-23 已实发 `57082`，`22e3dd63…`，补挂 qB 校验 100%；站上改写 hash，已入白名单；表单没有“完结”标签，人工补 |
-| panda | 熊猫 | pandapt.net | NexusPHP | 是 | — | — | ok | medium_sel[5] 未选 | 未测 | 5 | 141276（《星球大战9：天行者崛起》UHD BluRay 1080p 单文件 11.56G，https://pandapt.net/details.php?id=141276 ）已补挂 qB/校验 100%，主标题去掉了 `[50%] 剩余时间` 中文、简介按【转载出处-制作说明-海报-简介-info-截图】重排并换 imgbox 图；门禁 `titleNoCjk+剪死图+至少4张（熊猫站规）+descrOrder`。2026-11-24 查清去向：第一次被 NoCaps 判主标题含中文 + 简介顺序不合规；重提的那版被站点当“候选种子”，24 小时内没做种被系统自动删除（不是审核不过被删）。qB 里那条还挂着 tracker，tracker 报 `torrent not registered`；2026-11-24 晚已暂停熊猫发种（从 `autoReseedSites` 摘掉、列入 `reseedPausedSites`），删还是重发待定 |
+| panda | 熊猫 | pandapt.net | NexusPHP | 是 | — | 是 | ok | medium_sel[5] 未选 | 未测 | 5 | 141276（《星球大战9：天行者崛起》UHD BluRay 1080p 单文件 11.56G，https://pandapt.net/details.php?id=141276 ）已补挂 qB/校验 100%，主标题去掉了 `[50%] 剩余时间` 中文、简介按【转载出处-制作说明-海报-简介-info-截图】重排并换 imgbox 图；门禁 `titleNoCjk+剪死图+至少4张（熊猫站规）+descrOrder`。2026-11-24 查清去向：第一次被 NoCaps 判主标题含中文 + 简介顺序不合规；重提的那版被站点当“候选种子”，24 小时内没做种被系统自动删除（不是审核不过被删）。qB 里那条还挂着 tracker，tracker 报 `torrent not registered`；2026-11-24 晚已暂停熊猫发种（从 `autoReseedSites` 摘掉、列入 `reseedPausedSites`），删还是重发待定 |
 | ptba | 1PT | 1ptba.com | NexusPHP | 是 | — | — | ok | processing_sel[4] 未选 | ok | 2 | 2026-11-23 已实发 106718，`abf4…`；站点改写 `info.source`，已加入 hash 改写白名单，挂回校验 100% |
 | ptcafe | 咖啡 | ptcafe.club | NexusPHP | 是 | — | — | ok | source_sel[4] 未选 | ok | 1 |  |
 | pthome | 铂金家 | pthome.net | NexusPHP | 是 | — | — | ok | team_sel 未选 | unsupported | 1 | 2026-11-24 首次实发 `284701`（《人民的名义》，源 hdfans）；站上 hash 与构造不同（构造 `b31d8eaf…`，站上 `ebaa6dd9…`），已加入白名单，补挂时确认 qB 里 11-23 23:56 就在做种、校验 100%（见 2.3） |

@@ -237,7 +237,7 @@ cargo build --release -p bsend-cli
 | 配置项 | 默认 | 说明 |
 | --- | --- | --- |
 | `assist.publishEnabled` | `false` | 总开关；关闭时只审不发 |
-| `assist.autoReseedSites` | 42 站 | 自动发种白名单。空的时候真实发布不会发出任何站；只在演练时会覆盖全部站点做发布检查预演 |
+| `assist.autoReseedSites` | 40 站（2026-11-25 实测配置） | 自动发种白名单。空的时候真实发布不会发出任何站；只在演练时会覆盖全部站点做发布检查预演 |
 | `assist.reseedPausedSites` | 空 | 只停发种，辅种照常 |
 | `assist.pausedSites` | 空 | 整站暂停 |
 | `assist.roundBudget` | 200 | 每轮每站最多处理多少条 |
