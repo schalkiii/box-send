@@ -17,7 +17,7 @@
 
 ### Added
 
-- “等站点审核”做成机器可跟踪：新增覆盖状态 `pending_review`（等站点审核）、`review_rejected`（站点审核没过）、`gone_from_site`（站上已找不到）和审计词 `pending_review` / `review_rejected`。发种时站点收下了但不给下载（“尚未通过审核”等）或页面标着未审 / 不通过，就落对应的格子，不算失败、不重发；自动发种每轮开头和新命令 `bsend reviewcheck` 会回访详情页，审完了自动把站点种子下回来挂进 qB。页面标记只认明写的字样（tey `title="未审"`、麒麟“审核不通过，原因：…”、藏宝阁 `title="通过"`、熊猫“没有该ID的种子”都是实测样本）。
+- “等站点审核”做成机器可跟踪：新增覆盖状态 `pending_review`（等站点审核）、`review_rejected`（站点审核没过）、`gone_from_site`（站上已找不到）和审计词 `pending_review` / `review_rejected`。发种时站点收下了但不给下载（“尚未通过审核”等）或页面标着未审 / 不通过，就落对应的格子，不算失败、不重发；自动发种每轮开头和新命令 `bsend followup` 会回访详情页，审完了自动把站点种子下回来挂进 qB。页面标记只认明写的字样（tey `title="未审"`、麒麟“审核不通过，原因：…”、藏宝阁 `title="通过"`、熊猫“没有该ID的种子”都是实测样本）。
 - 发布前门禁新增 `titleNoCjk`、`requireImages`、`descrOrder`：主标题含汉字、最终简介图片不足、简介段落乱序都会在上传前拦下；门禁改为读 `apply_site_rules` 之后真正要提交的简介，不再看源页原文。藏宝阁配 2 张图 + 剪死图，熊猫高清配 4 张图和【转载出处-制作说明-海报-简介-info-截图】顺序。
 - `scripts/imgbox-upload.py`：匿名上传 imgbox，返回原图直链；无需 API key，单图 10MB，实测带藏宝阁/熊猫 Referer 均 200。
 - `scripts/edit-seed.py`：只改已发布种子的标题/简介，默认演练，`--apply` 才提交；其余表单原样回填。

@@ -154,7 +154,7 @@ pub fn run_autopost(
     )
 }
 
-/// 自动发种每轮开头的一次审核回访（只看记了审核结论的格子；`bsend reviewcheck` 不带参数时一样）。
+/// 自动发种每轮开头的一次审核回访（只看记了审核结论的格子；`bsend followup` 不带参数时一样）。
 /// 没有要回访的条目就不出声；回访出错只记日志，不影响后面的发种。
 fn recheck_reviews_once(cfg: &Config, qb: &QBittorrent, emit: &mut impl FnMut(AutopostEvent)) {
     let mut index = ContentIndex::load(&cfg.coverage_state_path());

@@ -62,7 +62,7 @@ status / at / url / note / verifyHash
   `seeding / assisted / reseeded / verifying / review_pending / rejected / miss / wait_source / failed / reseed_draft / other_version / same_hash_skip / skipped / pending_offers / pending_review / review_rejected / gone_from_site`。
 - `skipped` 是内容黑名单的终态，第二轮不会再排队；`note` 里会写命中了哪个关键词。
 - `pending_offers`（待走候选入口）用在站点要求改走候选页（NexusPHP 的 `offers.php`）时，例如判定种子超过体积上限。这类不是“完事”，也不该当失败反复重试：记录留着给人跟进，`bsend status` 单列“待跟进”，下一轮不会自动重新排队。
-- 站点审核的三类：`pending_review`（等站点审核，站上已发布但站点还没放行、拿不到站点种子）、`review_rejected`（站点明写审核不通过，`note` 里是站点给的原因）、`gone_from_site`（回访时详情页说没有这条）。都不算失败、不重发、不进失败冷却；由回访收尾（见第 6 节的 `bsend reviewcheck`），`bsend status` 的“待跟进”里逐条点名。想人工了结其中一条：删掉该站那条记录即可。
+- 站点审核的三类：`pending_review`（等站点审核，站上已发布但站点还没放行、拿不到站点种子）、`review_rejected`（站点明写审核不通过，`note` 里是站点给的原因）、`gone_from_site`（回访时详情页说没有这条）。都不算失败、不重发、不进失败冷却；由回访收尾（见第 6 节的 `bsend followup`），`bsend status` 的“待跟进”里逐条点名。想人工了结其中一条：删掉该站那条记录即可。
 - `reseed_draft` 在新流程里只是临时的待发标记，不是永久待办。
 - 加白名单不会自动生成待发记录。新流程每轮从 qB 的实时缺口生成；`scan` 只刷新内容索引，不改站点处理记录。
 - 改完运行 `bsend status`，能正常解析再继续。
@@ -218,13 +218,13 @@ cargo build --release -p bsend-cli
 
 ```powershell
 # 先演练：照样打开详情页看结论，但不改覆盖记录、不往 qB 里加种子
-.\target\release\bsend.exe --config "$env:LOCALAPPDATA\BoxSend\boxsend.json" reviewcheck --dry-run --sites tey,qilin,cangbao,panda
+.\target\release\bsend.exe --config "$env:LOCALAPPDATA\BoxSend\boxsend.json" followup --dry-run --sites tey,qilin,cangbao,panda
 
 # 正式回访：页面还标着未审 / 不通过 → 改格子并记下站点原话；页面不再有审核标记 → 把站点种子下回来挂进 qB
-.\target\release\bsend.exe --config "$env:LOCALAPPDATA\BoxSend\boxsend.json" reviewcheck
+.\target\release\bsend.exe --config "$env:LOCALAPPDATA\BoxSend\boxsend.json" followup
 
 # 连自己发的、已经在做种的也看一遍（找出以前没记下来的“未审 / 不通过”）；--limit 限条数，--json 给脚本用
-... reviewcheck --all --limit 50
+... followup --all --limit 50
 ```
 
 回访每条最多两次站点请求（详情页、站点种子），照该站的请求间隔排队，不上传、不发帖。页面打不开（登录失效、限流、网络故障）不算结论，格子不动。审核没过的要人去站上改简介或种子，程序不会重发，也不会替你给管理发站内信。

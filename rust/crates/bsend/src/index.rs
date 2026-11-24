@@ -53,7 +53,7 @@ pub enum CoverageStatus {
     PendingOffers,
     /// 站上已经发布，但站点还没放行：详情页标着未审，或下载种子时回“尚未通过审核，请稍后再试”。
     /// 种子在站上，只是拿不到、挂不了 qB。不算失败（不进失败冷却）、不重发（重发只会得到重复种）；
-    /// 也不做站内检索兜底（只会命中同名旧种）。等回访（`bsend reviewcheck` / 自动发种每轮开头）
+    /// 也不做站内检索兜底（只会命中同名旧种）。等回访（`bsend followup` / 自动发种每轮开头）
     /// 看到审核标记消失，再把站点种子下回来挂进 qB。
     PendingReview,
     /// 站点明写审核不通过（附原因）。种子可能仍在 qB 做种；要人改简介/种子后在站上处理，
@@ -109,7 +109,7 @@ impl CoverageStatus {
                 // 但它不是“完事”，`status` / `report` 会单列成待跟进。
                 | CoverageStatus::PendingOffers
                 // 等站点审核 / 审核没过 / 站上已找不到：都在等站点侧或人来处理，
-                // 程序再排一次只会重复上传；同样单列成待跟进，由回访（reviewcheck）收尾。
+                // 程序再排一次只会重复上传；同样单列成待跟进，由回访（followup）收尾。
                 | CoverageStatus::PendingReview
                 | CoverageStatus::ReviewRejected
                 | CoverageStatus::GoneFromSite

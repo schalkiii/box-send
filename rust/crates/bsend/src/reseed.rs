@@ -3821,7 +3821,7 @@ fn site_review_hold(err: &anyhow::Error) -> Option<(ReviewMark, String)> {
 
 /// 站点收下了种子，但审核没放行（要先审，或已经判了不通过）：拿不到站点种子，挂不了 qB。
 /// 这不是发种失败：不记 failed、不进失败冷却、不重发（重发只会得到重复种）；
-/// 落专门的格子，等回访（`bsend reviewcheck` / 自动发种每轮开头）收尾。
+/// 落专门的格子，等回访（`bsend followup` / 自动发种每轮开头）收尾。
 fn review_hold_outcome(
     index: &mut ContentIndex,
     key: &str,

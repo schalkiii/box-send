@@ -178,8 +178,9 @@ enum Cmd {
         key: Option<String>,
     },
 
-    /// 回访站点审核：再看一眼“等站点审核 / 审核没过 / 站上已找不到”的详情页，审完了就把站点种子挂回 qB（不上传、不发帖）
-    Reviewcheck {
+    /// 回访待跟进的种子：再看一眼“等站点审核 / 审核没过 / 站上已找不到”的详情页，审完了就把站点种子挂回 qB（不上传、不发帖）
+    #[command(alias = "reviewcheck")]
+    Followup {
         /// 只看和报告：不改覆盖记录，不往下载器里加种子（照样会打开详情页、下载站点种子）
         #[arg(long)]
         dry_run: bool,
@@ -246,13 +247,13 @@ fn main() -> Result<()> {
         Cmd::Status => cmd_status(&cfg),
         Cmd::Reseed { draft, yes } => cmd_reseed(&cfg, draft, yes),
         Cmd::Pull { site, url, key } => cmd_pull(&cfg, &site, &url, key.as_deref()),
-        Cmd::Reviewcheck {
+        Cmd::Followup {
             dry_run,
             all,
             sites,
             limit,
             json,
-        } => cmd_reviewcheck(&cfg, dry_run, all, sites, limit, json),
+        } => cmd_followup(&cfg, dry_run, all, sites, limit, json),
         Cmd::Report { top, json, sites } => cmd_report(&cfg, top, json, sites),
         Cmd::Formcheck { sites } => cmd_formcheck(&cfg, sites),
         Cmd::Layoutcheck { limit, only } => cmd_layoutcheck(&cfg, limit, only),
@@ -634,7 +635,7 @@ fn cmd_status(cfg: &Config) -> Result<()> {
             ),
             (
                 &CoverageStatus::PendingReview,
-                "等站点审核（每轮自动发种开头、以及 `bsend reviewcheck` 会回访；审完自动把站点种子挂回 qB）",
+                "等站点审核（每轮自动发种开头、以及 `bsend followup` 会回访；审完自动把站点种子挂回 qB）",
             ),
             (
                 &CoverageStatus::ReviewRejected,
@@ -659,7 +660,7 @@ fn cmd_status(cfg: &Config) -> Result<()> {
             print_follow_up_items(&posted_unresolved_items);
         }
         println!(
-            "      （清单只列前 10 条；回访：`bsend reviewcheck`，明细：`bsend audit --days 7`）"
+            "      （清单只列前 10 条；回访：`bsend followup`，明细：`bsend audit --days 7`）"
         );
     }
 
@@ -840,7 +841,7 @@ fn cmd_pull(cfg: &Config, site: &str, url: &str, key: Option<&str>) -> Result<()
 
 /// 回访站点审核：逐条打开“等站点审核 / 审核没过 / 站上已找不到”的详情页，按页面上的结论改格子；
 /// 审完了就把站点种子下回来挂进 qB。不上传、不发帖。自动发种每轮开头也会跑一遍同样的回访。
-fn cmd_reviewcheck(
+fn cmd_followup(
     cfg: &Config,
     dry_run: bool,
     all: bool,
@@ -2139,6 +2140,18 @@ mod tests {
         let help = Cli::command().render_long_help().to_string();
         assert!(help.contains("pull"));
         assert!(!help.contains("reattach"), "{help}");
+    }
+
+    #[test]
+    fn followup_command_keeps_old_name_as_hidden_alias() {
+        use clap::CommandFactory as _;
+
+        // 回访命令一开始叫 reviewcheck，当天改名 followup；旧名照样能跑，但不出现在 --help 里。
+        let cli = Cli::try_parse_from(["bsend", "reviewcheck", "--dry-run"]).unwrap();
+        assert!(matches!(cli.cmd, Cmd::Followup { dry_run: true, .. }));
+        let help = Cli::command().render_long_help().to_string();
+        assert!(help.contains("followup"));
+        assert!(!help.contains("reviewcheck"), "{help}");
     }
 
     #[test]
