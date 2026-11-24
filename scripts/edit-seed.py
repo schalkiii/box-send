@@ -57,6 +57,7 @@ def main() -> int:
     ap.add_argument("--site", required=True)
     ap.add_argument("--id", required=True)
     ap.add_argument("--descr-file")
+    ap.add_argument("--clear-technical-info", action="store_true", help="清空 technical_info 字段（有些站不收 MediaInfo）")
     ap.add_argument("--name")
     ap.add_argument("--subtitle")
     ap.add_argument("--apply", action="store_true")
@@ -97,6 +98,11 @@ def main() -> int:
             return 1
         data[field] = new_descr
         changed.append(field)
+    if args.clear_technical_info:
+        for key in list(data):
+            if "technical_info" in key:
+                data[key] = ""
+                changed.append(f"清空 {key}")
 
     print("将修改：" + ", ".join(changed))
     print(f"简介长度：{len(data.get('descr', ''))} 字节")

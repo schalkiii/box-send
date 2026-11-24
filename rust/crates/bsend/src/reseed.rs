@@ -443,6 +443,10 @@ fn tech_rank(token: &str) -> Option<u8> {
         "bluray", "blu-ray", "web-dl", "webdl", "webrip", "hdtv", "hdrip", "bdrip", "dvdrip",
         "tvrip", "remux", "dvd", "bd", "hdtvrip", "uhd",
     ];
+    const REGION: [&str; 18] = [
+        "usa", "us", "uk", "jpn", "jp", "chn", "ger", "de", "fra", "fr", "hk", "tw", "kor", "kr",
+        "ita", "esp", "rus", "can",
+    ];
     const VIDEO: [&str; 12] = [
         "x264", "x265", "h264", "h.264", "h265", "h.265", "hevc", "avc", "vc-1", "mpeg2", "mpeg-2",
         "av1",
@@ -474,15 +478,27 @@ fn tech_rank(token: &str) -> Option<u8> {
         Some(1)
     } else if SOURCE.contains(&t.as_str()) {
         Some(2)
-    } else if VIDEO.contains(&t.as_str()) {
+    } else if REGION.contains(&t.as_str()) {
         Some(3)
-    } else if DEPTH.contains(&t.as_str()) {
+    } else if VIDEO.contains(&t.as_str()) {
         Some(4)
-    } else if AUDIO.contains(&t.as_str()) {
+    } else if DEPTH.contains(&t.as_str()) {
         Some(5)
+    } else if AUDIO.contains(&t.as_str()) {
+        Some(6)
+    } else if is_audio_detail(&t) {
+        Some(7)
     } else {
         None
     }
+}
+
+fn is_audio_detail(token: &str) -> bool {
+    let t = token.to_ascii_lowercase();
+    matches!(
+        t.as_str(),
+        "ma" | "2audio" | "2audios" | "5.1" | "7.1" | "2.0" | "5.1ch" | "7.1ch"
+    )
 }
 
 fn has_series_marker(name: &str) -> bool {
@@ -2293,6 +2309,44 @@ fn resolution_from_mediainfo(mediainfo: &str) -> Option<&'static str> {
     })
 }
 
+fn pick_resolution_option(options: &[(String, String)], hay: &str) -> Option<String> {
+    let low = hay.to_ascii_lowercase();
+    let res = [
+        "2160p", "1080p", "1080i", "720p", "576p", "480p", "4320p", "8k", "4k",
+    ]
+    .iter()
+    .find(|r| low.contains(**r))?;
+    let fps = [
+        "120fps", "60fps", "50fps", "48fps", "30fps", "25fps", "24fps",
+    ]
+    .iter()
+    .find(|f| low.contains(**f));
+    let candidates: Vec<&(String, String)> = options
+        .iter()
+        .filter(|(_, label)| label.to_ascii_lowercase().contains(res))
+        .collect();
+    if let Some(fps) = fps {
+        if let Some((value, _)) = candidates
+            .iter()
+            .find(|(_, label)| label.to_ascii_lowercase().contains(fps))
+        {
+            return Some(value.clone());
+        }
+    }
+    // 没写帧率时优先不带帧率的普通档，避免默认落到 60Fps/120Fps。
+    if let Some((value, _)) = candidates.iter().find(|(_, label)| {
+        let ll = label.to_ascii_lowercase();
+        ![
+            "120fps", "60fps", "50fps", "48fps", "30fps", "25fps", "24fps",
+        ]
+        .iter()
+        .any(|f| ll.contains(f))
+    }) {
+        return Some(value.clone());
+    }
+    candidates.first().map(|(value, _)| value.clone())
+}
+
 /// 选档回填：发布名/副标题词元 → 分类与质量下拉。只动当前值为 0/空的下拉，
 /// 词元与选项唯一配对才填；有词元配不上、或推断不唯一，留提示不猜。
 /// 同前缀多组下拉（`medium_sel[4]`/`medium_sel[9]`）各自独立配对全填。
@@ -2371,7 +2425,11 @@ fn fill_selects(fields: &mut Vec<Field>, page: &str, info: &ReleaseInfo) -> Vec<
                 continue;
             }
             relevant_seen = true;
-            let mut picked = None;
+            let mut picked = if *prefix == "standard_sel" {
+                pick_resolution_option(&options, &hay)
+            } else {
+                None
+            };
             // 原盘/光盘源 + 有损重编码 → 站点规范通常归「Encode」而非「Blu-ray 原盘」
             // （luckpt 官方预审实测：x265 10bit 标 Blu-ray 会报「媒介与标题不匹配」）。
             // 只在站点确实提供 Encode 选项时生效；REMUX/HDTV 不受影响。
@@ -7734,6 +7792,14 @@ Language : English"
             ),
             "S07 Mad Men 2007-2014 1080p Blu-ray x265 AC3￡cXcY@FRDS"
         );
+        // 地区、声道/音频细节跟着技术顺序走，压制组仍在最后
+        assert_eq!(
+            normalize_release_title_for(
+                "Coraline.2009.1080p.USA.Blu-ray.AVC.DTS-HD.MA.5.1-PIXELPOLICE",
+                true
+            ),
+            "Coraline.2009.1080p.Blu-ray.USA.AVC.DTS-HD.MA.5.1-PIXELPOLICE"
+        );
         // 技术词之后不认识的字样（2Audio、MNHD-FRDS）整体留在最后
         assert_eq!(
             normalize_release_title_for(
@@ -8084,6 +8150,22 @@ Language : Chinese"));
         };
         let (fs, _p, _n) = build_upload_fields(&remux, form, &[]);
         assert_eq!(field_lookup(&fs, "medium_sel"), Some("1"));
+    }
+
+    #[test]
+    fn picks_2160p_60fps_option_when_option_text_has_both() {
+        let options = vec![
+            ("5".to_string(), "2160p/4K".to_string()),
+            ("7".to_string(), "2160p/4K 60Fps".to_string()),
+        ];
+        assert_eq!(
+            pick_resolution_option(&options, "In the Name of People 2017 2160p 60fps WEB-DL"),
+            Some("7".to_string())
+        );
+        assert_eq!(
+            pick_resolution_option(&options, "In the Name of People 2017 2160p WEB-DL"),
+            Some("5".to_string())
+        );
     }
 
     #[test]
