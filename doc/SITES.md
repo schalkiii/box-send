@@ -156,7 +156,7 @@ tjupt, ubits, xingyunge
 | aling | 爱玲 | pt.aling.de | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | 未测 | 1 |  |
 | audiences | 观众 | audiences.me | NexusPHP | 是 | — | — | ok |  | unsupported | 6 | 2026-11-23 判重检索被人机验证拦住，按“未确认重复不上传”中止，未发布；无头 HTTP 复用不了浏览器会话（cookie 里没有 uid/pass 类鉴权字段，直连被跳 `login.php`）。后续改走 Kimi WebBridge 复用用户浏览器登录态做判重，方案未验证，暂仍按只人工发处理（见 2.3 末尾） |
 | baozi | 包子 | p.t-baozi.cc | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 1 |  |
-| cangbao | 藏宝阁 | cangbao.ge | NexusPHP | 是 | — | — | ok | 简介默认转 BBCode；43994 已改 Encode/720p/BBCode，海报和截图已重传 imgbox，等站复审；门禁 `titleNoCjk+pruneDeadImages+requireImages=2` | ok | 1 | 43994 图片死链已修；2026-11-24 回访，详情页审核图标已标 `title="通过"`（审核已过） |
+| cangbao | 藏宝阁 | cangbao.ge | NexusPHP | 是 | — | — | ok | 简介默认转 BBCode；43994 已改 Encode/720p/BBCode，海报和截图已重传 imgbox，等站复审；门禁 `titleNoCjk+剪死图+至少3张` | ok | 1 | 43994 图片死链已修；2026-11-24 回访，详情页审核图标已标 `title="通过"`（审核已过） |
 | city13 | 13City | 13city.org | NexusPHP | 是 | — | — | ok | processing_sel[4] 未选 | ok | 1 |  |
 | crabpt | 蟹黄堡 | crabpt.vip | NexusPHP | 是 | — | — | ok | codec_sel[6] 未选 | ok | 1 | 2026-11-23 已实发 240242，`732e…`；此前候选源站 hdfans 502，被失败冷却挡住，改选 hdsky 源后成功；站点改写 hash，已加入白名单，挂回校验 100% |
 | cspt | 财神 | cspt.top | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 5 | 2026-11-23 已实发 259870，`cf56…`；tracker 在 `tracker.cspt.cc`，已补别名；站点改写 hash，挂回校验 100% |
@@ -184,21 +184,21 @@ tjupt, ubits, xingyunge
 | nicept | 老师 | nicept.net | NexusPHP | 是 | — | — | ok | type 未选 | ok | 1 |  |
 | novahd | nova | pt.novahd.top | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 2 |  |
 | oshen | 奥申 | oshen.win | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 1 | 2026-11-23 已实发 `57082`，`22e3dd63…`，补挂 qB 校验 100%；站上改写 hash，已入白名单；表单没有“完结”标签，人工补 |
-| panda | 熊猫 | pandapt.net | NexusPHP | 是 | — | — | ok | medium_sel[5] 未选 | 未测 | 5 | 141276（《星球大战9：天行者崛起》UHD BluRay 1080p 单文件 11.56G，https://pandapt.net/details.php?id=141276 ）已补挂 qB/校验 100%，主标题去掉了 `[50%] 剩余时间` 中文、简介按【转载出处-制作说明-海报-简介-info-截图】重排并换 imgbox 图；门禁 `titleNoCjk+pruneDeadImages+requireImages=4+descrOrder`。2026-11-24 查清去向：第一次被 NoCaps 判主标题含中文 + 简介顺序不合规；重提的那版被站点当“候选种子”，24 小时内没做种被系统自动删除（不是审核不过被删）。qB 里那条还挂着 tracker，tracker 报 `torrent not registered`；删还是重发待定 |
+| panda | 熊猫 | pandapt.net | NexusPHP | 是 | — | — | ok | medium_sel[5] 未选 | 未测 | 5 | 141276（《星球大战9：天行者崛起》UHD BluRay 1080p 单文件 11.56G，https://pandapt.net/details.php?id=141276 ）已补挂 qB/校验 100%，主标题去掉了 `[50%] 剩余时间` 中文、简介按【转载出处-制作说明-海报-简介-info-截图】重排并换 imgbox 图；门禁 `titleNoCjk+剪死图+至少4张（熊猫站规）+descrOrder`。2026-11-24 查清去向：第一次被 NoCaps 判主标题含中文 + 简介顺序不合规；重提的那版被站点当“候选种子”，24 小时内没做种被系统自动删除（不是审核不过被删）。qB 里那条还挂着 tracker，tracker 报 `torrent not registered`；2026-11-24 晚已暂停熊猫发种（从 `autoReseedSites` 摘掉、列入 `reseedPausedSites`），删还是重发待定 |
 | ptba | 1PT | 1ptba.com | NexusPHP | 是 | — | — | ok | processing_sel[4] 未选 | ok | 2 | 2026-11-23 已实发 106718，`abf4…`；站点改写 `info.source`，已加入 hash 改写白名单，挂回校验 100% |
 | ptcafe | 咖啡 | ptcafe.club | NexusPHP | 是 | — | — | ok | source_sel[4] 未选 | ok | 1 |  |
 | pthome | 铂金家 | pthome.net | NexusPHP | 是 | — | — | ok | team_sel 未选 | unsupported | 1 | 2026-11-24 首次实发 `284701`（《人民的名义》，源 hdfans）；站上 hash 与构造不同（构造 `b31d8eaf…`，站上 `ebaa6dd9…`），已加入白名单，补挂时确认 qB 里 11-23 23:56 就在做种、校验 100%（见 2.3） |
 | ptlgs | 劳改所 | ptlgs.org | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | 未测 | 6 |  |
 | ptsbao | 烧包 | ptsbao.club | NexusPHP | 是 | — | — | ok | processing_sel[1] 未选 | ok | 1 | 2026-11-23 已实发 135787，`0b0087…`；`source_sel[1]` 二级分类已自动填 `剧集-大陆`；站点改写 hash，已加入白名单，挂回校验 100%；表单无“完结”标签需人工补 |
 | ptzone | 葡萄汁 | ptzone.xyz | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 1 |  |
-| qilin | 麒麟 | hdkyl.in | NexusPHP | 是 | — | — | ok | processing_sel[4] 未选 | ok | 9 | 479362 已补挂 qB；站点审核不通过（缺图），不影响做种；2026-11-24 横幅仍写“审核不通过，原因：缺少海报或截图（图片少于 2 张）”，覆盖记录落 `review_rejected`。旧简介 7 张图全不可达（豆瓣海报防盗链 418、`img.pterclub.com` TLS 失败），已全部换成 imgbox 图（1 海报 + 6 截图）并提交，等复审；门禁 `pruneDeadImages+requireImages=2` |
+| qilin | 麒麟 | hdkyl.in | NexusPHP | 是 | — | — | ok | processing_sel[4] 未选 | ok | 9 | 479362 已补挂 qB；站点审核不通过（缺图），不影响做种；2026-11-24 横幅仍写“审核不通过，原因：缺少海报或截图（图片少于 2 张）”，覆盖记录落 `review_rejected`。旧简介 7 张图全不可达（豆瓣海报防盗链 418、`img.pterclub.com` TLS 失败），已全部换成 imgbox 图（1 海报 + 6 截图）并提交，等复审；门禁 `剪死图+至少3张` |
 | qingwa | 青蛙 | qingwapt.com | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 2 | announce 别名 `tracker.qingwapt.org` 已补；2026-11-24 Poirot 合集被站点判 `torrent_too_large`（要求改走 `offers.php` 候选），程序记 `pending_offers`（待走候选入口），不算失败、不自动重试，`status` 单列待跟进；同站《伪装者》发 `208575` 并挂回，校验 100%（构造 `c78e9cb2…`，站上 `d1eeec5c…`）；《知否》回包“已存在！”且 qB 已在做种（见 2.3） |
 | railgun | Railgun | bilibili.download | NexusPHP | 是 | — | — | ok |  | ok | 2 | 2026-11-23 首次实发 60632（`72889498…`）并补挂校验 100%；站上改写 hash，已加入白名单 |
 | sbpt | SBPT | sbpt.link | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 5 |  |
 | shuioudao | 下水道 | sewerpt.com | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 5 |  |
 | soulvoice | 聆音 | pt.soulvoice.club | NexusPHP | 是 | — | — | ok | type 未选 | ok | 1 |  |
 | tangpt | 躺平 | tangpt.top | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 1 |  |
-| tey | 太乙 | pt.tey.cc | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 1 | 2026-11-23 已实发 `623`，`c9570904…`，补挂 qB 校验 100%；`medium_sel` 仅 WEB-DL/HDTV/DVDR/CD/Track，蓝光源会被门禁拦；qB 老种走 `tracker.tey.cc`，已补别名；站上改写 hash，已入白名单；新种状态“未审”（2026-11-24 回访仍未审，覆盖记录落 `pending_review`）。同一条简介曾带 9 张失效的 `i13.tietuku.com` 图，已换 imgbox 图并提交；门禁 `pruneDeadImages+requireImages=2` |
+| tey | 太乙 | pt.tey.cc | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 1 | 2026-11-23 已实发 `623`，`c9570904…`，补挂 qB 校验 100%；`medium_sel` 仅 WEB-DL/HDTV/DVDR/CD/Track，蓝光源会被门禁拦；qB 老种走 `tracker.tey.cc`，已补别名；站上改写 hash，已入白名单；新种状态“未审”（2026-11-24 回访仍未审，覆盖记录落 `pending_review`）。同一条简介曾带 9 张失效的 `i13.tietuku.com` 图，已换 imgbox 图并提交；门禁 `剪死图+至少3张` |
 | tjupt | 北洋园 | tjupt.org | NexusPHP | 是 | — | — | ok | [tjupt] 表单里没找到「中字」类标签复选框，请发布后手动补 | unsupported | 1 | 2026-11-24 剧集分类的 `cname/ename/specificcat` 已能自动填；announce 以站点下载的种子定案为 `tracker-public.tjupt.org`（已写进 `overrides.announceURL`）；上传 120s 仍超时且无回包，同时 `access_token` 请求页面会被 302 到 `login.php`，先刷新登录态再试；站上已有 `416154`、`236519`（pieces 与本地不同，属实不同内容） |
 | ubits | 优堡 | ubits.club | NexusPHP | 是 | — | — | ok | source_sel[4] 未选 | ok | 8 | `source_sel[4]`（地区）和 `team_sel[4]`（`Other`）已能自动填，上面的检查结论是旧结果；2026-11-24 首次实发 `379266`（《伪装者》，源 hdsky），站上 hash 与构造不同（构造 `d9970bce…`，站上 `2a57b787…`），已加入白名单，把站点种子下回来挂进 qB，校验 100%、单站 tracker（见 2.3） |
 | vclib | VC-Lib | pt.vclib.online | NexusPHP | 是 | — | — | ok | type 未选 | ok | 2 |  |

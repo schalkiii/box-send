@@ -112,11 +112,6 @@ pub struct CoverageSettings {
     pub pieces_hash: PiecesHashMode,
     /// 站点发种规范（`assist.reseedRules.<siteId>`）；缺省全保守
     pub reseed_rules: std::collections::BTreeMap<String, crate::gates::SiteRules>,
-    /// 全站默认：提交前逐图探测、剪掉简介里无法访问的图片（`assist.pruneDeadImages`）。
-    /// 站点规则里显式写了 `pruneDeadImages` 的以站点为准（可用来单独关掉某站）。
-    /// 2026-11-24 起真实配置已打开：贴图库域名失效、豆瓣海报防盗链、pterclub 打不开
-    /// 这三种已让三条种子被审核退回，光靠人工逐站补不可靠。
-    pub prune_dead_images: bool,
     /// 自动发种白名单（空 = 不自动发，仅演练）
     pub auto_reseed_sites: Vec<String>,
     /// 真实发种总开关（缺省 false；所有 run_reseed 路径都过这道闸，演练不受影响）
@@ -171,7 +166,6 @@ impl Default for CoverageSettings {
             media_info_dll: None,
             pieces_hash: PiecesHashMode::Auto,
             reseed_rules: std::collections::BTreeMap::new(),
-            prune_dead_images: false,
             auto_reseed_sites: Vec::new(),
             reseed_publish_enabled: false,
             skip_post_check: false,
@@ -188,13 +182,11 @@ impl Default for CoverageSettings {
 }
 
 impl CoverageSettings {
-    /// 取某站生效的发种规则：站点自己写了 `pruneDeadImages` 就以站点为准，
-    /// 没写时继承 `assist.pruneDeadImages` 的全站默认（默认剪死图后再提交）。
+    /// 取某站生效的发种规则。图数门槛不读配置：要图的站按 `gates::image_floor`
+    /// 硬编码（至少 3 张，熊猫 4 张），别处配了 `requireImages` 也以这里为准。
     pub fn rules_for(&self, site: &str) -> crate::gates::SiteRules {
         let mut rules = self.reseed_rules.get(site).cloned().unwrap_or_default();
-        if rules.prune_dead_images.is_none() && self.prune_dead_images {
-            rules.prune_dead_images = Some(true);
-        }
+        rules.require_images = crate::gates::image_floor(site);
         rules
     }
 }
@@ -410,7 +402,6 @@ impl Config {
                         .collect()
                 })
                 .unwrap_or_default(),
-            prune_dead_images: v_bool(&assist, "pruneDeadImages", d.prune_dead_images),
             auto_reseed_sites: v_str_list(&assist, "autoReseedSites"),
             reseed_publish_enabled: v_bool(&assist, "publishEnabled", d.reseed_publish_enabled),
             skip_post_check: v_bool(&assist, "skipPostCheck", d.skip_post_check),
@@ -983,46 +974,29 @@ mod tests {
     }
 
     #[test]
-    fn global_prune_dead_images_applies_to_all_sites_but_site_rule_wins() {
-        // 2026-11-24：三站因死图被审核退回后，剪死图改成全站默认。
-        // 站点没写就继承全局 true；站点显式写 false 的保留（个别站要关也能关）。
-        let mut settings = crate::config::CoverageSettings {
-            prune_dead_images: true,
-            ..Default::default()
-        };
-        let inherit = settings.rules_for("any-site");
-        assert_eq!(inherit.prune_dead_images, Some(true), "没配规则的站也要剪");
+    fn image_floor_is_hardcoded_and_config_cannot_override() {
+        // 2026-11-24：要图的站至少 3 张，改成代码硬规则；配置里写多少都不算。
+        let mut settings = crate::config::CoverageSettings::default();
+        assert_eq!(settings.rules_for("qilin").require_images, Some(3));
+        assert_eq!(settings.rules_for("ubits").require_images, Some(3));
+        assert_eq!(settings.rules_for("tey").require_images, Some(3));
+        assert_eq!(settings.rules_for("cangbao").require_images, Some(3));
+        // 熊猫站规明说 4 张，保留更严的门槛
+        assert_eq!(settings.rules_for("panda").require_images, Some(4));
+        // 不要求图的站没有这道门禁
+        assert_eq!(settings.rules_for("sbpt").require_images, None);
 
         settings.reseed_rules.insert(
-            "offsite".into(),
+            "qilin".into(),
             crate::gates::SiteRules {
-                prune_dead_images: Some(false),
+                require_images: Some(2),
                 ..Default::default()
             },
         );
-        let opt_out = settings.rules_for("offsite");
-        assert_eq!(opt_out.prune_dead_images, Some(false), "站点显式关掉要生效");
-
-        // 全局默认关时，没配规则的站保持不剪（老行为）
-        let off = crate::config::CoverageSettings::default();
-        assert_eq!(off.rules_for("any-site").prune_dead_images, None);
-    }
-
-    #[test]
-    fn assist_prune_dead_images_parses_from_config() {
-        let p = write_temp_isolated(
-            "prune",
-            "boxsend.json",
-            r#"{
-              "sourceSites": [
-                {"id": "nx", "name": "NX", "url": "https://nx.example/", "framework": "NexusPHP", "enabled": true}
-              ],
-              "downloader": {"url": "http://x"},
-              "assist": {"pruneDeadImages": true}
-            }"#,
+        assert_eq!(
+            settings.rules_for("qilin").require_images,
+            Some(3),
+            "配置写的 2 张必须被硬规则覆盖"
         );
-        let cfg = Config::load(&p).unwrap();
-        assert!(cfg.coverage.prune_dead_images);
-        assert_eq!(cfg.coverage.rules_for("nx").prune_dead_images, Some(true));
     }
 }

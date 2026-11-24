@@ -286,20 +286,20 @@ NexusPHP 的简介框是 BBCode 编辑器。源站简介里的 `<fieldset>`、`<
 
 ### 7.3 图片门禁与图床
 
-站点审核会逐张打开简介图片。图片 418/HTML、TLS 失败、域名失效都算死图；只在浏览器里能看不算通过。发种前按站点规则执行：
+站点审核会逐张打开简介图片。图片 418/HTML、TLS 失败、域名失效都算死图；只在浏览器里能看不算通过。发种前按下面执行：
 
-- `pruneDeadImages`：带目标站上传页 Referer 逐张 GET，非 2xx 或非图片类型剪掉；豆瓣图床裸请求 418，带 Referer 才出图，所以 Referer 必须带。**2026-11-24 起是全局默认**：配置里 `assist.pruneDeadImages: true`，所有站点发布前都会先剪；个别站要关就在 `assist.reseedRules.<站点>.pruneDeadImages` 写 `false`（站点规则优先于全局）。
-- `requireImages`：剪完死图后少于 N 张就拦，不提交零图/残图简介。
+- **剪死图：所有站点无条件执行**（2026-11-24 起，代码硬规则，不再读 `assist.pruneDeadImages`）。带目标站上传页 Referer 逐张 GET，非 2xx 或非图片类型剪掉；豆瓣图床裸请求 418，带 Referer 才出图，所以 Referer 必须带。
+- **要图的站至少 3 张**：`gates::image_floor` 按站点硬编码——藏宝阁、优堡、太乙、麒麟 3 张；熊猫高清 4 张（站规更严）。配置里写 `requireImages` 会被覆盖，不用再配。
 - `descrOrder`：按标记检查段落顺序，缺段或倒置都拦；只对配置了的站点生效。
 - `titleNoCjk`：主标题含汉字直接拦，中文名放副标题。
 
-藏宝阁 43994 的两张图（豆瓣海报、`imgs.loukky.com` 截图）都不可达；用 `scripts/imgbox-upload.py` 重传后换成 `images4.imgbox.com` 直链，带 Referer 实测 200。熊猫 141276 原来没有海报/截图，重写简介时补了 1 张海报 + 3 张截图，顺序按站点要求。死图不要靠关掉 `pruneDeadImages` 绕过；先重传，再改简介。
+藏宝阁 43994 的两张图（豆瓣海报、`imgs.loukky.com` 截图）都不可达；用 `scripts/imgbox-upload.py` 重传后换成 `images4.imgbox.com` 直链，带 Referer 实测 200。熊猫 141276 原来没有海报/截图，重写简介时补了 1 张海报 + 3 张截图，顺序按站点要求。死图不要靠关门禁绕过；先重传，再改简介。
 
-2026-11-24 又碰上三次：ubits 379266 的 9 张图全在已失效的 `i13.tietuku.com`（站内信判“海报与截图均无法访问”），同一条内容的 tey 623 带着同样的死图还没审到；麒麟 479362 被判“缺少海报或截图”，实际 7 张图全不可达（豆瓣海报裸请求 418、`img.pterclub.com` TLS 失败）。三条都按同一套流程修：`fetch-descr.py` 取原简介 → 本地备图（海报带 `Referer: https://movie.douban.com/` 取，截图用 cv2 从正片抓）→ `imgbox-upload.py` 传图 → `swap-descr-images.py` 按顺序换链接 → `edit-seed.py` 演练再提交 → 详情页数 imgbox 张数、旧图站点应为 0。三站已补 `pruneDeadImages=true` + `requireImages=2`，细节见 `SITE-DEBUG.md` 6.12。
+2026-11-24 又碰上三次：ubits 379266 的 9 张图全在已失效的 `i13.tietuku.com`（站内信判“海报与截图均无法访问”），同一条内容的 tey 623 带着同样的死图还没审到；麒麟 479362 被判“缺少海报或截图”，实际 7 张图全不可达（豆瓣海报裸请求 418、`img.pterclub.com` TLS 失败）。三条都按同一套流程修：`fetch-descr.py` 取原简介 → 本地备图（海报带 `Referer: https://movie.douban.com/` 取，截图用 cv2 从正片抓）→ `imgbox-upload.py` 传图 → `swap-descr-images.py` 按顺序换链接 → `edit-seed.py` 演练再提交 → 详情页数 imgbox 张数、旧图站点应为 0。
+
+同一内容的其余四站（crabpt 240242、hdfans 287791、qingwa 208575、luckpt 61102）也在 2026-11-24 晚用同一套脚本把 9 张 `i13.tietuku.com` 死图换成了 imgbox，复查四站都是 0 张旧图、9 张新图；sbpt 21684 那份简介本来就没有图片，不需要换。
 
 页面仍显示“不通过”时不用重发：站点没有用户侧“重新提交审核”入口，由 `bsend followup` 接着盯；覆盖记录用 `set-cell-note.py` 写明“已换图、等复审、别重发”。
-
-2026-11-24 起 `assist.pruneDeadImages` 打开后，所有站点上传前都会做这一遍；以后新加的站也自动带上，不用逐站配。真要关某站：`assist.reseedRules.<站点>.pruneDeadImages: false`。
 
 ## 8. 出问题按这个顺序查
 

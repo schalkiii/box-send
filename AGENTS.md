@@ -40,5 +40,7 @@ Rust 2021；crate：`bsend`（引擎）、`bsend-cli`、`bsend-gui`。错误用 
 - 待发条数从 qB 的实时缺口生成：`autopost` 读下载器种子列表，`--dry-run` 读索引里最后一次扫描结果。旧 `reseed_draft` 记录只作过渡期兼容。加白名单不会凭空产生待发条目。
 - 内容范围由 `assist.skipKeywords` 拦教育/成人，命中不占上传额度。
 - **未经用户明确允许，不得给站点管理发站内信/PM**（包括“问审核原因”“申请复审”）。审核被拒时只改种子、改代码、补证据；需要沟通先问用户。
-- 发种前门禁按站点配置执行：`titleNoCjk` 拦主标题汉字，`pruneDeadImages` 逐图探测并剪死图，`requireImages` 要求最终简介有足够可达图片，`descrOrder` 校验简介标题顺序。**剪死图是全局默认**（`assist.pruneDeadImages: true`，2026-11-24 起），站点规则里显式写 `pruneDeadImages: false` 才能单独关；图数门槛按站配（藏宝阁 2、熊猫 4 + 段序、优堡/太乙/麒麟 2）。死图先用 `scripts/imgbox-upload.py` 重传到 imgbox、`scripts/swap-descr-images.py` 按顺序换链接，再改简介，不能靠关掉门禁绕过。
+- **上传成功就立刻把站点种子挂回 qB 做种**（2026-11-24 起是硬步骤，没有开关）：上传后立即从站点下载 `.torrent`、按分片核对、作为独立种子加入 qB；站点刚建种时常先回 `torrent not registered`，程序固定重试 4 轮（每轮 15 秒），仍拿不到才落“待人工确认”，回访用 `bsend pull` 补。站点要先审才给下载的，落 `pending_review`，审完由 `bsend followup` 自动挂回。
+- 发种前门禁按站点配置执行：`titleNoCjk` 拦主标题汉字，`descrOrder` 校验简介标题顺序，`requireLinks` / `requireMediainfo` 校验必填。**剪死图是所有站点无条件执行的硬规则**（不再读 `assist.pruneDeadImages`）：提交前逐图探测，打不开的图直接剪掉。**要图的站至少 3 张可达图**也是硬规则（藏宝阁/优堡/太乙/麒麟 3 张，熊猫 4 张 + 段序；写在 `gates::image_floor`，配置里写多少都不算）。死图先用 `scripts/imgbox-upload.py` 重传到 imgbox、`scripts/swap-descr-images.py` 按顺序换链接，再改简介，不能靠关掉门禁绕过。
+- **熊猫暂停发种**（2026-11-24 起）：`panda` 已从 `assist.autoReseedSites` 摘掉并列入 `assist.reseedPausedSites`；站上那条 141276 是候选种子 24 小时没做种被系统删的，重发必须先“上传→立刻挂回 qB 做种”，当前不自动发。
 - 详细规则见 `doc/ARCHITECTURE.md`；运行数据与巡检见 `doc/OPERATIONS.md`；站点清单见 `doc/SITES.md`；未完成项见 `doc/ROADMAP.md`。历史审计与批次报告已并入这些文档，不再单独保留。

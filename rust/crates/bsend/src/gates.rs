@@ -38,7 +38,8 @@ pub struct SiteRules {
     pub title_max_len: Option<usize>,
     /// 主标题禁止出现汉字（站点只收英文发布名；中文名放副标题）
     pub title_no_cjk: Option<bool>,
-    /// 简介至少包含几张图片（BBCode `[img]` 或 HTML `<img>`，按最终提交值计）
+    /// 简介至少包含几张图片（BBCode `[img]` 或 HTML `<img>`，按最终提交值计）。
+    /// **不读配置**：由 [`image_floor`] 按站点硬编码，`rules_for` 每次覆盖这个值。
     pub require_images: Option<usize>,
     /// 简介必须按这些标题/标记的顺序出现（如 `["【转载出处】","【制作说明】","【海报】","【简介】","【info】","【截图】"]`）
     #[serde(default)]
@@ -64,8 +65,6 @@ pub struct SiteRules {
     /// 即判核心缺口并阻断发布；未配置的站点行为不变。
     #[serde(default)]
     pub required_fields: Vec<String>,
-    /// 提交前剪掉简介里无法访问的图片（站点官方预审会逐图校验）
-    pub prune_dead_images: Option<bool>,
     /// 简介格式：缺省 `bbcode` = 提交前把 HTML 转 BBCode（NexusPHP 的简介框是
     /// BBCode 编辑器，原样提交 HTML 会被转义成字面 `<fieldset>`）；显式 `html`
     /// 才保持 HTML 原样（仅用于确认支持 HTML 的站）。
@@ -94,6 +93,17 @@ impl SiteRules {
     }
 }
 
+/// 要图的站点最低图数：硬规则，不读配置。
+/// 这些站的审核会逐张看图，少于门槛必被退回；`At least 3` 是 2026-11-24 定下的底线。
+/// 熊猫高清站规另外明说“4 张图 + 段序”，比底线更严，保留 4，免得按 3 张发又被退。
+pub fn image_floor(site_id: &str) -> Option<usize> {
+    match site_id {
+        "panda" => Some(4),
+        "cangbao" | "ubits" | "tey" | "qilin" => Some(3),
+        _ => None,
+    }
+}
+
 /// 主标题里是否有汉字（CJK Unified Ideographs + 扩展 A + 兼容区）。
 /// 只判汉字，不把中文标点/全角括号当“中文”，避免误伤英文标题里的装饰符号。
 pub fn has_cjk(text: &str) -> bool {
@@ -106,7 +116,7 @@ pub fn has_cjk(text: &str) -> bool {
 }
 
 /// 简介里图片数量：BBCode `[img]`/`[img=…]` 与 HTML `<img>` 都算。
-/// 按最终提交值统计，所以 `pruneDeadImages` 剪掉死图后这里会同步减少。
+/// 按最终提交值统计，所以剪死图后这里会同步减少。
 pub fn image_count(descr: &str) -> usize {
     let lower = descr.to_ascii_lowercase();
     let mut count = 0usize;

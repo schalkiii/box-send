@@ -36,6 +36,12 @@ use crate::sites::nexusphp::{
 use crate::throttle::{BudgetKind, SiteThrottle};
 use crate::torrent_rewrite;
 
+/// 上传成功后立刻把站点种子下回来挂进 qB 是硬步骤，没有配置开关：
+/// 站点刚建种时 download.php 可能先回 “torrent not registered”，过几十秒才正常。
+/// 这里固定最多试 4 轮、每轮间隔 15 秒；拿不到才落待人工，回访还能用 `bsend pull` 补。
+const POST_UPLOAD_PULL_ATTEMPTS: usize = 4;
+const POST_UPLOAD_PULL_INTERVAL_SEC: u64 = 15;
+
 /// 从源站详情页解析出的发布要素（Swift `ReleaseInfo` 的通用子集）
 #[derive(Debug, Clone, Default)]
 pub struct ReleaseInfo {
@@ -2807,22 +2813,26 @@ fn prefix_selected(fields: &[Field], page: &str, prefix: &str) -> bool {
 /// `multiPicks` 按页面标签勾选复选框/多选组；`requiredFields` 校验必填前缀，
 /// 未选即记 `required_gaps`，由门禁拒绝发布（不带空值 POST）。
 pub fn apply_site_rules(prep: &mut PreparedUpload, rules: &crate::gates::SiteRules) {
-    if rules.prune_dead_images.unwrap_or(false) {
-        if let Some(field) = ["descr", "release_desc", "description", "content"]
-            .iter()
-            .find(|f| field_lookup(&prep.fields, f).is_some())
-            .copied()
-        {
-            let cur = field_lookup(&prep.fields, field).unwrap_or("").to_string();
-            let (next, removed) = prune_dead_images(&cur, &prep.form_url);
-            if removed > 0 {
-                set_field(&mut prep.fields, field, next);
-                prep.select_notes.push(format!(
-                    "简介剪掉 {removed} 张不可访问图片（pruneDeadImages）"
-                ));
-            }
+    // 剪死图是硬规则：不分站点、不看配置。站点官方预审逐图校验，死链会直接退回整条种子。
+    if let Some(field) = ["descr", "release_desc", "description", "content"]
+        .iter()
+        .find(|f| field_lookup(&prep.fields, f).is_some())
+        .copied()
+    {
+        let cur = field_lookup(&prep.fields, field).unwrap_or("").to_string();
+        let (next, removed) = prune_dead_images(&cur, &prep.form_url);
+        if removed > 0 {
+            set_field(&mut prep.fields, field, next);
+            prep.select_notes.push(format!(
+                "简介剪掉 {removed} 张不可访问图片（逐图探测，硬规则）"
+            ));
         }
     }
+    apply_site_rules_tail(prep, rules);
+}
+
+/// 门禁里不需要联网的部分（转 BBCode、选档、必填校验）。单测走这里，避免打外网图。
+fn apply_site_rules_tail(prep: &mut PreparedUpload, rules: &crate::gates::SiteRules) {
     // 站点只吃 BBCode 时（NexusPHP 的简介框是 BBCode 编辑器），源站 HTML 原样提交
     // 会被转义成字面 `<fieldset>`，审核端既看不到排版也看不到图。缺省就转 BBCode；
     // 只有规则显式 descrFormat=html 才保持 HTML。先剪死图，再转。
@@ -5746,63 +5756,92 @@ fn run_reseed_inner(
         }
     }
 
-    // 只下载站点生成的 .torrent；下载失败不立刻放弃，后面还有名称+大小检索兜底。
-    if let Some(url) = download_url.as_deref() {
-        let referer = detail_url.as_deref().unwrap_or(url);
-        let page = TorrentPage {
-            name: String::new(),
-            download_url: url.to_string(),
-            size_bytes: None,
-            size_slack_bytes: None,
-            uploader_uid: None,
-            uploader_name: None,
-        };
-        match tgt.download_torrent(&page, referer) {
-            Ok(d) => tdata = Some(d),
-            Err(e) => match site_review_hold(&e) {
-                // 站点收下了种子，但要先审才给下载：种子就在站上，不用再去站内检索
-                // （检索只会命中同名旧种），直接落“等站点审核 / 审核没过”。
-                Some((mark, why)) => {
-                    return review_hold_outcome(
-                        index,
-                        &req.content_key,
-                        &req.target_site,
-                        detail_url.clone().or_else(|| up.detail_url.clone()),
-                        mark,
-                        &why,
-                        log,
-                    );
-                }
-                None => log(&format!("站点种子下载失败（{e:#}）：{url}")),
-            },
+    // 只下载站点生成的 .torrent。上传成功后这一步是**硬步骤**，不给配置开关：
+    // 站点刚建种时 download.php 常先回 `torrent not registered`，隔几十秒才好；
+    // 一次失败就收工会留下“站上发布了、qB 里没做种”的种子（熊猫候选就这么被删过）。
+    // 因此固定重试几轮，拿不到才落待人工，回访时 `bsend pull` 还能补。
+    let mut pull_round = 0usize;
+    loop {
+        pull_round += 1;
+        if let Some(url) = download_url.as_deref() {
+            let referer = detail_url.as_deref().unwrap_or(url);
+            let page = TorrentPage {
+                name: String::new(),
+                download_url: url.to_string(),
+                size_bytes: None,
+                size_slack_bytes: None,
+                uploader_uid: None,
+                uploader_name: None,
+            };
+            match tgt.download_torrent(&page, referer) {
+                Ok(d) => tdata = Some(d),
+                Err(e) => match site_review_hold(&e) {
+                    // 站点收下了种子，但要先审才给下载：种子就在站上，不用再去站内检索
+                    // （检索只会命中同名旧种），直接落“等站点审核 / 审核没过”。
+                    Some((mark, why)) => {
+                        return review_hold_outcome(
+                            index,
+                            &req.content_key,
+                            &req.target_site,
+                            detail_url.clone().or_else(|| up.detail_url.clone()),
+                            mark,
+                            &why,
+                            log,
+                        );
+                    }
+                    None => log(&format!("站点种子下载失败（{e:#}）：{url}")),
+                },
+            }
         }
-    }
 
-    // 回包没给链接、或链接下载失败：用发布名 + 本地总大小检索新种。
-    // 只接受站点详情页标题和大小都对上的候选，再下载站点种；绝不拿本地构造种顶替。
-    if tdata.is_none() {
-        let mut held: Option<(String, ReviewMark, String)> = None;
-        if let Some((found_detail, found_data)) = locate_posted_by_search(
-            &tgt,
-            &info,
-            Some(entry.total_size),
-            cfg.coverage.relaxed_retry_search,
-            throttle,
-            log,
-            &mut held,
-        ) {
-            detail_url = Some(found_detail);
-            tdata = Some(found_data);
-        } else if let Some((found_detail, mark, why)) = held {
-            return review_hold_outcome(
-                index,
-                &req.content_key,
-                &req.target_site,
-                Some(found_detail),
-                mark,
-                &why,
+        // 回包没给链接、或链接下载失败：用发布名 + 本地总大小检索新种。
+        // 只接受站点详情页标题和大小都对上的候选，再下载站点种；绝不拿本地构造种顶替。
+        if tdata.is_none() {
+            let mut held: Option<(String, ReviewMark, String)> = None;
+            if let Some((found_detail, found_data)) = locate_posted_by_search(
+                &tgt,
+                &info,
+                Some(entry.total_size),
+                cfg.coverage.relaxed_retry_search,
+                throttle,
                 log,
-            );
+                &mut held,
+            ) {
+                detail_url = Some(found_detail);
+                tdata = Some(found_data);
+            } else if let Some((found_detail, mark, why)) = held {
+                return review_hold_outcome(
+                    index,
+                    &req.content_key,
+                    &req.target_site,
+                    Some(found_detail),
+                    mark,
+                    &why,
+                    log,
+                );
+            }
+        }
+
+        if tdata.is_some() || pull_round >= POST_UPLOAD_PULL_ATTEMPTS {
+            break;
+        }
+        log(&format!(
+            "上传已成功，站点种子还拿不到；{} 秒后再试（第 {pull_round}/{POST_UPLOAD_PULL_ATTEMPTS} 轮）",
+            POST_UPLOAD_PULL_INTERVAL_SEC
+        ));
+        thread::sleep(Duration::from_secs(POST_UPLOAD_PULL_INTERVAL_SEC));
+        // 重抓详情页：刷新下载链接，也顺带看审核标记是否更新
+        if let Some(detail) = detail_url.as_deref() {
+            match tgt.fetch_torrent_page_marked(detail) {
+                Ok((p, mark)) => {
+                    page_seen = true;
+                    page_mark = mark.or(page_mark);
+                    if !p.download_url.is_empty() {
+                        download_url = Some(p.download_url);
+                    }
+                }
+                Err(e) => log(&format!("重试·详情页打不开（{e:#}）：{detail}")),
+            }
         }
     }
 
@@ -6736,7 +6775,7 @@ Frame rate : 25</pre>
             descr_format: Some("bbcode".into()),
             ..Default::default()
         };
-        apply_site_rules(&mut prep, &rules);
+        apply_site_rules_tail(&mut prep, &rules);
         let d = field_lookup(&prep.fields, "descr").unwrap_or("");
         assert!(d.starts_with("[quote]\n正文"), "{d}");
         assert!(d.contains("[img]https://x/a.jpg[/img]"), "{d}");
@@ -6763,7 +6802,7 @@ Frame rate : 25</pre>
             required_gaps: vec![],
             form_html: String::new(),
         };
-        apply_site_rules(&mut prep, &crate::gates::SiteRules::default());
+        apply_site_rules_tail(&mut prep, &crate::gates::SiteRules::default());
         let d = field_lookup(&prep.fields, "descr").unwrap_or("");
         assert!(d.starts_with("[quote]\n正文"), "{d}");
         assert!(d.contains("[img]https://x/a.jpg[/img]"), "{d}");
