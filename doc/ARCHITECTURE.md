@@ -50,7 +50,7 @@ qB 没有 tracker，也不等于站上一定没发过。可能是站上已经有
 | `review_pending` | 站上看起来已有，但 qB 没有对应 tracker，等人核对 |
 | `wait_source` | 本地没有可用的源种子，导不出文件 |
 | `reseed_draft` | 临时的待发队列；一轮结束后应该变成成功、失败或跳过 |
-| `skipped` | 命中内容类型黑名单，永久不再自动发 |
+| `skipped` | 终态，不再自动发。两种来源：命中内容类型黑名单（`assist.skipKeywords`）；或站点明确判定这条发不了——例如青蛙的 `torrent_too_large` 只肯走 `offers.php` 候选入口 |
 | `other_version` | 站上已有同片的其他版本，分片不一样 |
 | `same_hash_skip` | 目标种子和 qB 已有种子完全同一个 hash，qB 不允许重复添加 |
 
@@ -285,6 +285,8 @@ Windows 计划任务只给命令示例，不自动创建。需要常驻时用任
 - MediaInfo 的图形界面版不能无界面运行，必须调 `MediaInfo.dll` 的 C 接口。
 - 搜索表单可能污染上传字段的类型；定位上传块时按 `type=file`、`takeupload`、`upload` 打分。
 - 早期每个请求慢 30 秒是系统代理残留；qB 的版本接口也不再返回 JSON，连通性要看种子列表接口。
+- 30 秒全局超时对**上传**这一步不够：站点要在服务端解 bencode、算 hash、查重再落库，北洋园实测回不来，客户端会先断开（断开后站上也不会有记录，不用担心中途落库重复）。所以只有 `post_upload` 放宽到 120 秒，列表和检索仍是 30 秒。
+- 有些站点的“拒绝”长得像成功页：青蛙的 Poirot 合集回包是一个自动 submit 到 `offers.php?add_offer=1` 的 `torrent_too_large` 表单。只看“有没有报错字样”会把它当成功，得按表单 id 识别。
 
 ## 13. 相关文档
 
