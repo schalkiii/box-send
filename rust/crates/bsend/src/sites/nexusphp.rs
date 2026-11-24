@@ -12,7 +12,7 @@ use std::time::Duration;
 use anyhow::{anyhow, Context, Result};
 use reqwest::blocking::Client;
 use reqwest::header::REFERER;
-use scraper::{Html, Selector};
+use scraper::{ElementRef, Html, Selector};
 use url::Url;
 
 use crate::bencode;
@@ -1191,30 +1191,23 @@ struct DisplaySize {
     slack_bytes: i64,
 }
 
+/// 只认“数字 + 显式单位”：数字前可以有不含数字的前缀（`大小：77.43`），
+/// 单位可以和数字粘连（`77.43GB`）。没有单位的纯数字是日期、做种数、分辨率这类计数，
+/// 一律不当大小；单位只看紧随其后的一个词，下一个词不是单位就说明这个数字不是大小。
 fn parse_human_size_display(text: &str) -> Option<DisplaySize> {
     let cleaned = text.replace(',', "");
     let tokens: Vec<&str> = cleaned.split_whitespace().collect();
-    let mut i = 0;
-    while i < tokens.len() {
-        let Ok(num) = tokens[i].parse::<f64>() else {
-            i += 1;
+    for (i, token) in tokens.iter().enumerate() {
+        let Some((num, glued)) = number_with_optional_unit(token) else {
             continue;
         };
-        let unit = tokens
-            .get(i + 1)
-            .map(|u| u.trim_end_matches('.'))
-            .unwrap_or("B")
-            .to_ascii_lowercase();
-        let factor: f64 = match unit.as_str() {
-            "b" => 1.0,
-            "kib" | "kb" => 1024.0,
-            "mib" | "mb" => 1024.0f64.powi(2),
-            "gib" | "gb" => 1024.0f64.powi(3),
-            "tib" | "tb" => 1024.0f64.powi(4),
-            _ => {
-                i += 1;
-                continue;
-            }
+        let unit = if glued.is_empty() {
+            tokens.get(i + 1)?.trim_end_matches('.')
+        } else {
+            glued
+        };
+        let Some(factor) = unit_factor(unit) else {
+            continue;
         };
         let bytes = (num * factor).round() as i64;
         if bytes > 0 {
@@ -1222,9 +1215,45 @@ fn parse_human_size_display(text: &str) -> Option<DisplaySize> {
             let slack_bytes = (factor * 0.01).round() as i64;
             return Some(DisplaySize { bytes, slack_bytes });
         }
-        i += 1;
     }
     None
+}
+
+/// 把一个词拆成“数字 + 紧跟的字母后缀”：`77.43` -> (77.43, ``)，`77.43GB` -> (77.43, `GB`)，
+/// `大小：77.43` -> (77.43, ``)。数字前面还带数字的词（`2024-11-23`、`S01E02`）和
+/// 数字后面不是纯字母的词（`5.1-GROUP`、`1080p.x264`）都返回 None：那只是标题或日期的一部分。
+fn number_with_optional_unit(token: &str) -> Option<(f64, &str)> {
+    let glued_len = token
+        .bytes()
+        .rev()
+        .take_while(|b| b.is_ascii_alphabetic())
+        .count();
+    let head = &token[..token.len() - glued_len];
+    let start = head
+        .char_indices()
+        .rev()
+        .take_while(|(_, c)| c.is_ascii_digit() || *c == '.')
+        .last()
+        .map(|(i, _)| i)?;
+    if token[..start].bytes().any(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let num = head[start..].trim_end_matches('.');
+    num.parse::<f64>()
+        .ok()
+        .map(|n| (n, &token[token.len() - glued_len..]))
+}
+
+/// 大小单位 → 字节倍数（1024 进制）；不是大小单位返回 None。
+fn unit_factor(unit: &str) -> Option<f64> {
+    match unit.to_ascii_lowercase().as_str() {
+        "b" => Some(1.0),
+        "kib" | "kb" => Some(1024.0),
+        "mib" | "mb" => Some(1024.0f64.powi(2)),
+        "gib" | "gb" => Some(1024.0f64.powi(3)),
+        "tib" | "tb" => Some(1024.0f64.powi(4)),
+        _ => None,
+    }
 }
 
 /// 人类可读大小 → 字节；解析不出返回 None。
@@ -1232,21 +1261,135 @@ pub fn parse_human_size(text: &str) -> Option<i64> {
     parse_human_size_display(text).map(|s| s.bytes)
 }
 
-/// 从详情页 HTML 提取总大小（字节 + 显示精度）。只认带单位的大小文本；纯数字不当大小。
+/// 从详情页 HTML 提取总大小（字节 + 显示精度）。
+///
+/// 先找带标签的：以「大小 / 体积 / Size」开头的单元格，取标签后的第一个带单位大小。
+/// 标准 NexusPHP 把大小和类型、媒介写在同一格，整格远超下面的长度上限，只靠短单元格取不到。
+/// 没有带标签的，再退回“整格只有一个带单位大小”的短单元格（值独占一格的版式）。
+/// 没有单位的纯数字是日期、做种数、分辨率，一律不当大小；页眉的“上传量：1.35 TB”、
+/// MediaInfo 的 `Size : 7.99 GiB`（单个文件的体积）、文件列表每一行的体积都不是种子总大小，都跳过。
 fn page_size_display(html: &str) -> Option<DisplaySize> {
     let doc = Html::parse_document(html);
     let sel = Selector::parse("td,th,span,div").ok()?;
+    let mut bare = None;
     for el in doc.select(&sel) {
         let t: String = el.text().collect::<String>();
         let t = t.trim();
-        if t.is_empty() || t.chars().count() > 40 {
+        // 没有数字的文本不可能带大小，先挡掉，省掉后面的解析。
+        if t.is_empty() || !t.contains(|c: char| c.is_ascii_digit()) {
             continue;
         }
-        if let Some(size) = parse_human_size_display(t) {
+        let labelled = after_size_label(t).and_then(parse_human_size_display);
+        let bare_hit = if bare.is_none() && t.chars().count() <= 40 {
+            bare_cell_size(t)
+        } else {
+            None
+        };
+        if labelled.is_none() && bare_hit.is_none() {
+            continue;
+        }
+        if in_mediainfo(el) {
+            continue;
+        }
+        if let Some(size) = labelled {
             return Some(size);
         }
+        if !in_file_list_row(el) {
+            bare = bare_hit;
+        }
     }
-    None
+    bare
+}
+
+/// 值独占一格的版式：整格必须以数字开头、就是一个带单位的大小，单位后面不能再有别的数字。
+/// `77.43 GB` / `370.69GiB` / `1,024 MB` 算；`上传量:1.353 TB`、`4.945 TB 100.15 GB 50.557`
+/// 是页眉的账户统计，不算。
+fn bare_cell_size(text: &str) -> Option<DisplaySize> {
+    let mut tokens = text.split_whitespace();
+    let first = tokens.next()?;
+    if !first.starts_with(|c: char| c.is_ascii_digit()) {
+        return None;
+    }
+    let size = parse_human_size_display(text)?;
+    let glued = number_with_optional_unit(first)
+        .map(|(_, unit)| !unit.is_empty())
+        .unwrap_or(false);
+    // 单位和数字分在两个词时，第二个词是单位，不算“后面的内容”。
+    if !glued {
+        tokens.next();
+    }
+    if tokens.any(|w| w.chars().any(|c| c.is_ascii_digit())) {
+        return None;
+    }
+    Some(size)
+}
+
+/// 单元格文本以「大小 / 体积 / Size」这类总大小标签开头时，返回标签之后的部分。
+fn after_size_label(text: &str) -> Option<&str> {
+    const LABELS: &[&str] = &["文件大小", "大小", "体积", "容量", "file size", "size"];
+    let lower = text.to_ascii_lowercase();
+    let label = LABELS.iter().copied().find(|l| lower.starts_with(l))?;
+    Some(
+        text[label.len()..]
+            .trim_start_matches(|c: char| c.is_whitespace() || c == ':' || c == '：'),
+    )
+}
+
+/// 判断单元格是否落在 MediaInfo 块里。MediaInfo 文本块固定以 `General` 段开头，所以：
+/// 往上三层内有以 `General` 开头的容器，或者自身 / 上一层带至少两个 MediaInfo 字段
+/// （`Container`、`Bit rate`、`Duration`…），或者往上 8 层内有 class / id 含 `mediainfo` 的容器。
+/// 标记只往上看一层：再往上就是整张信息表，简介里的 MediaInfo 也在里面，会把真正的大小那一格误伤。
+fn in_mediainfo(el: ElementRef<'_>) -> bool {
+    const MARKERS: &[&str] = &[
+        "Complete name",
+        "Container",
+        "Bit rate",
+        "Duration",
+        "Stream size",
+    ];
+    let mut node = Some(el);
+    for depth in 0..8 {
+        let Some(cur) = node else {
+            return false;
+        };
+        let tagged = cur
+            .value()
+            .classes()
+            .chain(cur.value().id())
+            .any(|v| v.to_ascii_lowercase().contains("mediainfo"));
+        if tagged {
+            return true;
+        }
+        if depth <= 3 {
+            let text: String = cur.text().collect();
+            let starts_with_general = text.trim_start().starts_with("General");
+            let marker_hits = if depth <= 1 {
+                MARKERS.iter().filter(|m| text.contains(**m)).count()
+            } else {
+                0
+            };
+            if starts_with_general || marker_hits >= 2 {
+                return true;
+            }
+        }
+        node = cur.parent().and_then(ElementRef::wrap);
+    }
+    false
+}
+
+/// 文件列表每一行都是「文件名 + 单个体积」，短小又带单位，但不是种子总大小。
+/// 只看父元素这一层：同一行里出现视频文件扩展名，就说明这是文件列表。
+fn in_file_list_row(el: ElementRef<'_>) -> bool {
+    const EXTENSIONS: &[&str] = &[
+        ".mkv", ".mp4", ".m2ts", ".ts", ".avi", ".m4v", ".iso", ".mov", ".wmv", ".mpg", ".mpeg",
+        ".webm", ".flv",
+    ];
+    let Some(parent) = el.parent().and_then(ElementRef::wrap) else {
+        return false;
+    };
+    let text: String = parent.text().collect();
+    let lower = text.to_ascii_lowercase();
+    EXTENSIONS.iter().any(|ext| lower.contains(ext))
 }
 
 /// 从详情页 HTML 提取总大小（字节）。只认带单位的大小文本；纯数字不当大小。
@@ -1969,6 +2112,146 @@ mod tests {
         assert_eq!(url_encode("Black Lagoon"), "Black%20Lagoon");
         assert_eq!(url_encode("a.b-c_d~e"), "a.b-c_d~e");
         assert_eq!(url_encode("黑礁"), "%E9%BB%91%E7%A4%81");
+    }
+
+    fn fixture(name: &str) -> String {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../Tests/BoxSendTests/Fixtures")
+            .join(name);
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
+    }
+
+    #[test]
+    fn human_size_requires_explicit_unit() {
+        let gib = 1024f64.powi(3);
+        let bytes = |text: &str| parse_human_size_display(text).map(|s| s.bytes);
+        // 数字前可以带不含数字的标签，单位可以和数字粘连
+        for text in ["77.43 GB", "大小：77.43 GB", "77.43GB", "大小：77.43GB"] {
+            assert_eq!(bytes(text), Some((77.43 * gib).round() as i64), "{text}");
+        }
+        assert_eq!(bytes("1,024 MB"), Some(1024 * 1024 * 1024));
+        // 纯数字是日期、做种数、分辨率，不是大小
+        for text in [
+            "8549",
+            "上传于 2026.11.23",
+            "做种 12",
+            "2024-11-23 5",
+            "1080p",
+            "10bit",
+            "86189256212 bytes",
+            "S01E02 2",
+        ] {
+            assert_eq!(bytes(text), None, "{text}");
+        }
+    }
+
+    #[test]
+    fn page_size_prefers_labelled_cell() {
+        let gib = 1024f64.powi(3);
+        // 标准 NexusPHP：大小和类型、媒介挤在同一格，远超 40 字；页面里还有纯数字和 MediaInfo 表格
+        let html = r#"<html><body>
+        <span>8549</span>
+        <div class="all-mediainfo"><div class="base-mediainfo"><table><tbody>
+        <tr><td>Container: Matroska</td></tr><tr><td>Size: 7.99 GiB</td></tr>
+        </tbody></table></div></div>
+        <table><tr><td class="rowfollow"><b><b>大小：</b></b>77.43 GB&nbsp;&nbsp;&nbsp;<b>类型:</b>动漫 / Anime&nbsp;&nbsp;<b>媒介:</b>Remux</td></tr></table>
+        </body></html>"#;
+        assert_eq!(
+            page_size_display(html).unwrap().bytes,
+            (77.43 * gib).round() as i64
+        );
+
+        // MediaInfo 文本块和文件列表（每行一个文件的体积）都不是种子总大小
+        let html = r#"<html><body>
+        <div>General<br>Complete name : Show.S01E01.mkv<br><span>Size: 80.27 GiB</span><br>Duration : 24 min</div>
+        <table><tr><td>01.mkv</td><td>82,196.48 MB</td></tr><tr><td>02.mkv</td><td>300.00 MB</td></tr></table>
+        <table><tr><td class="rowhead">大小</td><td>33.19 GB</td></tr></table>
+        </body></html>"#;
+        assert_eq!(
+            page_size_display(html).unwrap().bytes,
+            (33.19 * gib).round() as i64
+        );
+
+        // 只有计数、日期、分辨率：取不到就是取不到，不能编一个字节数出来
+        let counts =
+            r#"<html><body><span>4</span><b>1080p</b><td>上传于 2026.11.23</td></body></html>"#;
+        assert_eq!(page_size_display(counts), None);
+    }
+
+    #[test]
+    fn fixture_detail_pages_report_the_labelled_size() {
+        let gib = 1024f64.powi(3);
+        // 真实站点详情页：大小标签都和类型、媒介挤在同一格，以前取到的是纯数字或文件列表里的单文件体积
+        for (name, labelled) in [
+            ("detail-crabpt-theirs.html", 77.43),
+            ("detail-qilin-theirs.html", 77.43),
+            ("detail-hdclone-mine.html", 77.43),
+            ("detail-ubits-theirs.html", 77.43),
+            ("hdsky-detail.html", 33.19),
+            ("pter-detail.html", 1.89),
+            ("zmpt-details-115285-webdl.html", 14.15),
+        ] {
+            let got = page_size_display(&fixture(name))
+                .unwrap_or_else(|| panic!("{name} must report its labelled size"));
+            assert_eq!(got.bytes, (labelled * gib).round() as i64, "{name}");
+        }
+    }
+
+    #[test]
+    fn fixture_detail_pages_never_report_bare_counts() {
+        // 没有「大小」标签的版式可以取不到（取不到就不参与大小比对），但绝不能把计数当成字节数
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../Tests/BoxSendTests/Fixtures");
+        let names: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| n.contains("detail") && n.ends_with(".html"))
+            .collect();
+        assert!(
+            names.len() >= 14,
+            "expected the saved detail pages, got {names:?}"
+        );
+        for name in names {
+            if let Some(size) = page_size_display(&fixture(&name)) {
+                assert!(
+                    size.bytes >= 1024 * 1024,
+                    "{name} reported {} bytes",
+                    size.bytes
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn page_size_ignores_header_stats_and_description_mediainfo() {
+        let gib = 1024f64.powi(3);
+        // hdvideo 78856 实测结构：页眉先是账户统计，信息表下半截的简介里带 MediaInfo
+        let html = r#"<html><body>
+        <table><tr><td>上传量:1.353 TB</td><td>下载量:30.85 GB</td><td>4.945 TB 100.15 GB 50.557</td></tr></table>
+        <table border="1"><tr><td class="rowhead">基本信息</td>
+        <td class="rowfollow"><b><b>大小：</b></b>11.56 GB&nbsp;&nbsp;&nbsp;<b>类型:</b>电影&nbsp;&nbsp;<b>媒介:</b>Encode</td></tr>
+        <tr><td class="rowhead">简介</td><td class="rowfollow"><div>General<br>Complete name : Movie.2024.mkv<br>
+        <span>Size: 80.27 GiB</span><br>Duration : 1 h 30 min<br>Bit rate : 30.0 Mb/s</div></td></tr></table>
+        </body></html>"#;
+        assert_eq!(
+            page_size_display(html).unwrap().bytes,
+            (11.56 * gib).round() as i64
+        );
+
+        // 没有大小标签、只有页眉账户统计：宁可取不到
+        let stats = r#"<html><body><table><tr><td>上传量:1.353 TB</td><td>4.945 TB 100.15 GB</td></tr></table></body></html>"#;
+        assert_eq!(page_size_display(stats), None);
+
+        // ubits 实测结构：MediaInfo 逐行渲染成表格、没有 mediainfo 类名，但整块以 General 开头
+        let html = r#"<html><body>
+        <table><tbody><tr><td>General:</td></tr><tr><td>Container: Matroska</td></tr><tr><td>Size: 7.99 GiB</td></tr></tbody></table>
+        <table><tr><td class="rowhead">大小</td><td>33.19 GB</td></tr></table>
+        </body></html>"#;
+        assert_eq!(
+            page_size_display(html).unwrap().bytes,
+            (33.19 * gib).round() as i64
+        );
     }
 
     #[test]
