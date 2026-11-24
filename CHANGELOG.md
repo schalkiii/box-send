@@ -74,7 +74,7 @@
   写进 `overrides.announceURL`；上传仍撞 `takeupload.php` 超时，上传单步超时已放宽到 120s。
   站上已有 `416154`（FLAC/DDP5.1 版本）与 `236519`（同名 FRDS 合集、pieces 与本地不同），属实不同内容。
 - 2026-11-24 `qingwa`：Poirot 合集的“未识别回包”已定性——回包是 `torrent_too_large` 表单自动 submit 到
-  `offers.php?add_offer=1`，站点要求改走候选入口；代码已识别并落 `Skipped`（终态、不自动重试）。
+  `offers.php?add_offer=1`，站点要求改走候选入口；代码已识别并落 `pending_offers`（待走候选入口、不自动重试，后续在 `status` 里跟进）。
   同站《伪装者》发布 `208575`，自动挂回因站上 hash（`d1eeec5c…`）与构造 hash（`c78e9cb2…`）不同被拒，
   改用挂回命令，qB 校验 100%。`audiences` 判重检索被人机验证拦住，且无头 HTTP 复用不了浏览器会话
   （cookie 里没有 `uid/pass` 类鉴权字段、直连被跳 `login.php`），该站只能人工发。
