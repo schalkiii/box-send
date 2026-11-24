@@ -155,7 +155,7 @@ enum Cmd {
         /// 关闭草稿对账（下载器已挂目标站完成种子的草稿覆盖记录自动改写 Seeding）；只关对账
         #[arg(long)]
         no_reconcile: bool,
-        /// 串行循环跑多轮：每轮都是一次完整自动发种（退避/日限额/白名单/锁复用单轮逻辑）
+        /// 串行循环跑多轮：每轮都是一次完整自动发种（失败冷却/日限额/白名单/锁复用单轮逻辑）
         #[arg(long)]
         loop_mode: bool,
         /// 循环模式轮间间隔秒数（默认 1800）
@@ -441,6 +441,7 @@ fn cmd_status(cfg: &Config) -> Result<()> {
     let mut gone = 0usize;
     let mut resolved_sources = 0usize;
     let mut posted_unresolved = 0usize;
+    let mut pending_offers = 0usize;
     let mut drafts = Vec::new();
     let mut pending_by_status: BTreeMap<CoverageStatus, usize> = BTreeMap::new();
     for e in index.contents.values() {
@@ -460,6 +461,9 @@ fn cmd_status(cfg: &Config) -> Result<()> {
                     .is_some_and(|n| n.starts_with("posted_unresolved"))
             {
                 posted_unresolved += 1;
+            }
+            if cell.status == CoverageStatus::PendingOffers {
+                pending_offers += 1;
             }
             match cell.status {
                 CoverageStatus::ReseedDraft => {
@@ -546,10 +550,14 @@ fn cmd_status(cfg: &Config) -> Result<()> {
     for (st, n) in &by_status {
         println!("  {} {}", st.label(), n);
     }
-    if posted_unresolved > 0 {
-        println!(
-            "  其中发后未解决：{posted_unresolved}（站上可能已发、qB 未挂回；按详情页手工核对，勿重发）"
-        );
+    if posted_unresolved > 0 || pending_offers > 0 {
+        println!("  待跟进（等站点侧动作，程序不自动重试）：");
+        if pending_offers > 0 {
+            println!("    等走候选入口：{pending_offers}（站点判种子过大，需到该站候选页提交）");
+        }
+        if posted_unresolved > 0 {
+            println!("    站上已发、qB 未挂回：{posted_unresolved}（按详情页手工挂回，勿重发）");
+        }
     }
 
     // 草稿按白名单拆分：未启用组只计数、不改覆盖记录，不算待发
@@ -1181,6 +1189,7 @@ fn cmd_audit(cfg: &Config, days: usize, site: Option<String>, as_json: bool) -> 
         println!("{}", day.date);
         println!("  {}", header.join(" "));
         let mut sub = (0usize, 0usize, 0usize, 0usize, 0usize, 0usize);
+        let mut pend = 0usize;
         for (sid, c) in &day.by_site {
             let row = [
                 pad_right(sid, 14),
@@ -1198,6 +1207,7 @@ fn cmd_audit(cfg: &Config, days: usize, site: Option<String>, as_json: bool) -> 
             sub.3 += c.duplicate;
             sub.4 += c.other_version;
             sub.5 += c.other;
+            pend += c.pending_offers;
         }
         let sub_row = [
             pad_right("当日小计", 14),
@@ -1209,13 +1219,16 @@ fn cmd_audit(cfg: &Config, days: usize, site: Option<String>, as_json: bool) -> 
             pad_left(&commas(sub.5 as i64), 8),
         ];
         println!("  {}", sub_row.join(" "));
+        if pend > 0 {
+            println!("  其中待走候选入口：{pend}（等人工提交候选，不是失败）");
+        }
         println!();
     }
 
     let t = &report.totals;
     println!(
-        "合计：发布 {}｜拦截 {}｜失败 {}｜重复 {}｜其他版本 {}｜其他 {}",
-        t.posted, t.blocked, t.failed, t.duplicate, t.other_version, t.other
+        "合计：发布 {}｜拦截 {}｜失败 {}｜重复 {}｜其他版本 {}｜其他 {}｜待走候选 {}",
+        t.posted, t.blocked, t.failed, t.duplicate, t.other_version, t.other, t.pending_offers
     );
     println!(
         "计入记录 {} 条；畸形行 {} 条（跳过未计入）。",
@@ -1677,6 +1690,9 @@ fn cmd_autopost(
                 "   → 已上传但站内定位不到条目，待人工/下轮复核：{}\n",
                 url.unwrap_or_default()
             ),
+            "pending_offers" => {
+                println!("   → 站点要求走候选入口（offers.php），已记入待跟进，不自动重试\n")
+            }
             "failed" => println!("   → 发布失败：{}\n", error.unwrap_or_default()),
             _ => {}
         },
@@ -1686,7 +1702,7 @@ fn cmd_autopost(
         return Ok(());
     }
     // 循环模式：单进程串行跑多轮，每轮都是一次完整 `run_autopost`。
-    // 退避 / 日限额 / 白名单 / 跨进程锁都在 `run_autopost` 内部，这里不重复实现。
+    // 失败冷却 / 日限额 / 白名单 / 跨进程锁都在 `run_autopost` 内部，这里不重复实现。
     // 退出语义：单轮返回 `Err` 属致命错误（连不上下载器、发布总闸未开、锁拿不到等），
     // 打印后以非零退出；单条草稿级失败已在审计里记，不会让整轮 Err。
     // `--limit` 按轮计：每轮各自受 limit 约束。Ctrl+C 走默认 SIGINT 终止，不装信号处理器。

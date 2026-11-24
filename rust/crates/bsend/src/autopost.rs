@@ -1,4 +1,4 @@
-//! 自动发种核心：草稿 → 审阅 → 门禁 → 发布，白名单 + 日限额 + 退避 + 审计留痕。
+//! 自动发种核心：草稿 → 审阅 → 门禁 → 发布，白名单 + 日限额 + 失败冷却 + 审计留痕。
 //! CLI 与 GUI 共用本模块：调用方只渲染事件，不重复实现流程逻辑。
 
 use std::collections::{HashMap, HashSet};
@@ -74,7 +74,7 @@ pub struct AutopostSummary {
 }
 
 /// 单草稿发布执行器。生产路径是 `reseed::run_reseed_reviewed`（复用审阅产物）；
-/// 测试注入假实现即可在不碰真实站点的前提下验证白名单/日限额/退避/审计等编排安全闸。
+/// 测试注入假实现即可在不碰真实站点的前提下验证白名单/日限额/失败冷却/审计等编排安全闸。
 /// 第六个参数是门禁通过的那份审阅产物——发布必须提交同一份字段（BUG-M7）。
 pub type ReseedRunner<'a> = dyn FnMut(
         &Config,
@@ -293,7 +293,7 @@ pub fn run_autopost_with(
     // 否则 hdbao 实测 `--limit 1` 会连发两条。
     let mut attempted = 0usize;
     for d in &report.drafts {
-        // 长任务跨午夜时，退避/日限额要按当前时刻算，不能用本轮开跑时的时间
+        // 长任务跨午夜时，失败冷却/日限额要按当前时刻算，不能用本轮开跑时的时间
         let now = now_unix();
         if let Some(l) = opts.limit {
             let used = if opts.dry_run { drilled } else { attempted };
@@ -342,10 +342,11 @@ pub fn run_autopost_with(
                 .get(&(d.content_key.clone(), site.clone()))
                 .copied(),
             now,
+            cfg.coverage.backoff_hours,
         ) {
             emit(AutopostEvent::Log(format!(
-                "跳过 {}：上次拦截/失败还在退避期内（门禁 24h / 失败 6h）",
-                d.name
+                "跳过 {}：上次拦截/失败还在冷却期内（{} 小时）",
+                d.name, cfg.coverage.backoff_hours
             )));
             continue;
         }
@@ -560,10 +561,10 @@ pub fn audit_path_of(cfg: &Config) -> PathBuf {
 
 /// 各站今日 posted 计数（北京时间日界，UTC+8）
 pub type PostedToday = HashMap<String, u32>;
-/// (内容, 站点) → (最近一次拦截/失败时间, 是否门禁拦截)，退避判定用
+/// (内容, 站点) → (最近一次拦截/失败时间, 是否门禁拦截)，失败冷却判定用
 pub type LastBad = HashMap<(String, String), (i64, bool)>;
 
-/// 读审计 JSONL：今日各站 posted 计数 + 每 (内容, 站点) 最近一次拦截/失败（退避用）。
+/// 读审计 JSONL：今日各站 posted 计数 + 每 (内容, 站点) 最近一次拦截/失败（失败冷却用）。
 /// 日界按北京时间（UTC+8）：PT 站按北京 00:00 重置，UTC 日界会错位到北京 08:00。
 pub fn parse_audit(text: &str, now: i64) -> (PostedToday, LastBad) {
     const UTC8: i64 = 8 * 3600;
@@ -620,16 +621,22 @@ fn skip_hit<'a>(name: &str, keywords: &'a [String]) -> Option<&'a str> {
     None
 }
 
-/// 退避窗口：门禁拦截 24h、失败 6h 内不重试同草稿，避免连击白耗请求
-pub fn in_backoff(last: Option<(i64, bool)>, now: i64) -> bool {
+/// 失败重试冷却：同一内容 + 同一站点在 `hours` 小时内不再重试。
+/// `hours = 0`（默认）表示不冷却——手动跑一轮时该不该重试由人决定，
+/// 冷却只会把刚修好问题的验证拖到几小时后。门禁拦截与失败共用同一个窗口，
+/// 需要更保守时把 `assist.backoffHours` 填大。
+pub fn in_backoff(last: Option<(i64, bool)>, now: i64, hours: u32) -> bool {
+    if hours == 0 {
+        return false;
+    }
     match last {
-        Some((at, is_block)) => now - at < if is_block { 86400 } else { 21600 },
+        Some((at, _is_block)) => now - at < i64::from(hours) * 3600,
         None => false,
     }
 }
 
-/// 审计追加（JSONL）。写失败必须中止本轮：posted 记账丢失会让日限额失守、退避失效。
-/// `at` 一律取**写入时刻**：循环起点的时间只用于白名单/日限额/退避判定，
+/// 审计追加（JSONL）。写失败必须中止本轮：posted 记账丢失会让日限额失守、失败冷却失效。
+/// `at` 一律取**写入时刻**：循环起点的时间只用于白名单/日限额/失败冷却判定，
 /// 单条发布可能跨午夜（校验等待最长 verifyWaitSec），记账不能沿用旧快照。
 fn append_audit(path: &Path, mut entry: serde_json::Value) -> Result<()> {
     use std::io::Write as _;
@@ -655,13 +662,14 @@ mod tests {
     #[test]
     fn backoff_windows() {
         let now = 1_800_000_000i64;
-        assert!(!in_backoff(None, now));
-        // 门禁拦截：23h 内退避，25h 后放行
-        assert!(in_backoff(Some((now - 23 * 3600, true)), now));
-        assert!(!in_backoff(Some((now - 25 * 3600, true)), now));
-        // 失败：5h 内退避，7h 后放行
-        assert!(in_backoff(Some((now - 5 * 3600, false)), now));
-        assert!(!in_backoff(Some((now - 7 * 3600, false)), now));
+        // 默认不冷却：`hours = 0` 直接放行，哪怕是刚失败的那一条
+        assert!(!in_backoff(None, now, 0));
+        assert!(!in_backoff(Some((now - 60, true)), now, 0));
+        // 显式给窗口才冷却：6 小时内挡住，7 小时后放行
+        assert!(in_backoff(Some((now - 5 * 3600, false)), now, 6));
+        assert!(!in_backoff(Some((now - 7 * 3600, false)), now, 6));
+        // 门禁拦截与失败共用同一个窗口
+        assert!(in_backoff(Some((now - 5 * 3600, true)), now, 6));
     }
 
     #[test]
@@ -940,7 +948,9 @@ mod tests {
     #[test]
     fn autopost_backoff_skips_recently_blocked_draft() {
         let dir = temp_dir("backoff");
-        let cfg = cfg_with_drafts(&dir, 2, 1);
+        let mut cfg = cfg_with_drafts(&dir, 2, 1);
+        // 默认 0 = 不冷却，这里显式打开 6 小时窗口来测这条闸
+        cfg.coverage.backoff_hours = 6;
         let key = "m:test0000000000000000";
         let audit = audit_path_of(&cfg);
         std::fs::write(
@@ -980,8 +990,8 @@ mod tests {
             &mut runner,
         )
         .unwrap();
-        assert_eq!(called, 0, "退避期内不能调用发布器");
-        assert!(logs.iter().any(|l| l.contains("退避期")));
+        assert_eq!(called, 0, "冷却期内不能调用发布器");
+        assert!(logs.iter().any(|l| l.contains("冷却期")));
     }
 
     #[test]
@@ -1077,7 +1087,7 @@ mod tests {
         assert_eq!(
             outcome(S::Failed).audit_result(),
             "failed",
-            "复核失败必须走失败语义（退避 6h），不能记成重复"
+            "复核失败必须走失败语义（失败冷却 6h），不能记成重复"
         );
         assert_eq!(
             reseed::ReseedOutcome::Posted("u".into()).audit_result(),

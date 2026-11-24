@@ -120,6 +120,10 @@ pub struct CoverageSettings {
     pub skip_post_check: bool,
     /// 加入下载器时 skip_checking=true（默认 false）：跳过哈希校验
     pub skip_hash_check: bool,
+    /// 同一内容 + 同一站点的失败重试冷却小时数（0 = 不冷却，默认 0）。
+    /// 手动作业下重试由人决定，冷却只会挡住刚修好问题的验证；需要防连击时
+    /// 在 `assist.backoffHours` 填一个小时间数。
+    pub backoff_hours: u32,
     /// 索引归档：下载器里消失超过这么多天的内容从索引里清掉
     pub archive_days: i64,
     /// 并行站 worker 数（Swift 版全局串行；Rust 版按站并行，默认 4）
@@ -166,6 +170,7 @@ impl Default for CoverageSettings {
             reseed_publish_enabled: false,
             skip_post_check: false,
             skip_hash_check: false,
+            backoff_hours: 0,
             archive_days: 30,
             max_concurrent_sites: 4,
             rate_limit_floor_sec: 60,
@@ -353,6 +358,8 @@ impl Config {
             categories: v_str_list(&assist, "categories"),
             allow_other_version: v_bool(&assist, "allowOtherVersion", d.allow_other_version),
             skip_keywords: v_str_list(&assist, "skipKeywords"),
+            // 缺省 0：不冷却。负数钳成 0，避免无意义的大值把重试推到很久以后
+            backoff_hours: v_i64(&assist, "backoffHours", d.backoff_hours as i64).max(0) as u32,
             // 负值钳成 0：as u64 回绕成巨值会让 push_tail 的轮询 sleep 数年，整轮无声挂死
             verify_wait_sec: v_i64(&assist, "verifyWaitSec", d.verify_wait_sec as i64).max(0)
                 as u64,

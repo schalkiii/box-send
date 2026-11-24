@@ -16,7 +16,7 @@ C:\Users\Schal\AppData\Local\BoxSend
 | --- | --- | --- |
 | `boxsend.json` | 主配置，程序只读 | 改前备份；负数会被改成 0 或下限 |
 | `coverage.json` | 内容索引和覆盖记录 | 可以，但要按第 2 节的格式 |
-| `auto-audit.jsonl` | 自动发种审计，日限额和退避都靠它 | 只追加或整行删除，不要改中间字段 |
+| `auto-audit.jsonl` | 自动发种审计，日限额和失败冷却都靠它 | 只追加或整行删除，不要改中间字段 |
 | `reseed-log.jsonl` | 每次审阅/上传/挂种的流水 | 只追加或整行删除，整个文件删掉也可以 |
 | `pieces-cache.json` | 分片比对缓存 | 删单条或整个文件都行，会重新算 |
 | `formcheck.json` | 上次表单检查的字段和下拉选项 | 可以删，下次检查会重算 |
@@ -59,8 +59,9 @@ status / at / url / note / verifyHash
 - 想让某站某条内容重新处理：删掉该站那条记录即可。
 - 不要写 `status: "missing"`。表示“没有”的枚举值是 `miss`。
 - 状态值使用下划线写法：
-  `seeding / assisted / reseeded / verifying / review_pending / rejected / miss / wait_source / failed / reseed_draft / other_version / same_hash_skip / skipped`。
+  `seeding / assisted / reseeded / verifying / review_pending / rejected / miss / wait_source / failed / reseed_draft / other_version / same_hash_skip / skipped / pending_offers`。
 - `skipped` 是内容黑名单的终态，第二轮不会再排队；`note` 里会写命中了哪个关键词。
+- `pending_offers`（待走候选入口）用在站点要求改走候选页（NexusPHP 的 `offers.php`）时，例如判定种子超过体积上限。这类不是“完事”，也不该当失败反复重试：记录留着给人跟进，`bsend status` 单列“待跟进”，下一轮不会自动重新排队。
 - `reseed_draft` 在新流程里只是临时的待发标记，不是永久待办。
 - 加白名单不会自动生成待发记录。新流程每轮从 qB 的实时缺口生成；`scan` 只刷新内容索引，不改站点处理记录。
 - 改完运行 `bsend status`，能正常解析再继续。
@@ -73,11 +74,12 @@ status / at / url / note / verifyHash
 | `same_hash_skip` | 目标种子和 qB 已有种子完全同 hash，不改原种子 |
 | `other_version` | 站上同内容但分片不同，不是“重复” |
 | `existed_pending` | 回包说重复，但回包里没有可核对的详情页/下载链接；回包 id 经常是错的。note 以 `existed_unresolved` 开头时，表示站上已有、下载/挂回 qB 失败 |
-| `posted_unresolved` | 站上已发布（新发或 existed），但下载目标种、校验或挂回 qB 失败；待人工补挂，不记失败、不进退避、不占发布额度 |
+| `posted_unresolved` | 站上已发布（新发或 existed），但下载目标种、校验或挂回 qB 失败；待人工补挂，不记失败、不进失败冷却、不占发布额度 |
 | `wait_source` | 没有任何可用成员种子，导不出源文件 |
 | `review_pending` | 站上命中了，但清单或 hash 对不上，等人核对 |
+| `pending_offers` | 站点要求改走候选入口（`offers.php`），程序不自动重试；等人工去候选页提交，`status` 里单列“待跟进” |
 
-`bsend status` 有这类记录时，会在“覆盖分布”下面单独给出“其中发后未解决 N”，只统计 note 以 `posted_unresolved` 开头的条目；它和普通 `review_pending` 不是一回事，不能拿普通待核对的处置方式去重发。
+`bsend status` 把两类“等站点侧动作”的记录单列成“待跟进（等站点侧动作，程序不自动重试）”：等走候选入口（`pending_offers`）和站上已发、qB 未挂回（note 以 `posted_unresolved` / `existed_unresolved` 开头）。这两类都不能拿普通 `review_pending` 的处置方式去重发。
 
 ## 3. 覆盖率怎么读
 
@@ -98,7 +100,7 @@ status / at / url / note / verifyHash
 
 `coveredRatio` 可能显示 100%，但全库只覆盖 4%，因为没处理过的内容根本没进分母。不要拿它当铺满度。现在 `status` 表已经换成“已有 / 缺口 / 覆盖率”三列，`report` 表同时保留旧列供历史对比。
 
-## 4. 审计与退避
+## 4. 审计与失败冷却
 
 `auto-audit.jsonl` 每行是一条自动发种结果：
 
@@ -108,12 +110,12 @@ at / site / key / result / url? / error? / note? / gates?
 
 `result` 常见值：
 
-`posted / blocked / failed / review_failed / skipped_duplicate / other_version / existed_pending / same_hash_skipped`
+`posted / blocked / failed / review_failed / skipped_duplicate / other_version / existed_pending / pending_offers / same_hash_skipped`
 
 用途：
 
 - **日限额**：按北京时间切日，统计 `posted`；
-- **退避**：同一条内容 + 同一个站，`blocked` 停 24 小时，`failed` 和 `review_failed` 停 6 小时；
+- **失败冷却**：默认关闭（`assist.backoffHours` 不填或填 0）。同一内容 + 同一站点被拦或失败后，下一轮直接重试，由人看审计再决定要不要再跑；只有显式配了小时数（例如 6）才会在窗口内跳过，且拦截和失败共用这一个窗口。`pending_offers` 不进冷却，因为它不是失败；
 - **聚合查看**：`bsend audit --days N [--site X] [--json]`，按六类汇总：
   `posted / blocked / failed / duplicate / other_version / other`，另外报告格式坏掉的行数。
 
@@ -161,7 +163,7 @@ pwsh scripts/seeding-audit.ps1 -Json -OutFile audit.json
 3. qB 能不能连上；
 4. 有没有没下完的种子；
 5. 最近审计的失败率；
-6. 有多少条还在退避期。
+6. 有多少条还在失败冷却期（`assist.backoffHours` 为 0 时这一项恒为 0）。
 
 ```powershell
 .\scripts\healthcheck.ps1 -Config "$env:LOCALAPPDATA\BoxSend\boxsend.json"
@@ -196,7 +198,7 @@ cargo build --release -p bsend-cli
 
 `--dry-run` 是试运行：会连站点做审阅和发布检查，但不上传、不写覆盖记录。
 
-补挂站上已发、qB 里没有的记录（不重发、不占发布额度）：
+补挂站上已发、qB 里没有的记录（不重发、不占发布额度）。原理是把站点详情页上的种子下回来，按分片（pieces）认出本地内容，再挂进 qB：
 
 ```powershell
 # 详情页可下载：自动拉详情页、下载目标种、按 pieces 找本地内容并挂回
@@ -207,7 +209,7 @@ cargo build --release -p bsend-cli
 ... reattach --site qilin --url https://www.hdkyl.in/details.php?id=479362 --key m:5826983b00126e58
 ```
 
-`reattach` 只从站点详情页下载目标种，不再接受 `--file` 本地构造种；站点下载不到就报错，宁可不挂也不塞废种。它只核对 hash/pieces 和挂回 qB，不会调用上传接口；目标种 pieces 与本地内容对不上会直接拒绝。
+它只从站点详情页下载目标种，不再接受 `--file` 本地构造种；站点下载不到就报错，宁可不挂也不塞废种。只核对 hash/pieces 和挂回 qB，不会调用上传接口；目标种 pieces 与本地内容对不上会直接拒绝。
 
 ## 7. 发布相关配置
 

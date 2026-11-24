@@ -79,7 +79,7 @@
 - 卡片之间的 gap 用 `S2`；卡片底色 `SURFACE_ALT`，圆角 `rounded_md`。
 
 ### 自动发种（`views/autopost.rs`）
-- 页头 + 一段 `hint`（发布检查/日限额/退避口径，允许 2–3 行换行）。
+- 页头 + 一段 `hint`（发布检查/日限额/失败冷却口径，允许 2–3 行换行）。
 - 控制条：目标站 chips（fixed 高 + 滚动）、试运行 `chip_warn`、上限 chips。
 - 主按钮区：试运行 → `button_accent("开始演练")`；真发布 → `button_danger("真发布（不可撤销）")`，前后各留 `S4` 分隔，旁边 `hint` 说明。
 - 当前草稿预览：`scroll_list` 列出有草稿的目标站 + 该站草稿数（只读）。

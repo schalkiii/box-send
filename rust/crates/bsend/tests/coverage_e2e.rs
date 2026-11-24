@@ -1147,8 +1147,8 @@ fn e2e_login_wall_is_failed_not_miss() {
     assert_eq!(report.by_status[&CoverageStatus::Failed], 2);
 }
 
-/// 场景九：站点限流（429）——记 failed 给人看、该站拿退避。
-/// 退避的数学在 throttle/resolver 单测里钉，这里钉编排层把 429 正确映射成错误。
+/// 场景九：站点限流（429）——记 failed 给人看、该站降速。
+/// 降速的数学在 throttle/resolver 单测里钉，这里钉编排层把 429 正确映射成错误。
 #[test]
 fn e2e_rate_limited_maps_to_failed() {
     let dir = temp_dir("ratelimit");
@@ -1248,7 +1248,7 @@ fn e2e_single_tracker_field_and_plain_version() {
 }
 
 /// 场景十一：站点限流页（HTTP 200 + 「请求过于频繁，限制访问间隔 60 秒/次」）。
-/// 实机 hdsky 就是这个形态。必须记 failed（并让该站退避），绝不能记成「站内没有」。
+/// 实机 hdsky 就是这个形态。必须记 failed（并让该站降速），绝不能记成「站内没有」。
 #[test]
 fn e2e_block_page_is_failed_not_miss() {
     let dir = temp_dir("blockpage");

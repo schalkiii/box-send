@@ -47,6 +47,10 @@ pub enum CoverageStatus {
     ReseedDraft,
     /// 命中内容类型黑名单（教育/成人等）等按策略不再自动发的草稿：终态，第二轮起不再入队
     Skipped,
+    /// 站点明确要求改走候选入口（NexusPHP 的 offers.php，例如判定种子超过体积上限）。
+    /// 这不是“已跳过”，而是要人后续去候选页提交：覆盖记录留着、`status` 单列“待跟进”，
+    /// 但程序不自动重试（重试只会再被同一规则挡住）。
+    PendingOffers,
 }
 
 impl CoverageStatus {
@@ -65,6 +69,7 @@ impl CoverageStatus {
             CoverageStatus::Failed => "失败",
             CoverageStatus::ReseedDraft => "转种草稿",
             CoverageStatus::Skipped => "已跳过（内容类型）",
+            CoverageStatus::PendingOffers => "待走候选入口",
         }
     }
 
@@ -85,6 +90,9 @@ impl CoverageStatus {
                 | CoverageStatus::OtherVersion
                 | CoverageStatus::SameHashSkip
                 | CoverageStatus::Skipped
+                // 等站点候选入口：程序重试只会再被同一规则挡住，所以不入队；
+                // 但它不是“完事”，`status` / `report` 会单列成待跟进。
+                | CoverageStatus::PendingOffers
         )
     }
 }
@@ -473,6 +481,8 @@ mod tests {
         assert!(CoverageStatus::OtherVersion.is_settled());
         assert!(!CoverageStatus::ReviewPending.is_settled());
         assert!(!CoverageStatus::Failed.is_settled());
+        // 等站点候选入口：不入队重试，但也不算“完事”（`status` 单列待跟进）
+        assert!(CoverageStatus::PendingOffers.is_settled());
     }
 
     #[test]

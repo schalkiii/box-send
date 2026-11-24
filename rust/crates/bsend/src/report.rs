@@ -184,6 +184,8 @@ impl CoverageReport {
                             | CoverageStatus::Rejected
                             | CoverageStatus::SameHashSkip
                             | CoverageStatus::Verifying
+                            // 站点要人走候选入口：再排一次只会再被同一规则挡住
+                            | CoverageStatus::PendingOffers
                     ) {
                         continue;
                     }
@@ -542,6 +544,8 @@ pub struct SiteAuditCounts {
     pub other_version: usize,
     /// Unrecognized `result` value, kept so nothing is silently dropped.
     pub other: usize,
+    /// 站点要求走候选入口（`pending_offers`）：等人工提交候选，不是失败
+    pub pending_offers: usize,
     /// Latest record timestamp (Unix sec) for this site/day; 0 when empty.
     pub last_at: i64,
 }
@@ -565,6 +569,8 @@ pub struct AuditTotals {
     pub duplicate: usize,
     pub other_version: usize,
     pub other: usize,
+    /// 站点要求走候选入口（`pending_offers`）
+    pub pending_offers: usize,
     /// Records parsed and counted into the buckets above.
     pub records: usize,
     /// Lines that failed to parse or missed required fields.
@@ -584,7 +590,7 @@ pub struct AuditReport {
 ///
 /// - `posted` → 发布
 /// - `blocked` → 拦截（门禁拦截，转人工）
-/// - `failed`, `review_failed` → 失败（审阅/发布阶段失败；退避口径与 failed 相同）
+/// - `failed`, `review_failed` → 失败（审阅/发布阶段失败；失败冷却口径与 failed 相同）
 /// - `skipped_duplicate`, `existed_pending`, `same_hash_skipped` → 重复（站内已有条目 / 同 hash）
 /// - `other_version` → 其他版本（单列，不计入重复）
 /// - anything else → `other`
@@ -595,6 +601,7 @@ fn audit_bucket(result: &str) -> &'static str {
         "failed" | "review_failed" => "failed",
         "skipped_duplicate" | "existed_pending" | "same_hash_skipped" => "duplicate",
         "other_version" => "other_version",
+        "pending_offers" => "pending_offers",
         _ => "other",
     }
 }
@@ -676,6 +683,7 @@ pub fn audit_daily(text: &str, now: i64, days: usize, site: Option<&str>) -> Aud
             "failed" => counts.failed += 1,
             "duplicate" => counts.duplicate += 1,
             "other_version" => counts.other_version += 1,
+            "pending_offers" => counts.pending_offers += 1,
             _ => counts.other += 1,
         }
         if at > counts.last_at {
@@ -687,6 +695,7 @@ pub fn audit_daily(text: &str, now: i64, days: usize, site: Option<&str>) -> Aud
             "failed" => totals.failed += 1,
             "duplicate" => totals.duplicate += 1,
             "other_version" => totals.other_version += 1,
+            "pending_offers" => totals.pending_offers += 1,
             _ => totals.other += 1,
         }
         totals.records += 1;

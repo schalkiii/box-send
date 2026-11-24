@@ -8,7 +8,7 @@
 - 参与扫描的 **101** 个；
 - 允许自动发种的 **42** 个（`assist.autoReseedSites`）。
 
-白名单只是“允许发”，不等于“一定发得出去”。实际发布还要过站点权限、字段检查、当天额度和退避。
+白名单只是“允许发”，不等于“一定发得出去”。实际发布还要过站点权限、字段检查、当天额度和失败冷却（默认关闭）。
 
 2026-11-22 起，不再为了判断“站上有没有”逐个搜索，也不再日常批量跑表单检查。表单检查只在新站第一次接入时做一次，用来拿上传页字段和下拉选项。以前的检查结论只作参考，站点改版后可能失效。
 
@@ -53,7 +53,7 @@ tjupt, ubits, xingyunge
 | cspt | 可发 | 已发布并挂回，qB 校验 100% | https://cspt.top/details.php?id=259870 ｜ `cf568e1a…` | 目标种 tracker 在 `tracker.cspt.cc`，页面域是 `cspt.top`；已补 announce 别名，站点种自带两条同站 announce |
 | dubhe | 可发 | 已发布并挂回，qB 校验 100% | https://dubhe.site/details.php?id=55492 ｜ `b5ebc539…` | 第一次判重搜索 30 秒超时，重试通过；站上已有同片 1080p 其他版本，按策略继续发布；表单没有“完结”标签，发布后手动补 |
 | ptsbao | 可发 | 已发布并挂回，qB 校验 100% | https://ptsbao.club/details.php?id=135787 ｜ `0b0087f7…` | `source_sel[1]` 是二级分类，已按 type 父类 + 标题自动填 `剧集-大陆`；上传也出现 hash 差异，已加入白名单；表单没有“完结”标签，发布后手动补 |
-| crabpt | 可发 | 已发布并挂回，qB 校验 100% | https://crabpt.vip/details.php?id=240242 ｜ `732e2c99…` | 此前候选源站 `hdfans` 502 退避，改选 `hdsky` 源后成功；站上已有同片 2160p 其他版本，按策略继续发布；上传出现 hash 差异，已加入白名单 |
+| crabpt | 可发 | 已发布并挂回，qB 校验 100% | https://crabpt.vip/details.php?id=240242 ｜ `732e2c99…` | 此前候选源站 `hdfans` 502，被失败冷却挡住，改选 `hdsky` 源后成功；站上已有同片 2160p 其他版本，按策略继续发布；上传出现 hash 差异，已加入白名单 |
 | hdbao | 可发 | 已发布 2 条并挂回，qB 校验 100% | https://hdbao.cc/details.php?id=54402 ｜ `95eacf24…`；https://hdbao.cc/details.php?id=54403 ｜ `51ededb2…` | `autopost --limit 1` 实测连发两条（`posted_unresolved` 没计入 limit，已修）；站上同样改写 hash，两条按 pieces/标题校验补挂成功，已加入白名单 |
 | tey | 可发（限非蓝光） | 已发布 1 条并挂回，qB 校验 100% | https://pt.tey.cc/details.php?id=623 ｜ `c9570904…` | 表单 `medium_sel[4]` 只有 WEB-DL/HDTV/DVDR/CD/Track，没有 Blu-ray；蓝光源会被选档门禁拦住，HDTV/WEB-DL 正常。qB 里 5 条老种全走 `tracker.tey.cc`，已补 announce 别名；站上改写 hash，已加入白名单；新种状态“未审”，等站点审核 |
 | oshen | 可发 | 已发布 1 条并挂回，qB 校验 100% | http://www.oshen.win/details.php?id=57082 ｜ `22e3dd63…` | 两次失败后第三次恢复：判重搜索正常、上传成功；回包没给详情链接，落 `posted_unresolved`，按详情页补挂成功；站上 hash 与构造不同（构造 `0f73ae73…`，站上 `22e3dd63…`），已加入白名单；表单没有“完结”标签，发布后需人工补 |
@@ -66,22 +66,24 @@ tjupt, ubits, xingyunge
 
 | 站点 | 结论 | 实测结果 | 详情页 / 新种 hash | 备注 |
 | --- | --- | --- | --- | --- |
-| railgun | 可发 | 已发布 1 条并挂回，qB 校验 100% | https://bilibili.download/details.php?id=60632 ｜ `72889498…` | 源 `carpt` 的 Poirot 合集；上传回包未给详情链接，落 `posted_unresolved`；补入 hash 改写白名单后 `reattach`，qB 校验 100%，tracker 为 `bilibili.download` |
-| lemonhd | 可发 | 已发布 1 条并挂回，qB 校验 100% | https://lemonhd.net/details.php?id=48970 ｜ `3c00cbb2…` | 源 `carpt` 的 Poirot 合集；站上已有不同版本 13452，按策略继续发布；上传回包未给详情链接，落 `posted_unresolved`；补入 hash 改写白名单后 `reattach`，qB 校验 100%，tracker 为 `tracker.lemonhd.net` |
+| railgun | 可发 | 已发布 1 条并挂回，qB 校验 100% | https://bilibili.download/details.php?id=60632 ｜ `72889498…` | 源 `carpt` 的 Poirot 合集；上传回包未给详情链接，落 `posted_unresolved`；补入 hash 改写白名单后把站点种子下回来挂进 qB，qB 校验 100%，tracker 为 `bilibili.download` |
+| lemonhd | 可发 | 已发布 1 条并挂回，qB 校验 100% | https://lemonhd.net/details.php?id=48970 ｜ `3c00cbb2…` | 源 `carpt` 的 Poirot 合集；站上已有不同版本 13452，按策略继续发布；上传回包未给详情链接，落 `posted_unresolved`；补入 hash 改写白名单后把站点种子下回来挂进 qB，qB 校验 100%，tracker 为 `tracker.lemonhd.net` |
 
 ### 2.3 2026-11-24 凌晨实发：pthome、nanyang、ubits（已全部补挂）
 
-三站都是第一次上传成功，但下载回来的目标种 hash 和上传时构造的不同（站点具体改了哪个字段仍未逐字节核对）。三站已加入 hash 改写白名单，`bsend reattach` 补挂完成：qB 校验 100%、只挂单站 tracker、状态 `seeding`。补挂后覆盖记录曾被写成 `same_hash_skip`，已用 `bsend prime` 按 qB 真值改回 `seeding`。**站上已经发了，不要重发**。
+三站都是第一次上传成功，但下载回来的目标种 hash 和上传时构造的不同（站点具体改了哪个字段仍未逐字节核对）。三站已加入 hash 改写白名单，用 `bsend reattach` 把站点种子下回来挂进 qB，完成：qB 校验 100%、只挂单站 tracker、状态 `seeding`。补挂后覆盖记录曾被写成 `same_hash_skip`，已用 `bsend prime` 按 qB 真值改回 `seeding`。**站上已经发了，不要重发**。
 
 | 站点 | 结论 | 实测结果 | 详情页 / hash | 备注 |
 | --- | --- | --- | --- | --- |
-| pthome | 已补挂 | qB 校验 100%，状态 `seeding` | https://www.pthome.net/details.php?id=284701 ｜ 构造 `b31d8eaf…`，站上 `ebaa6dd9…` | 源 hdfans 133877《人民的名义》2160p WEB-DL；qB 里 11-23 23:56 就在做种，本次 reattach 报“同 hash 跳过”，说明早已挂好 |
+| pthome | 已补挂 | qB 校验 100%，状态 `seeding` | https://www.pthome.net/details.php?id=284701 ｜ 构造 `b31d8eaf…`，站上 `ebaa6dd9…` | 源 hdfans 133877《人民的名义》2160p WEB-DL；qB 里 11-23 23:56 就在做种，本次补挂报“同 hash 跳过”，说明早已挂好 |
 | nanyang | 已补挂 | qB 校验 100%，状态 `seeding` | https://nanyangpt.com/details.php?id=226159 ｜ 构造 `187d1487…`，站上 `8a9b9ab2…` | 源 soulvoice 54682《知否知否应是绿肥红瘦》4K WEB-DL；表单没有“中字”类标签复选框，需人工补 |
 | ubits | 已补挂 | qB 校验 100%，状态 `seeding` | https://ubits.club/details.php?id=379266 ｜ 构造 `d9970bce…`，站上 `2a57b787…` | 源 hdsky 27637《伪装者》1080p HDTV；前两次报“上传失败！”，补 `source_sel[4]`（地区）和 `team_sel[4]`（`Other`）后通过 |
 | hdfans | 已确认并补挂 | 287791 就是同一条《伪装者》，qB `b1e600a6…` 校验 100% | http://hdfans.org/details.php?id=287791 | 覆盖记录已是 `reseeded`（11-23 23:49 转种成功），qB 里 11-23 23:49 就在上传，无需重发 |
 | tjupt | 待重试（超时） | tracker 定案；上传仍撞 `takeupload.php` 超时 | — | announce 地址按站点下载的种子改成 `tracker-public.tjupt.org`（https、带 passkey，已写进 `overrides.announceURL`，备份 `boxsend.json.bak-261124-101552`）。30s 全局超时不够，已把上传单步放宽容到 120s 待重试；站上已有 `416154`（FLAC/DDP5.1）与 `236519`（同名 FRDS 合集、pieces 与本地不同），属实不同内容 |
-| qingwa | 分区：Poirot 不走普通上传；《伪装者》已发并挂回 | Poirot = 站点判定过大；《伪装者》`208575` 校验 100% | https://qingwapt.com/details.php?id=208575 ｜ 构造 `c78e9cb2…`，站上 `d1eeec5c…` | Poirot 回包其实是 `torrent_too_large` 表单（自动 submit 到 `offers.php?add_offer=1`）：站点要求改走候选入口，不是未知回包；代码已识别并落 `Skipped`、不自动重试。同站《伪装者》发布后自动挂回被 hash 校验拒绝，改用 `reattach` 补挂成功 |
-| audiences | 未发布 | 判重检索被人机验证拦住 | — | 程序按“没确认重复就不上传”中止，没有盲发；浏览器里过了验证也救不了无头请求——cookie 拿不到 `uid/pass` 类鉴权字段，直连会被跳 `login.php`，所以这个站只能人工发 |
+| qingwa | 分区：Poirot 不走普通上传；《伪装者》已发并挂回 | Poirot = 站点判定过大，记为待走候选入口；《伪装者》`208575` 校验 100% | https://qingwapt.com/details.php?id=208575 ｜ 构造 `c78e9cb2…`，站上 `d1eeec5c…` | Poirot 回包其实是 `torrent_too_large` 表单（自动 submit 到 `offers.php?add_offer=1`）：站点要求改走候选入口，不是未知回包；程序记 `pending_offers`（待走候选入口），不算失败、不自动重试，`bsend status` 单列“待跟进”等人工去候选页提交。同站《伪装者》发布后自动挂回被 hash 校验拒绝，改用 `bsend reattach` 把站点种子下回来挂进 qB，成功 |
+| audiences | 未发布 | 判重检索被人机验证拦住 | — | 程序按“没确认重复就不上传”中止，没有盲发；浏览器里过了验证也救不了无头请求——cookie 拿不到 `uid/pass` 类鉴权字段，直连会被跳 `login.php`。后续方案：走 Kimi WebBridge 复用用户浏览器的登录态来判重，不再用无头请求（见下方 2.3 末尾） |
+
+**audiences 的后续方案（2026-11-24 记）**：不再折腾无头 HTTP 复用 cookie，改走 Kimi WebBridge 接管用户已登录的浏览器：判重检索交给人机已经登录的窗口做，拿到结果再回到程序决定发不发。可行性还没验证，先在 `ROADMAP.md` 挂着；未验证前 audiences 仍按“只人工发”处理。
 
 ## 3. 全部站点（147 个）
 
@@ -152,11 +154,11 @@ tjupt, ubits, xingyunge
 | ptfans | PTFans | ptfans.cc | NexusPHP | 是 | — | — | ok | medium_sel 未选 | ok | 1 | 2026-11-23 已实发 `11111`，`fdf27b29…`，补挂 qB 校验 100%；站上改写 hash，已入白名单；站上已有 720p 其他版本，按策略继续发；表单无“完结”标签，人工补 |
 | agsvpt | 末日 | www.agsvpt.com | NexusPHP | 否 | — | — | ok | team_sel[4] 未选 | 未测 | 1 | 无发布权限，2026-11-23 已 disable 并移出自动发种白名单 |
 | aling | 爱玲 | pt.aling.de | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | 未测 | 1 |  |
-| audiences | 观众 | audiences.me | NexusPHP | 是 | — | — | ok |  | unsupported | 6 | 2026-11-23 判重检索被人机验证拦住，按“未确认重复不上传”中止，未发布；无头 HTTP 复用不了浏览器会话（cookie 里没有 uid/pass 类鉴权字段，直连被跳 `login.php`），这个站只能人工发（见 2.3） |
+| audiences | 观众 | audiences.me | NexusPHP | 是 | — | — | ok |  | unsupported | 6 | 2026-11-23 判重检索被人机验证拦住，按“未确认重复不上传”中止，未发布；无头 HTTP 复用不了浏览器会话（cookie 里没有 uid/pass 类鉴权字段，直连被跳 `login.php`）。后续改走 Kimi WebBridge 复用用户浏览器登录态做判重，方案未验证，暂仍按只人工发处理（见 2.3 末尾） |
 | baozi | 包子 | p.t-baozi.cc | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 1 |  |
 | cangbao | 藏宝阁 | cangbao.ge | NexusPHP | 是 | — | — | ok | 简介默认转 BBCode；43994 已改 Encode/720p/BBCode，海报和截图已重传 imgbox，等站复审；门禁 `titleNoCjk+pruneDeadImages+requireImages=2` | ok | 1 | 43994 图片死链已修，等站审核 |
 | city13 | 13City | 13city.org | NexusPHP | 是 | — | — | ok | processing_sel[4] 未选 | ok | 1 |  |
-| crabpt | 蟹黄堡 | crabpt.vip | NexusPHP | 是 | — | — | ok | codec_sel[6] 未选 | ok | 1 | 2026-11-23 已实发 240242，`732e…`；此前候选源站 hdfans 502 退避，改选 hdsky 源后成功；站点改写 hash，已加入白名单，挂回校验 100% |
+| crabpt | 蟹黄堡 | crabpt.vip | NexusPHP | 是 | — | — | ok | codec_sel[6] 未选 | ok | 1 | 2026-11-23 已实发 240242，`732e…`；此前候选源站 hdfans 502，被失败冷却挡住，改选 hdsky 源后成功；站点改写 hash，已加入白名单，挂回校验 100% |
 | cspt | 财神 | cspt.top | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 5 | 2026-11-23 已实发 259870，`cf56…`；tracker 在 `tracker.cspt.cc`，已补别名；站点改写 hash，挂回校验 100% |
 | cyanbug | 大青虫 | cyanbug.net | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 5 |  |
 | dicmusic | 海豚 | dicmusic.com | NexusPHP | 是 | — | — | ok | type 未选 | 未测 | 3 |  |
@@ -178,19 +180,19 @@ tjupt, ubits, xingyunge
 | lemonhd | 柠檬不甜 | lemonhd.net | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 1 | 2026-11-23 首次实发 48970（`3c00cbb2…`）并补挂校验 100%；站上改写 hash，已加入白名单；savept.icu 同名 LemonHD（lemonhd.club）标注已关站 2026-03-13，本配置域名 lemonhd.net 实测存活 |
 | longpt | 龙 | longpt.org | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 3 |  |
 | luckpt | 幸运 | pt.luckpt.de | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 4 |  |
-| nanyang | 南洋 | nanyangpt.com | NexusPHP | 是 | — | — | ok | [nanyang] 表单里没找到「中字」类标签复选框，请发布后手动补 | unsupported | 6 | 2026-11-24 首次实发 `226159`（《知否》，源 soulvoice）；站上 hash 与构造不同（构造 `187d1487…`，站上 `8a9b9ab2…`），已加入 hash 改写白名单，`reattach` 补挂 qB 校验 100%、单站 tracker（见 2.3） |
+| nanyang | 南洋 | nanyangpt.com | NexusPHP | 是 | — | — | ok | [nanyang] 表单里没找到「中字」类标签复选框，请发布后手动补 | unsupported | 6 | 2026-11-24 首次实发 `226159`（《知否》，源 soulvoice）；站上 hash 与构造不同（构造 `187d1487…`，站上 `8a9b9ab2…`），已加入 hash 改写白名单，把站点种子下回来挂进 qB，校验 100%、单站 tracker（见 2.3） |
 | nicept | 老师 | nicept.net | NexusPHP | 是 | — | — | ok | type 未选 | ok | 1 |  |
 | novahd | nova | pt.novahd.top | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 2 |  |
 | oshen | 奥申 | oshen.win | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 1 | 2026-11-23 已实发 `57082`，`22e3dd63…`，补挂 qB 校验 100%；站上改写 hash，已入白名单；表单没有“完结”标签，人工补 |
 | panda | 熊猫 | pandapt.net | NexusPHP | 是 | — | — | ok | medium_sel[5] 未选 | 未测 | 5 | 141276 已补挂 qB/校验 100%；主标题已去 `[50%] 剩余时间` 中文，简介按【转载出处-制作说明-海报-简介-info-截图】重排并换 imgbox 图；门禁 `titleNoCjk+pruneDeadImages+requireImages=4+descrOrder` |
 | ptba | 1PT | 1ptba.com | NexusPHP | 是 | — | — | ok | processing_sel[4] 未选 | ok | 2 | 2026-11-23 已实发 106718，`abf4…`；站点改写 `info.source`，已加入 hash 改写白名单，挂回校验 100% |
 | ptcafe | 咖啡 | ptcafe.club | NexusPHP | 是 | — | — | ok | source_sel[4] 未选 | ok | 1 |  |
-| pthome | 铂金家 | pthome.net | NexusPHP | 是 | — | — | ok | team_sel 未选 | unsupported | 1 | 2026-11-24 首次实发 `284701`（《人民的名义》，源 hdfans）；站上 hash 与构造不同（构造 `b31d8eaf…`，站上 `ebaa6dd9…`），已加入白名单，`reattach` 确认 qB 里 11-23 23:56 就在做种、校验 100%（见 2.3） |
+| pthome | 铂金家 | pthome.net | NexusPHP | 是 | — | — | ok | team_sel 未选 | unsupported | 1 | 2026-11-24 首次实发 `284701`（《人民的名义》，源 hdfans）；站上 hash 与构造不同（构造 `b31d8eaf…`，站上 `ebaa6dd9…`），已加入白名单，补挂时确认 qB 里 11-23 23:56 就在做种、校验 100%（见 2.3） |
 | ptlgs | 劳改所 | ptlgs.org | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | 未测 | 6 |  |
 | ptsbao | 烧包 | ptsbao.club | NexusPHP | 是 | — | — | ok | processing_sel[1] 未选 | ok | 1 | 2026-11-23 已实发 135787，`0b0087…`；`source_sel[1]` 二级分类已自动填 `剧集-大陆`；站点改写 hash，已加入白名单，挂回校验 100%；表单无“完结”标签需人工补 |
 | ptzone | 葡萄汁 | ptzone.xyz | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 1 |  |
 | qilin | 麒麟 | hdkyl.in | NexusPHP | 是 | — | — | ok | processing_sel[4] 未选 | ok | 9 | 479362 已补挂 qB；站点审核不通过（缺图），不影响做种 |
-| qingwa | 青蛙 | qingwapt.com | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 2 | announce 别名 `tracker.qingwapt.org` 已补；2026-11-24 Poirot 合集被站点判 `torrent_too_large`（要求改走 `offers.php` 候选），已识别并落 `Skipped`、不自动重试；同站《伪装者》发 `208575` 并 `reattach` 校验 100%（构造 `c78e9cb2…`，站上 `d1eeec5c…`）；《知否》回包“已存在！”且 qB 已在做种（见 2.3） |
+| qingwa | 青蛙 | qingwapt.com | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 2 | announce 别名 `tracker.qingwapt.org` 已补；2026-11-24 Poirot 合集被站点判 `torrent_too_large`（要求改走 `offers.php` 候选），程序记 `pending_offers`（待走候选入口），不算失败、不自动重试，`status` 单列待跟进；同站《伪装者》发 `208575` 并挂回，校验 100%（构造 `c78e9cb2…`，站上 `d1eeec5c…`）；《知否》回包“已存在！”且 qB 已在做种（见 2.3） |
 | railgun | Railgun | bilibili.download | NexusPHP | 是 | — | — | ok |  | ok | 2 | 2026-11-23 首次实发 60632（`72889498…`）并补挂校验 100%；站上改写 hash，已加入白名单 |
 | sbpt | SBPT | sbpt.link | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 5 |  |
 | shuioudao | 下水道 | sewerpt.com | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 5 |  |
@@ -198,7 +200,7 @@ tjupt, ubits, xingyunge
 | tangpt | 躺平 | tangpt.top | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 1 |  |
 | tey | 太乙 | pt.tey.cc | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 1 | 2026-11-23 已实发 `623`，`c9570904…`，补挂 qB 校验 100%；`medium_sel` 仅 WEB-DL/HDTV/DVDR/CD/Track，蓝光源会被门禁拦；qB 老种走 `tracker.tey.cc`，已补别名；站上改写 hash，已入白名单；新种状态“未审” |
 | tjupt | 北洋园 | tjupt.org | NexusPHP | 是 | — | — | ok | [tjupt] 表单里没找到「中字」类标签复选框，请发布后手动补 | unsupported | 1 | 2026-11-24 剧集分类的 `cname/ename/specificcat` 已能自动填；announce 以站点下载的种子定案为 `tracker-public.tjupt.org`（已写进 `overrides.announceURL`）；上传仍撞 `takeupload.php` 30s 超时，上传单步已放宽到 120s 待重试；站上已有 `416154`、`236519`（pieces 与本地不同，属实不同内容） |
-| ubits | 优堡 | ubits.club | NexusPHP | 是 | — | — | ok | source_sel[4] 未选 | ok | 8 | `source_sel[4]`（地区）和 `team_sel[4]`（`Other`）已能自动填，上面的检查结论是旧结果；2026-11-24 首次实发 `379266`（《伪装者》，源 hdsky），站上 hash 与构造不同（构造 `d9970bce…`，站上 `2a57b787…`），已加入白名单，`reattach` 补挂 qB 校验 100%、单站 tracker（见 2.3） |
+| ubits | 优堡 | ubits.club | NexusPHP | 是 | — | — | ok | source_sel[4] 未选 | ok | 8 | `source_sel[4]`（地区）和 `team_sel[4]`（`Other`）已能自动填，上面的检查结论是旧结果；2026-11-24 首次实发 `379266`（《伪装者》，源 hdsky），站上 hash 与构造不同（构造 `d9970bce…`，站上 `2a57b787…`），已加入白名单，把站点种子下回来挂进 qB，校验 100%、单站 tracker（见 2.3） |
 | vclib | VC-Lib | pt.vclib.online | NexusPHP | 是 | — | — | ok | type 未选 | ok | 2 |  |
 | xdy | 修道院 | xdypt.vip | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 1 |  |
 | xingtan | 杏坛 | xingtan.one | NexusPHP | 是 | — | — | ok | source_sel[16] 未选 | 未测 | 5 |  |

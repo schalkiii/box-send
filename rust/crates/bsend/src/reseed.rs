@@ -4716,7 +4716,7 @@ pub struct DuplicateOutcome {
 /// existed_pending / posted_unresolved）。
 ///
 /// 「上传成功但回包定位不到新种」复用 `Duplicate(ReviewPending)`：note 以
-/// `posted_unresolved` 开头，审计词据此区分；它不记 failed、不进退避表、不计 posted 限额。
+/// `posted_unresolved` 开头，审计词据此区分；它不记 failed、不进失败冷却表、不计 posted 限额。
 #[derive(Debug, Clone)]
 pub enum ReseedOutcome {
     Posted(String),
@@ -4732,9 +4732,12 @@ impl ReseedOutcome {
                 CoverageStatus::Assisted | CoverageStatus::Seeding => "skipped_duplicate",
                 CoverageStatus::OtherVersion => "other_version",
                 CoverageStatus::SameHashSkip => "same_hash_skipped",
+                // 站点要人走候选入口：既不是失败（不进失败冷却），也不是“已结束”，
+                // 单独一个审计词，周报里能数出来。
+                CoverageStatus::PendingOffers => "pending_offers",
                 CoverageStatus::ReviewPending => {
                     if d.note.starts_with("posted_unresolved") {
-                        // 定位不到 ≠ 发种失败：不进 blocked/failed/review_failed 退避表
+                        // 定位不到 ≠ 发种失败：不进 blocked/failed/review_failed 失败冷却表
                         "posted_unresolved"
                     } else {
                         "existed_pending"
@@ -5413,21 +5416,23 @@ fn run_reseed_inner(
         Ok(u) => u,
         // 站点嫌种子太大时不会报错，而是回一个自动跳 offers.php 的表单
         // （`id='torrent_too_large'`、`add_offer=1`）：这不是可重试的失败，
-        // 转候选要人工走投票流程。落 Skipped（终态，不会再排队重试）。
+        // 转候选要人工走投票流程。落 PendingOffers（不入队重试，但在待跟进里留痕）。
         Err(e) if site_rejects_size(&format!("{e:#}")) => {
-            let note = format!("站点上限拒绝：{e:#}；候选（offers.php）需人工处理，不自动重试");
+            let note = format!(
+                "站点判定种子过大，要求改走候选入口（offers.php）：需人工在候选页提交，程序不自动重试（原始回包：{e:#}）"
+            );
             write_cell(
                 index,
                 &req.content_key,
                 &req.target_site,
-                CoverageStatus::Skipped,
+                CoverageStatus::PendingOffers,
                 None,
                 &note,
             );
             index.save()?;
             log(&note);
             return Ok(ReseedOutcome::Duplicate(DuplicateOutcome {
-                status: CoverageStatus::Skipped,
+                status: CoverageStatus::PendingOffers,
                 url: None,
                 note,
             }));
@@ -5638,7 +5643,7 @@ fn run_reseed_inner(
     }
 
     let Some(tdata) = tdata else {
-        // 上传可能已成功：定位不到新种 ≠ 发种失败；落 ReviewPending，不进退避、不计 posted。
+        // 上传可能已成功：定位不到新种 ≠ 发种失败；落 ReviewPending，不进失败冷却、不计 posted。
         let reason = format!(
             "posted_unresolved：回包无详情/下载链接，站内按名称+总大小也没定位到新种（{}），待人工确认；勿重发",
             up.message
@@ -5707,7 +5712,7 @@ fn run_reseed_inner(
 }
 
 /// 转种动作日志（JSONL，fail-open）：GUI/CLI/autopost 每次转种都写一行。
-/// 与 `auto-audit.jsonl` 分开：后者管日限额/退避，这里只留可追溯的动作现场。
+/// 与 `auto-audit.jsonl` 分开：后者管日限额/失败冷却，这里只留可追溯的动作现场。
 fn append_reseed_log(
     cfg: &Config,
     req: &ReseedRequest,
@@ -5795,7 +5800,7 @@ fn write_cell(
 }
 
 /// 站点侧已经有结果（新发成功 / existed），但下载或推 qB 失败：
-/// 这不是发种失败，不能记 failed、不能进退避、不能重发；落 ReviewPending，
+/// 这不是发种失败，不能记 failed、不能进失败冷却、不能重发；落 ReviewPending，
 /// note 前缀供审计区分（`posted_unresolved` / `existed_unresolved`）。
 fn unresolved_after_site(
     index: &mut ContentIndex,
@@ -6364,6 +6369,14 @@ Frame rate : 25</pre>
         );
         assert!(!msg.contains("未识别的返回"), "{msg}");
         assert!(site_rejects_size(&msg), "{msg}");
+
+        // 这类结果不是“已跳过”，要留成待跟进：审计词单独一个，周报能数出来
+        let outcome = ReseedOutcome::Duplicate(DuplicateOutcome {
+            status: CoverageStatus::PendingOffers,
+            url: None,
+            note: msg,
+        });
+        assert_eq!(outcome.audit_result(), "pending_offers");
     }
 
     #[test]

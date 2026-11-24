@@ -1,4 +1,4 @@
-//! 诊断页：下载器连通、CookieCloud 拉取、各站 cookie 在位、今日发种台账与退避。
+//! 诊断页：下载器连通、CookieCloud 拉取、各站 cookie 在位、今日发种台账与失败冷却。
 //! 三段只读清单，分段用细分隔线；空/忙/错三态都有可见反馈。
 
 use gpui::{div, prelude::*, px, rgb, AnyElement, Context};
@@ -21,7 +21,7 @@ impl BsendGui {
         let (posted_today, last_bad) = parse_audit(&audit_text, now);
         let backoff_count = last_bad
             .values()
-            .filter(|v| in_backoff(Some(**v), now))
+            .filter(|v| in_backoff(Some(**v), now, self.config.coverage.backoff_hours))
             .count();
 
         // ---- 页头：标题 + 运行中徽标 ----
@@ -137,9 +137,15 @@ impl BsendGui {
                     .text_xs()
                     .text_color(rgb(theme::TEXT_FAINT))
                     .truncate()
-                    .child(format!(
-                        "退避中 {backoff_count} 条（发布检查拦截 24h / 失败 6h）"
-                    )),
+                    .child(if self.config.coverage.backoff_hours == 0 {
+                        "冷却已关闭（assist.backoffHours = 0），失败条目下一轮可直接重试"
+                            .to_string()
+                    } else {
+                        format!(
+                            "冷却中 {backoff_count} 条（同一内容 + 同一站点 {} 小时内不重试）",
+                            self.config.coverage.backoff_hours
+                        )
+                    }),
             );
 
         let mut posted_list = widgets::scroll_list("diag-posted").pb(theme::S1);

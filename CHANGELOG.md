@@ -5,6 +5,12 @@
 
 ## [Unreleased]
 
+### Changed
+
+- 新增覆盖状态 `pending_offers`（待走候选入口）与审计词 `pending_offers`：站点要求改走候选页（`offers.php`）时不再落 `skipped`，也不当失败反复重试；`bsend status` 单列“待跟进（等站点侧动作，程序不自动重试）”，`bsend audit` 合计带“待走候选”。
+- 发种失败冷却默认关闭：`assist.backoffHours` 不填或填 0 时，被拦或失败的条目下一轮直接重试；只有显式配小时数才在窗口内跳过。GUI 诊断页与日志改成“冷却”口径。
+- 文档与规则改用白话：不再把命令名（如 `reattach`）当动词/术语，正文先讲做什么再给命令；AGENTS.md 已加这条规则。
+
 ### Added
 
 - 发布前门禁新增 `titleNoCjk`、`requireImages`、`descrOrder`：主标题含汉字、最终简介图片不足、简介段落乱序都会在上传前拦下；门禁改为读 `apply_site_rules` 之后真正要提交的简介，不再看源页原文。藏宝阁配 2 张图 + 剪死图，熊猫高清配 4 张图和【转载出处-制作说明-海报-简介-info-截图】顺序。
@@ -13,7 +19,7 @@
 - 2026-11-23 修复藏宝阁 43994：豆瓣海报 418/HTML、`imgs.loukky.com` TLS 失败，重传 imgbox 后详情页两张图正常；修复熊猫 141276：主标题去掉 `[50%] 剩余时间` 中文尾巴，简介重排为六段并补海报 + 3 张截图。
 - 辅种：pieces-hash 批量通道 + 名字检索（严格 / 宽松 / 最大成员种名兜底）。
 - 转种：预检 → 官方预审 → 上传 → 发后自检 → 推种校验全流程；`autopost`
-  白名单 + 日限额（北京时间）+ 退避 + 审计（`auto-audit.jsonl`）。
+  白名单 + 日限额（北京时间）+ 失败冷却（默认关闭）+ 审计（`auto-audit.jsonl`）。
 - GUI（GPUI）：概览 / 转种草稿 / 自动发种 / 配置 / 诊断 / 帮助。
 - 引擎新加入下载器的种子统一带 `Boxsend` 标签；已存在的同 hash 种子不改动（不补挂 tracker、不改标签）。
 - Rust release 工作流（`v*` tag 触发，CLI + GUI + SHA256SUMS）。
@@ -39,14 +45,14 @@
 - 转种链路改为单种子单站点：从 qB 导出源种后字节级改写 tracker、删 `announce-list`、
   写目标站专属 `info.source` 生成新 hash；上传后从目标站下载 `.torrent` 独立挂回 qB，
   不再调用 `addTrackers`，也不把多个站的 announce 合并进同一个种子。
-- 新增 `bsend reattach --site <id> --url <详情页>`：补挂站上已发布、qB 未挂回的种子；
+- 新增 `bsend reattach --site <id> --url <详情页>`：把站上已发布、qB 未挂回的种子下回来挂进 qB；
   `--key` 指定内容，`--file` 在站点拒绝下载时给本地构造的 `.torrent`。
 - 2026-11-23 继续首次向 `railgun`、`lemonhd` 发种并挂回：两站都发布 `carpt` 的 Poirot 合集，
   站上详情分别为 `60632`、`48970`，站上 hash 与构造 hash 不同（railgun `72889498…` vs 构造 `6debbce8…`，
   lemonhd `3c00cbb2…` vs 构造 `d50dfa19…`）；两站上传回包都没给详情链接，先落 `posted_unresolved`，
-  加入 hash 改写白名单后 `reattach`，qB 校验 100%，tracker 分别只有 `bilibili.download`、
+  加入 hash 改写白名单后挂回，qB 校验 100%，tracker 分别只有 `bilibili.download`、
   `tracker.lemonhd.net`。两站目标站都已有其他版本，按“同名其他版本照样发”策略继续发布。
-  累计首次实发 12 站、13 颗目标种。`reattach` 挂回后读 tracker 列表增加 3 次短重试，
+  累计首次实发 12 站、13 颗目标种。挂回后读 tracker 列表增加 3 次短重试，
   避免刚 add 的种子在 qB 里还没建好 tracker 列表时被误跳过单站点核对（railgun 实发时出现过一次）。
 - 2026-11-23 首次向 `ptba`、`cspt`、`dubhe`、`ptsbao`、`crabpt`、`hdbao`、`tey`、`oshen`、`ptfans`、`itzmx` 发种（hdbao 2 条，其余各 1 条）并挂回：十站都出现站上 hash 与上传构造 hash 不同（ptba 已确认是 `info.source` 被改写，
   cspt/dubhe/ptsbao/crabpt/hdbao/tey/oshen/ptfans/itzmx 具体字段未逐字节核对）；按 pieces + `info.name`
@@ -61,7 +67,7 @@
 - 2026-11-24 凌晨向 `pthome`、`nanyang`、`ubits` 发种：三站上传成功、站上 hash 与构造 hash 不同，
   分别是 pthome `284701`（源 hdfans 133877《人民的名义》）、nanyang `226159`（源 soulvoice 54682《知否知否应是绿肥红瘦》）、
   ubits `379266`（源 hdsky 27637《伪装者》）。三站已加入 hash 改写白名单（连同此前十二站共十五站），
-  并用 `bsend reattach` 补挂：qB 校验 100%、只挂单站 tracker、状态 `seeding`（补挂后覆盖记录一度被写成
+  并用 `bsend reattach` 把站上的种子下回来挂进 qB：qB 校验 100%、只挂单站 tracker、状态 `seeding`（补挂后覆盖记录一度被写成
   `same_hash_skip`，已用 `bsend prime` 按 qB 真值改回）。同一批的 `hdfans` 回包带 `existed=1` 已核实：
   `287791` 就是同一条《伪装者》，qB 里 11-23 23:49 就在做种、校验 100%，覆盖记录 `reseeded`，没有重发。
 - 2026-11-24 `tjupt`：announce 地址改为以站点下载的种子为准（`tracker-public.tjupt.org`，https + passkey），
@@ -70,13 +76,13 @@
 - 2026-11-24 `qingwa`：Poirot 合集的“未识别回包”已定性——回包是 `torrent_too_large` 表单自动 submit 到
   `offers.php?add_offer=1`，站点要求改走候选入口；代码已识别并落 `Skipped`（终态、不自动重试）。
   同站《伪装者》发布 `208575`，自动挂回因站上 hash（`d1eeec5c…`）与构造 hash（`c78e9cb2…`）不同被拒，
-  改用 `reattach` 补挂，qB 校验 100%。`audiences` 判重检索被人机验证拦住，且无头 HTTP 复用不了浏览器会话
+  改用挂回命令，qB 校验 100%。`audiences` 判重检索被人机验证拦住，且无头 HTTP 复用不了浏览器会话
   （cookie 里没有 `uid/pass` 类鉴权字段、直连被跳 `login.php`），该站只能人工发。
 
 ### Changed
 
 - 发后定位优先使用 `takeupload.php` 回包/跳转里的详情 id，再下载站点生成的 `.torrent`；回包没有链接时按发布名 + 本地总大小做站内检索，结果行和详情页大小都要对得上，找不到就落 `posted_unresolved`，不猜。
-- `reattach` 只接受站点详情页下载的目标种，移除 `--file` 本地构造种入口：站点审核没通过时，本地构造种挂进 qB 只会得到一条没有 tracker 响应的废种。
+- 挂回命令只接受站点详情页下载的目标种，移除 `--file` 本地构造种入口：站点审核没通过时，本地构造种挂进 qB 只会得到一条没有 tracker 响应的废种。
 - 站内检索新增大小初筛：`/api/pieces-hash` 不支持或按名称检索时，同名不同大小的候选会被跳过；列表里解析不到大小的，仍用详情页大小 + pieces 兜底。
 
 - 发布口径（2026-11-22）：目标站已有同名其他版本（分集/全集、不同压制组）时**照样发布**，
@@ -136,7 +142,7 @@
 
 - 发后挂回不再把“站上已发、qB 没挂上”记成发种失败：下载目标种失败、hash/pieces 校验
   不过或挂回 qB 失败时，格子落 `review_pending`，note 前缀 `posted_unresolved` /
-  `existed_unresolved`，不进退避、不占发布额度。
+  `existed_unresolved`，不进失败冷却、不占发布额度。
 - 挂回后 tracker 校验从“数量必须 == 1”改为“每条 tracker 的 host 都必须属于目标站”：
   站点自己的种子带多条同站 announce（如 hdvideo 的 `tracker.hdvideo.top` + `hdvideo.top`）
   原样保留，出现别站 host 才中止。
