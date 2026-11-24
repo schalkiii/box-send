@@ -1102,6 +1102,16 @@ pub fn search_name_in_results(
     })
 }
 
+/// `h1#top` 是提示语而不是种子名：`existed=1` 页面会写“该种子已存在！”。
+fn is_notice_h1(text: &str) -> bool {
+    let t = text.trim();
+    t.contains("该种子已存在")
+        || t.contains("种子已存在")
+        || t.contains("种子不存在")
+        || t.contains("没有该ID")
+        || t.contains("错误")
+}
+
 /// 详情页解析：标题阶梯（h1#top → #hdarea 首链 → 同 id 详情锚 → `<title>` 清洗）
 /// 以及下载链接阶梯（同 id 的 download 锚 → 文本含关键词的 download.php → 空 text 的
 /// download.php → .torrent 文本锚（TTG）→ 表单 → 兜底任意 download.php）。
@@ -1182,12 +1192,13 @@ pub fn parse_torrent_page(html: &str, detail_url: &str, base: &Url) -> Option<To
 
     // ---- 标题 ----
     let mut name: Option<String> = None;
-    // 1) <h1 id="top">（LuckPT 等改版 NexusPHP）
+    // 1) <h1 id="top">（LuckPT 等改版 NexusPHP）。`existed=1` 页面会把 h1 换成
+    //    “该种子已存在！”这类提示，不能当种子名；跳过并走后面的真实标题兜底。
     if let Ok(sel) = Selector::parse("h1") {
         for el in doc.select(&sel) {
             if el.value().attr("id") == Some("top") {
                 let t: String = collapse_spaces(&el.text().collect::<String>());
-                if !t.is_empty() {
+                if !t.is_empty() && !is_notice_h1(&t) {
                     name = Some(t);
                     break;
                 }
@@ -2416,6 +2427,29 @@ mod tests {
         let page2 = parse_torrent_page(html2, "https://hdsky.me/details.php?id=55", &base).unwrap();
         assert_eq!(page2.name, "Some.Show.S02.720p");
         assert_eq!(page2.download_url, "https://hdsky.me/download.php?id=55");
+    }
+
+    #[test]
+    fn existed_notice_h1_falls_back_to_title_tag() {
+        let base = Url::parse("https://hdfans.org/details.php?id=287874").unwrap();
+        let html = r#"
+        <html><head><title>HDFans :: 种子详情 &quot;Liar Game S01 2007 2160p WEB-DL H.264 AAC-ADWeb    [50%] (通过)&quot; - Powered by NexusPHP</title></head>
+        <body><h1 id="top">该种子已存在！</h1>
+        <a href="download.php?id=287874">下载种子</a></body></html>"#;
+        let page = parse_torrent_page(
+            html,
+            "https://hdfans.org/details.php?id=287874&existed=1",
+            &base,
+        )
+        .unwrap();
+        assert_eq!(
+            page.name,
+            "Liar Game S01 2007 2160p WEB-DL H.264 AAC-ADWeb [50%] (通过)"
+        );
+        assert_eq!(
+            page.download_url,
+            "https://hdfans.org/download.php?id=287874"
+        );
     }
 
     #[test]

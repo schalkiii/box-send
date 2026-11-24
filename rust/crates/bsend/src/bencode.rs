@@ -262,6 +262,27 @@ pub fn file_list(data: &[u8]) -> Option<Vec<(String, i64)>> {
     None
 }
 
+/// 两个种子的文件清单是否是同一套内容（忽略第一段根名/文件名）。
+///
+/// 站点可能按自己的标题规范改 `info.name`（根目录/单文件名随之变），但内部文件
+/// 路径和长度不变。逐项比长度和「去掉首段后的相对路径」；任何一项不同都算不同布局。
+pub fn same_file_layout_ignoring_root(a: &[u8], b: &[u8]) -> bool {
+    let (Some(fa), Some(fb)) = (file_list(a), file_list(b)) else {
+        return false;
+    };
+    if fa.len() != fb.len() {
+        return false;
+    }
+    fa.iter().zip(fb.iter()).all(|((pa, sa), (pb, sb))| {
+        if sa != sb {
+            return false;
+        }
+        let ta: Vec<&str> = pa.split('/').skip(1).collect();
+        let tb: Vec<&str> = pb.split('/').skip(1).collect();
+        ta == tb
+    })
+}
+
 /// files = [ {length, path: [seg,…]}, … ]。unpaired 编码的 path 段可能是
 /// `[utf8, 原字节]` 双元素列表：取首项当名字、整段跳过（只跳一个元素会把内层 'e' 错当 path 结尾）。
 fn read_files(data: &[u8], i0: usize) -> Option<(Vec<(String, i64)>, usize)> {
@@ -527,13 +548,17 @@ pub(crate) mod tests {
     }
 
     fn torrent_single() -> Vec<u8> {
+        torrent_single_named("Some.Movie.2020.1080p.BluRay.x264-GRP")
+    }
+
+    fn torrent_single_named(name: &str) -> Vec<u8> {
         enc(&BVal::d(vec![
             ("announce", BVal::s("https://tracker.example.com/announce")),
             (
                 "info",
                 BVal::d(vec![
                     ("length", BVal::I(700_000_000)),
-                    ("name", BVal::s("Some.Movie.2020.1080p.BluRay.x264-GRP")),
+                    ("name", BVal::s(name)),
                     ("piece length", BVal::I(262144)),
                     ("pieces", BVal::s("aaaaaaaaaaaaaaaaaaaa")),
                 ]),
@@ -542,6 +567,10 @@ pub(crate) mod tests {
     }
 
     fn torrent_multi() -> Vec<u8> {
+        torrent_multi_named("Show.S01.1080p")
+    }
+
+    fn torrent_multi_named(name: &str) -> Vec<u8> {
         enc(&BVal::d(vec![
             ("announce", BVal::s("https://a.example.com/announce")),
             (
@@ -567,7 +596,7 @@ pub(crate) mod tests {
                             ]),
                         ]),
                     ),
-                    ("name", BVal::s("Show.S01.1080p")),
+                    ("name", BVal::s(name)),
                     ("piece length", BVal::I(262144)),
                     ("pieces", BVal::s("bbbbbbbbbbbbbbbbbbbb")),
                 ]),
@@ -601,6 +630,22 @@ pub(crate) mod tests {
         assert!(info_hash_v2(&d).is_none());
         // 稳定性：同数据同 hash
         assert_eq!(info_hash_v1(&d).unwrap(), h);
+    }
+
+    #[test]
+    fn same_layout_ignores_only_the_root_name() {
+        let a = torrent_multi();
+        let b = torrent_multi_named("Show.S01.1080p.Proper");
+        assert!(same_file_layout_ignoring_root(&a, &b));
+        let mut other = a.clone();
+        if let Some(p) = other.windows(9).position(|w| w == b"video.mkv") {
+            other[p..p + 9].copy_from_slice(b"video.mp4");
+        }
+        assert!(!same_file_layout_ignoring_root(&a, &other));
+        // 单文件种：根名不同、长度相同 -> 视为同一份内容
+        let s1 = torrent_single();
+        let s2 = torrent_single_named("Some.Movie.2020.1080p.BluRay.x264-GRQ");
+        assert!(same_file_layout_ignoring_root(&s1, &s2));
     }
 
     #[test]

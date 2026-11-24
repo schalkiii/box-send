@@ -175,6 +175,7 @@ fn torrent_bytes(root: &str, files: &[(&str, i64)]) -> Vec<u8> {
 
 const NAME: &str = "Black.Lagoon.S01.1080p.Blu-ray.x264-GROUP";
 const FILES: &[(&str, i64)] = &[("a.mkv", 100), ("s/ch.srt", 5)];
+const FILES_OTHER: &[(&str, i64)] = &[("b.mkv", 100), ("s/ch.srt", 5)];
 
 fn qb_server(torrent_hash: String, tracker_hosts: Vec<String>) -> MockServer {
     qb_server_ex(torrent_hash, tracker_hosts, None, None)
@@ -2064,11 +2065,11 @@ fn multipart_file(body: &[u8]) -> Option<Vec<u8>> {
     None
 }
 
-/// 站上发布成功，但下载回来的目标种 hash 不是上传构造的新 hash：
-/// 不能当发种失败，也不能把错种塞进 qB；落 posted_unresolved，等人工补挂。
+/// 站上发布成功，但下载回来的目标种根名与构造名不同（站点按自己的标题规范改名）：
+/// 文件清单和分片一致，应正常挂回，不能落 posted_unresolved。
 #[test]
-fn e2e_posted_hash_mismatch_marks_unresolved_not_failed() {
-    let dir = temp_dir("posted-hash-mismatch");
+fn e2e_posted_root_rename_is_mounted() {
+    let dir = temp_dir("posted-root-rename");
     let t_src = Arc::new(torrent_bytes("Pack", FILES));
     let t_tgt = Arc::new(torrent_bytes("Pack2", FILES));
     let local_hash = bencode::info_hash_v1(&t_src).unwrap();
@@ -2084,12 +2085,11 @@ fn e2e_posted_hash_mismatch_marks_unresolved_not_failed() {
         captured.clone(),
     );
     let src = reseed_site_server(t_src.clone());
-    // serve_uploaded=false：站点下载端点故意返回静态旧种，模拟站点传错文件/缓存。
     let tgt = reseed_site_server_upload_result(t_tgt.clone(), uploads.clone(), false, false);
     let mut cfg = test_config(qb.port, src.port, tgt.port, &dir);
     cfg.coverage.reseed_publish_enabled = true;
 
-    let key = "m:postedhashmismatch00";
+    let key = "m:postedrootrename000";
     let src_url = format!("http://127.0.0.1:{}/details.php?id=1002", src.port);
     let mut index = ContentIndex::load(&cfg.coverage_state_path());
     index.contents.insert(
@@ -2154,23 +2154,18 @@ fn e2e_posted_hash_mismatch_marks_unresolved_not_failed() {
     .unwrap();
 
     match outcome {
-        ReseedOutcome::Duplicate(d) => {
-            assert_eq!(d.status, CoverageStatus::ReviewPending, "{d:?}");
-            assert!(d.note.starts_with("posted_unresolved"), "{}", d.note);
-            assert!(d.note.contains("hash"), "{}", d.note);
-        }
-        other => panic!("hash 不一致应落 posted_unresolved，实际 {other:?}"),
+        ReseedOutcome::Posted(url) => assert!(url.contains("details.php?id=1002"), "{url}"),
+        other => panic!("根名不同但文件清单和分片一致，应正常挂回，实际 {other:?}"),
     }
     let cell = &index.contents[key].coverage["hdsky"];
-    assert_eq!(cell.status, CoverageStatus::ReviewPending, "{cell:?}");
-    assert!(cell
-        .note
-        .as_deref()
-        .unwrap_or("")
-        .starts_with("posted_unresolved"));
+    assert_eq!(cell.status, CoverageStatus::Reseeded, "{cell:?}");
     assert!(
-        captured.lock().unwrap().is_empty(),
-        "hash 不一致不应调用 torrents/add"
+        captured
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(p, _)| p.contains("torrents/add")),
+        "应把目标种推进下载器"
     );
 }
 
@@ -2239,6 +2234,105 @@ fn reseed_site_server_upload_result(
         }
         (404, "text/plain", Vec::new())
     }))
+}
+
+#[test]
+fn e2e_posted_inner_file_mismatch_marks_unresolved_not_failed() {
+    let dir = temp_dir("posted-layout-mismatch");
+    let t_src = Arc::new(torrent_bytes("Pack", FILES));
+    let t_tgt = Arc::new(torrent_bytes("Pack2", FILES_OTHER));
+    let local_hash = bencode::info_hash_v1(&t_src).unwrap();
+    let target_hash = bencode::info_hash_v1(&t_tgt).unwrap();
+    let captured: CapturedRequests = Arc::new(Mutex::new(Vec::new()));
+    let uploads: CapturedRequests = Arc::new(Mutex::new(Vec::new()));
+    let qb = qb_server_for_reseed(
+        local_hash.clone(),
+        t_src.as_ref().clone(),
+        target_hash.clone(),
+        false,
+        captured.clone(),
+    );
+    let src = reseed_site_server(t_src.clone());
+    let tgt = reseed_site_server_upload_result(t_tgt.clone(), uploads.clone(), false, false);
+    let mut cfg = test_config(qb.port, src.port, tgt.port, &dir);
+    cfg.coverage.reseed_publish_enabled = true;
+
+    let key = "m:postedlayoutmismatch";
+    let src_url = format!("http://127.0.0.1:{}/details.php?id=1002", src.port);
+    let mut index = ContentIndex::load(&cfg.coverage_state_path());
+    index.contents.insert(
+        key.to_string(),
+        ContentEntry {
+            name: NAME.into(),
+            total_size: 105,
+            file_count: FILES.len(),
+            manifest_digest: "0".repeat(16),
+            torrents: std::collections::BTreeMap::from([(
+                local_hash.clone(),
+                TorrentMeta {
+                    save_path: "/data".into(),
+                    category: None,
+                    last_seen: 0,
+                    tracker_hosts: Vec::new(),
+                    hash_v2: None,
+                    added_on: 0,
+                },
+            )]),
+            tracker_hosts: Vec::new(),
+            first_seen: 0,
+            gone_since: None,
+            coverage: std::collections::BTreeMap::from([(
+                "hdsky".to_string(),
+                SiteCoverage {
+                    status: CoverageStatus::ReseedDraft,
+                    at: 0,
+                    url: None,
+                    note: None,
+                    verify_hash: None,
+                },
+            )]),
+            source: Some(SourceRecord {
+                site_id: "pter".into(),
+                detail_url: src_url.clone(),
+                resolved_at: 0,
+                miss_at: None,
+            }),
+            forbid_reseed: false,
+        },
+    );
+    index.save().unwrap();
+
+    let qb_client = QBittorrent::new(&cfg.downloader.url, "admin", "pass").unwrap();
+    let req = ReseedRequest {
+        content_key: key.into(),
+        source_site: "pter".into(),
+        source_url: src_url,
+        target_site: "hdsky".into(),
+        name: NAME.into(),
+    };
+    let mut logs = Vec::new();
+    let outcome = run_reseed(
+        &cfg,
+        &qb_client,
+        &req,
+        &mut index,
+        &mut |l| logs.push(l.to_string()),
+        None,
+    )
+    .unwrap();
+
+    match outcome {
+        ReseedOutcome::Duplicate(d) => {
+            assert_eq!(d.status, CoverageStatus::ReviewPending, "{d:?}");
+            assert!(d.note.starts_with("posted_unresolved"), "{}", d.note);
+            assert!(d.note.contains("文件清单"), "{}", d.note);
+        }
+        other => panic!("内部文件名不一致应落 posted_unresolved，实际 {other:?}"),
+    }
+    assert!(
+        captured.lock().unwrap().is_empty(),
+        "文件清单不一致不应调用 torrents/add"
+    );
 }
 
 #[test]

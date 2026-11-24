@@ -5869,12 +5869,12 @@ fn run_reseed_inner(
         }));
     };
 
-    // 详情页链接（自检用）：回包详情优先，否则由下载链接反推 details id
-    let detail_url = detail_url.or_else(|| {
-        download_url
-            .as_deref()
-            .and_then(|u| detail_from_download(u, &tgt.base))
-    });
+    // 详情页链接（自检/汇报用）：以实际下载的 download.php 反推优先，避免回包里
+    // 或判重页上的旧种线索（例如「目标站已有其他版本」的链接）盖过真正的新种。
+    let detail_url = download_url
+        .as_deref()
+        .and_then(|u| detail_from_download(u, &tgt.base))
+        .or(detail_url);
 
     // ---- 发后自检：回读新种页核对标题/MediaInfo/链接（只警告不推翻）----
     // 同一次请求顺带看页面上明写的审核结论（未审 / 审核不通过）。
@@ -6110,9 +6110,9 @@ fn push_target_torrent(
     let (rep_hash, meta_save_path, category) = matched_member;
     // 挂回前先核对：下载回来的必须就是刚上传的新种（默认 hash 对得上），
     // 分片结构也必须和本地源种一致；否则宁可落人工，不往 qB 里塞错种。
-    // 部分站会在上传阶段改写种子元信息（ptba 已确认改写 info.source），hash 必然不同；
-    // 它们只在上传时改写，分片和标题不变，所以按「站点白名单 + 标题一致 + 分片一致」
-    // 放行，仍不放松其他站。
+    // 站点上传阶段常改写种子元信息（info.source 等），hash 必然不同；这类改写不改
+    // 分片和 info.name。分片一致 + 标题一致就说明是同一份内容，放行挂回；仍拒绝
+    // 分片不一致的种。站点白名单只用来在日志里标注“已实测改写”，不再是放行条件。
     let target_hash = bencode::info_hash_v1(tdata).context("目标种缺少 v1 info hash")?;
     let target_pieces = bencode::pieces_hash(tdata).context("目标种缺少 pieces，无法确认分片")?;
     let local = qb
@@ -6122,19 +6122,20 @@ fn push_target_torrent(
     if target_pieces != local_pieces {
         bail!("目标种分片与本地源种不一致，无法跨种做种，拒绝挂回 qB");
     }
+    // 站点常按自己的标题规范改 info.name（根目录名随之变），文件清单和分片不变。
+    // 只比「去掉首段根名后的相对路径 + 文件长度」；布局不同就说明不是同一套文件，拒绝。
+    if !bencode::same_file_layout_ignoring_root(tdata, &local) {
+        bail!("目标种文件清单与本地源种不一致，无法跨种做种，拒绝挂回 qB");
+    }
     if let Some(expected) = expected_hash {
         if target_hash != expected {
             let site_rewrites = crate::sites::allows_target_hash_rewrite(&req.target_site);
-            let same_name = bencode::info_name(tdata).as_deref() == Some(name);
-            if site_rewrites && same_name {
-                log(&format!(
-                    "站点改写了种子元信息（如 info.source）：目标种 hash {target_hash} 与上传构造 {expected} 不同；分片和标题一致，按该站白名单放行"
-                ));
-            } else {
-                bail!(
-                    "下载回的目标种 hash 与上传时构造的新 hash 不一致（期望 {expected}，实际 {target_hash}），拒绝挂回 qB"
-                );
-            }
+            let target_name = bencode::info_name(tdata).unwrap_or_default();
+            let same_name = target_name == name;
+            log(&format!(
+                "站点改写了种子元信息（如 info.source/标题）：目标种 hash {target_hash} 与上传构造 {expected} 不同，标题「{target_name}」/构造「{name}」{}；分片和文件清单一致，放行挂回（站点白名单={site_rewrites}）",
+                if same_name { "一致" } else { "不同" }
+            ));
         }
     }
     // 同 hash 绝不碰原种子：qB 不允许同 hash 两条，提前判掉，连 add 请求都不发
