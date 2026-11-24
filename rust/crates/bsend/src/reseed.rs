@@ -4972,12 +4972,12 @@ pub fn run_reseed_reviewed(
     run_reseed_impl(cfg, qb, req, index, log, throttle, Some(review))
 }
 
-/// 手工补挂：站上已经发布，qB 里还没有这个站的目标种。
+/// 把站点上已发布的种子下回来挂进 qB（命令 `bsend pull`）：站上已经发布，qB 里还没有这个站的目标种。
 /// 只拉详情页下载站点生成的 `.torrent`，按 pieces 在索引里找本地内容，
 /// 再走与发后同一条 `push_target_torrent`。绝不重新上传、不占发布额度。
 /// 不接受本地构造的种子：站点审核没通过时，挂它只会得到一条没有 tracker 响应的废种。
 /// 返回最终格子状态和详情页 URL。
-pub fn reattach_published(
+pub fn pull_published(
     cfg: &Config,
     qb: &QBittorrent,
     site_id: &str,

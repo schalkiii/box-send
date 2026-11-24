@@ -123,7 +123,7 @@ pub fn allows_target_hash_rewrite(site_id: &str) -> bool {
             | "railgun"
             | "lemonhd"
             // 2026-11-24 首次实发时下载回的目标种 hash 与构造不同（分片和标题一致），
-            // 三站都是上传成功、挂回被拒；加白名单后由 reattach 逐条补挂，具体改写字段未核对。
+            // 三站都是上传成功、挂回被拒；加白名单后用 `bsend pull` 逐条把站点种子下回来挂进 qB，具体改写字段未核对。
             | "pthome"
             | "nanyang"
             | "ubits"

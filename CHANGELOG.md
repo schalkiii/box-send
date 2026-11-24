@@ -9,7 +9,8 @@
 
 - 新增覆盖状态 `pending_offers`（待走候选入口）与审计词 `pending_offers`：站点要求改走候选页（`offers.php`）时不再落 `skipped`，也不当失败反复重试；`bsend status` 单列“待跟进（等站点侧动作，程序不自动重试）”，`bsend audit` 合计带“待走候选”。
 - 发种失败冷却默认关闭：`assist.backoffHours` 不填或填 0 时，被拦或失败的条目下一轮直接重试；只有显式配小时数才在窗口内跳过。GUI 诊断页与日志改成“冷却”口径。
-- 文档与规则改用白话：不再把命令名（如 `reattach`）当动词/术语，正文先讲做什么再给命令；AGENTS.md 已加这条规则。
+- 文档与规则改用白话：不再把命令名当动词/术语，正文先讲做什么再给命令；AGENTS.md 已加这条规则。
+- 命令 `bsend reattach` 改名为 `bsend pull`（把站点上已发布的种子下回来挂进 qB）；旧名保留为隐藏别名，老脚本仍可运行，`--help` 里只显示新名。
 
 ### Added
 
@@ -45,7 +46,7 @@
 - 转种链路改为单种子单站点：从 qB 导出源种后字节级改写 tracker、删 `announce-list`、
   写目标站专属 `info.source` 生成新 hash；上传后从目标站下载 `.torrent` 独立挂回 qB，
   不再调用 `addTrackers`，也不把多个站的 announce 合并进同一个种子。
-- 新增 `bsend reattach --site <id> --url <详情页>`：把站上已发布、qB 未挂回的种子下回来挂进 qB；
+- 新增 `bsend pull --site <id> --url <详情页>`（当时叫 `reattach`）：把站上已发布、qB 未挂回的种子下回来挂进 qB；
   `--key` 指定内容，`--file` 在站点拒绝下载时给本地构造的 `.torrent`。
 - 2026-11-23 继续首次向 `railgun`、`lemonhd` 发种并挂回：两站都发布 `carpt` 的 Poirot 合集，
   站上详情分别为 `60632`、`48970`，站上 hash 与构造 hash 不同（railgun `72889498…` vs 构造 `6debbce8…`，
@@ -67,7 +68,7 @@
 - 2026-11-24 凌晨向 `pthome`、`nanyang`、`ubits` 发种：三站上传成功、站上 hash 与构造 hash 不同，
   分别是 pthome `284701`（源 hdfans 133877《人民的名义》）、nanyang `226159`（源 soulvoice 54682《知否知否应是绿肥红瘦》）、
   ubits `379266`（源 hdsky 27637《伪装者》）。三站已加入 hash 改写白名单（连同此前十二站共十五站），
-  并用 `bsend reattach` 把站上的种子下回来挂进 qB：qB 校验 100%、只挂单站 tracker、状态 `seeding`（补挂后覆盖记录一度被写成
+  并用 `bsend pull` 把站上的种子下回来挂进 qB：qB 校验 100%、只挂单站 tracker、状态 `seeding`（补挂后覆盖记录一度被写成
   `same_hash_skip`，已用 `bsend prime` 按 qB 真值改回）。同一批的 `hdfans` 回包带 `existed=1` 已核实：
   `287791` 就是同一条《伪装者》，qB 里 11-23 23:49 就在做种、校验 100%，覆盖记录 `reseeded`，没有重发。
 - 2026-11-24 `tjupt`：announce 地址改为以站点下载的种子为准（`tracker-public.tjupt.org`，https + passkey），

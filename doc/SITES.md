@@ -71,7 +71,7 @@ tjupt, ubits, xingyunge
 
 ### 2.3 2026-11-24 凌晨实发：pthome、nanyang、ubits（已全部补挂）
 
-三站都是第一次上传成功，但下载回来的目标种 hash 和上传时构造的不同（站点具体改了哪个字段仍未逐字节核对）。三站已加入 hash 改写白名单，用 `bsend reattach` 把站点种子下回来挂进 qB，完成：qB 校验 100%、只挂单站 tracker、状态 `seeding`。补挂后覆盖记录曾被写成 `same_hash_skip`，已用 `bsend prime` 按 qB 真值改回 `seeding`。**站上已经发了，不要重发**。
+三站都是第一次上传成功，但下载回来的目标种 hash 和上传时构造的不同（站点具体改了哪个字段仍未逐字节核对）。三站已加入 hash 改写白名单，用 `bsend pull` 把站点种子下回来挂进 qB，完成：qB 校验 100%、只挂单站 tracker、状态 `seeding`。补挂后覆盖记录曾被写成 `same_hash_skip`，已用 `bsend prime` 按 qB 真值改回 `seeding`。**站上已经发了，不要重发**。
 
 | 站点 | 结论 | 实测结果 | 详情页 / hash | 备注 |
 | --- | --- | --- | --- | --- |
@@ -80,7 +80,7 @@ tjupt, ubits, xingyunge
 | ubits | 已补挂 | qB 校验 100%，状态 `seeding` | https://ubits.club/details.php?id=379266 ｜ 构造 `d9970bce…`，站上 `2a57b787…` | 源 hdsky 27637《伪装者》1080p HDTV；前两次报“上传失败！”，补 `source_sel[4]`（地区）和 `team_sel[4]`（`Other`）后通过 |
 | hdfans | 已确认并补挂 | 287791 就是同一条《伪装者》，qB `b1e600a6…` 校验 100% | http://hdfans.org/details.php?id=287791 | 覆盖记录已是 `reseeded`（11-23 23:49 转种成功），qB 里 11-23 23:49 就在上传，无需重发 |
 | tjupt | 阻塞（登录态 + 超时） | tracker 定案；上传仍撞 `takeupload.php` 超时 | — | announce 地址按站点下载的种子改成 `tracker-public.tjupt.org`（https、带 passkey，已写进 `overrides.announceURL`，备份 `boxsend.json.bak-261124-101552`）。30s 全局超时不够，已把上传单步放宽到 120s；2026-11-24 11:35 再跑一次仍是 120s 超时，且这次没落下任何回包 dump（请求在拿到响应前就断了）。同日手工用 `cookies.json` 里的 `access_token` 请求 `takeupload.php` / `details.php` 均 302 到 `login.php`，说明当前登录态已失效，需要先刷新 tjupt 登录再试。站上已有 `416154`（FLAC/DDP5.1）与 `236519`（同名 FRDS 合集、pieces 与本地不同），属实不同内容 |
-| qingwa | 分区：Poirot 不走普通上传；《伪装者》已发并挂回 | Poirot = 站点判定过大，记为待走候选入口；《伪装者》`208575` 校验 100% | https://qingwapt.com/details.php?id=208575 ｜ 构造 `c78e9cb2…`，站上 `d1eeec5c…` | Poirot 回包其实是 `torrent_too_large` 表单（自动 submit 到 `offers.php?add_offer=1`）：站点要求改走候选入口，不是未知回包；程序记 `pending_offers`（待走候选入口），不算失败、不自动重试，`bsend status` 单列“待跟进”等人工去候选页提交（2026-11-24 11:33 真跑复现一次，覆盖记录落 `pending_offers`、审计 result=`pending_offers`、`status` 显示“待走候选入口 1”）。同站《伪装者》发布后自动挂回被 hash 校验拒绝，改用 `bsend reattach` 把站点种子下回来挂进 qB，成功 |
+| qingwa | 分区：Poirot 不走普通上传；《伪装者》已发并挂回 | Poirot = 站点判定过大，记为待走候选入口；《伪装者》`208575` 校验 100% | https://qingwapt.com/details.php?id=208575 ｜ 构造 `c78e9cb2…`，站上 `d1eeec5c…` | Poirot 回包其实是 `torrent_too_large` 表单（自动 submit 到 `offers.php?add_offer=1`）：站点要求改走候选入口，不是未知回包；程序记 `pending_offers`（待走候选入口），不算失败、不自动重试，`bsend status` 单列“待跟进”等人工去候选页提交（2026-11-24 11:33 真跑复现一次，覆盖记录落 `pending_offers`、审计 result=`pending_offers`、`status` 显示“待走候选入口 1”）。同站《伪装者》发布后自动挂回被 hash 校验拒绝，改用 `bsend pull` 把站点种子下回来挂进 qB，成功 |
 | audiences | 未发布 | 判重检索被人机验证拦住 | — | 程序按“没确认重复就不上传”中止，没有盲发；浏览器里过了验证也救不了无头请求——cookie 拿不到 `uid/pass` 类鉴权字段，直连会被跳 `login.php`。后续方案：走 Kimi WebBridge 复用用户浏览器的登录态来判重，不再用无头请求（见下方 2.3 末尾） |
 
 **audiences 的后续方案（2026-11-24 记）**：不再折腾无头 HTTP 复用 cookie，改走 Kimi WebBridge 接管用户已登录的浏览器：判重检索交给人机已经登录的窗口做，拿到结果再回到程序决定发不发。可行性还没验证，先在 `ROADMAP.md` 挂着；未验证前 audiences 仍按“只人工发”处理。

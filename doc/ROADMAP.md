@@ -58,14 +58,14 @@
 - 上传后优先从回包正文、最终跳转或 `submit_upload` 已解析的详情 id 取目标种；回包没有链接时，按发布名 + 本地总大小站内检索，并核对详情页大小；
 - 从目标站下载种子，先核对 `info hash`（新发种默认必须等于上传构造的新 hash；ptba/cspt/dubhe 这类站会改写 `info.source`，只在 pieces 和 `info.name` 都一致时放行）和 pieces（必须与本地源种一致），再独立添加回 qB；不拿本地构造种顶替；
 - 站点侧已发布、但下载目标种或挂回 qB 失败时，记 `ReviewPending`、note 前缀 `posted_unresolved` / `existed_unresolved`，不记失败、不进失败冷却、不占发布额度；
-- 手工补挂：只拉详情页、下载站点生成的 `.torrent`，按 pieces 找本地内容后走同一条挂回逻辑（命令 `bsend reattach --site <id> --url <详情页>`）；已移除本地构造种的 `--file` 入口。
+- 手工挂回：只拉详情页、下载站点生成的 `.torrent`，按 pieces 找本地内容后走同一条挂回逻辑（命令 `bsend pull --site <id> --url <详情页>`，2026-11-24 由 `reattach` 改名）；已移除本地构造种的 `--file` 入口。
 
 已通过：`coverage_e2e` 26 条全部通过；真实发种 luckpt、sbpt 各一条并挂回校验；hdvideo 78856、panda 141276、qilin 479362 三条历史种子已补挂，qB 校验 100%、tracker 正常。2026-11-23 又首次向 `ptba`、`cspt`、`dubhe`、`ptsbao`、`crabpt`、`hdbao`、`tey`、`oshen`、`ptfans`、`itzmx`、`railgun`、`lemonhd` 发种（hdbao 2 条，其余各 1 条），十二站都出现“站上 hash 与构造 hash 不同”，已按 pieces/标题校验补挂成功，并把十二站加入 hash 改写白名单；ptsbao 的 `source_sel` 二级分类也已按 type 父类 + 标题自动填对；hdbao 首次实发还暴露 `autopost --limit` 只数 Posted、不数 `posted_unresolved` 的问题，已修；itzmx 的 torrent 文件上限为 `266,240 bytes`，改用《Liar Game》小种后才打通。2026-11-23 发布检查新增 `titleNoCjk`、`requireImages`、`descrOrder`，并让门禁读最终提交的简介（剪死图/转 BBCode 之后），藏宝阁、熊猫高清已启用。
 
 还没完成：
 
 - 用更多真实站点跑完整链路，覆盖“站上已有 / existed / 下载被拒 / 校验失败”等分支；
-- **三条“站上已发、qB 未挂回”已补齐**（2026-11-24，详见 `SITES.md` 2.3）：pthome `284701`、nanyang `226159`、ubits `379266` 三站加入 hash 改写白名单后，用 `bsend reattach` 把站点种子下回来挂进 qB，qB 校验 100%、只挂单站 tracker、状态 `seeding`。站上 hash 与构造 hash 的不同点（具体改了哪个 info 字段）仍未逐字节核对。
+- **三条“站上已发、qB 未挂回”已补齐**（2026-11-24，详见 `SITES.md` 2.3）：pthome `284701`、nanyang `226159`、ubits `379266` 三站加入 hash 改写白名单后，用 `bsend pull` 把站点种子下回来挂进 qB，qB 校验 100%、只挂单站 tracker、状态 `seeding`。站上 hash 与构造 hash 的不同点（具体改了哪个 info 字段）仍未逐字节核对。
 - **hdfans `287791` 已核实**（2026-11-24）：就是《伪装者》同一条，qB 里 `b1e600a6…` 校验 100%，覆盖记录 `reseeded`，没有重发。
 - **tjupt**：announce 地址按站点下载的种子定案为 `tracker-public.tjupt.org`（https、带 passkey），已写进 `overrides.announceURL`；上传撞 `takeupload.php` 超时——先放宽到 120s，2026-11-24 11:35 再跑仍是超时且没留下回包，同时手工请求 `takeupload.php` / `details.php` 都被 302 到 `login.php`，当前登录态已失效。下一步要先刷新 tjupt 登录态，再判断是超时还是站点拒收。站上已有 `416154`（FLAC/DDP5.1）与 `236519`（同名 FRDS 合集，pieces 与本地不同），属实不同内容，不算重复。
 - **audiences**：判重检索被人机验证拦住，程序按“未确认重复不上传”中止。浏览器里过了验证也救不了无头请求：cookie 里没有 `uid/pass` 类鉴权字段，直连会被跳 `login.php`。后续不改无头请求，改成走 Kimi WebBridge 复用用户浏览器的登录态做判重（可行性待验证，验证前这个站仍只人工发）。
@@ -113,8 +113,8 @@
 - 上传步骤单独放宽超时（2026-11-24）：所有站点共用的 30s 超时对 `takeupload.php` 不够（北洋园连挂两次），现在只给上传这一步 120s，列表/检索仍保持 30s，避免把整站超时整体拉长。
 - “等站点侧动作”不再当已跳过（2026-11-24）：新增覆盖状态 `pending_offers`（待走候选入口）与审计词 `pending_offers`；`bsend status` 单列“待跟进（等站点侧动作，程序不自动重试）”，`bsend audit` 合计带“待走候选”数量。这类记录不入队重试、也不算失败。
 - 发种失败冷却默认关闭（2026-11-24）：`CoverageSettings.backoff_hours` 默认 0，可由 `assist.backoffHours` 显式打开；拦截与失败共用一个窗口，日志与 GUI 诊断页同步改成“冷却”口径。默认关闭的理由：手动跑一轮由人决定重试，机器不该替人压着。
-- 文档口径统一（2026-11-24）：正文不再把命令名当动词/术语（例如不写“reattach 一下”），先讲做什么再给命令；AGENTS.md 补了这条规则。
-- 手工补挂入口：`bsend reattach --site <id> --url <详情页>`，可用 `--key` 指定内容；不再接受本地构造的 `.torrent`，避免挂上站点没通过的废种。
+- 文档口径统一（2026-11-24）：正文不再把命令名当动词/术语，先讲做什么再给命令；AGENTS.md 补了这条规则。同日把 `bsend reattach` 改名为 `bsend pull`，旧名留作隐藏别名。
+- 手工挂回入口：`bsend pull --site <id> --url <详情页>`，可用 `--key` 指定内容；不再接受本地构造的 `.torrent`，避免挂上站点没通过的废种。
 - hdvideo 78856、qilin 479362、panda 141276 三条历史结果已补挂完成，qB 校验 100%；qilin 站点仍显示审核不通过（缺图），不影响做种。
 
 ### 4.4 旧“没有”记录不再新增

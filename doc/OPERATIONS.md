@@ -198,18 +198,20 @@ cargo build --release -p bsend-cli
 
 `--dry-run` 是试运行：会连站点做审阅和发布检查，但不上传、不写覆盖记录。
 
-补挂站上已发、qB 里没有的记录（不重发、不占发布额度）。原理是把站点详情页上的种子下回来，按分片（pieces）认出本地内容，再挂进 qB：
+站上已经发了、qB 里还没有的记录，用 `bsend pull` 挂回来（不重发、不占发布额度）。原理是把站点详情页上的种子下回来，按分片（pieces）认出本地内容，再挂进 qB：
 
 ```powershell
 # 详情页可下载：自动拉详情页、下载目标种、按 pieces 找本地内容并挂回
-.\target\release\bsend.exe --config "$env:LOCALAPPDATA\BoxSend\boxsend.json" reattach `
+.\target\release\bsend.exe --config "$env:LOCALAPPDATA\BoxSend\boxsend.json" pull `
   --site hdvideo --url https://hdvideo.top/details.php?id=78856
 
 # 索引里同一内容有多条、或要指定内容：加 --key
-... reattach --site qilin --url https://www.hdkyl.in/details.php?id=479362 --key m:5826983b00126e58
+... pull --site qilin --url https://www.hdkyl.in/details.php?id=479362 --key m:5826983b00126e58
 ```
 
-它只从站点详情页下载目标种，不再接受 `--file` 本地构造种；站点下载不到就报错，宁可不挂也不塞废种。只核对 hash/pieces 和挂回 qB，不会调用上传接口；目标种 pieces 与本地内容对不上会直接拒绝。
+这个命令原来叫 `reattach`，2026-11-24 改成 `pull`；旧名还能用，只是不出现在 `--help` 里。
+
+这条命令只从站点详情页下载目标种，不再接受 `--file` 本地构造种；站点下载不到就报错，宁可不挂也不塞废种。只核对 hash/pieces 和挂回 qB，不会调用上传接口；目标种 pieces 与本地内容对不上会直接拒绝。
 
 ## 7. 发布相关配置
 

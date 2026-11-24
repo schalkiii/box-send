@@ -163,8 +163,9 @@ enum Cmd {
         interval_secs: u64,
     },
 
-    /// 把站上已发布、qB 还没挂回的种子下回来挂进 qB（不重发、不占发布额度）
-    Reattach {
+    /// 把站点上已发布的种子下回来挂进 qB（不重新上传、不占发布额度）
+    #[command(alias = "reattach")]
+    Pull {
         /// 目标站 id（boxsend.json 的 sourceSites[].id）
         #[arg(long)]
         site: String,
@@ -224,7 +225,7 @@ fn main() -> Result<()> {
         Cmd::Cookies { from, write, all } => cmd_cookies(&mut cfg, &from, write, all),
         Cmd::Status => cmd_status(&cfg),
         Cmd::Reseed { draft, yes } => cmd_reseed(&cfg, draft, yes),
-        Cmd::Reattach { site, url, key } => cmd_reattach(&cfg, &site, &url, key.as_deref()),
+        Cmd::Pull { site, url, key } => cmd_pull(&cfg, &site, &url, key.as_deref()),
         Cmd::Report { top, json, sites } => cmd_report(&cfg, top, json, sites),
         Cmd::Formcheck { sites } => cmd_formcheck(&cfg, sites),
         Cmd::Layoutcheck { limit, only } => cmd_layoutcheck(&cfg, limit, only),
@@ -761,13 +762,13 @@ fn cmd_reseed(cfg: &Config, draft: Option<usize>, yes: bool) -> Result<()> {
     Ok(())
 }
 
-fn cmd_reattach(cfg: &Config, site: &str, url: &str, key: Option<&str>) -> Result<()> {
+fn cmd_pull(cfg: &Config, site: &str, url: &str, key: Option<&str>) -> Result<()> {
     let qb = connect_qb(cfg)?;
     let mut index = ContentIndex::load(&cfg.coverage_state_path());
     let mut log = |line: &str| println!("  {line}");
     let (status, detail) =
-        bsend::reseed::reattach_published(cfg, &qb, site, url, key, &mut index, &mut log)?;
-    println!("补挂结果：{} → {}", status.label(), detail);
+        bsend::reseed::pull_published(cfg, &qb, site, url, key, &mut index, &mut log)?;
+    println!("挂回结果：{} → {}", status.label(), detail);
     Ok(())
 }
 
@@ -1946,7 +1947,31 @@ mod tests {
     }
 
     #[test]
-    fn parses_reattach_command() {
+    fn parses_pull_command() {
+        let cli = Cli::try_parse_from([
+            "bsend",
+            "pull",
+            "--site",
+            "hdvideo",
+            "--url",
+            "https://hdvideo.top/details.php?id=78856",
+        ])
+        .unwrap();
+        match cli.cmd {
+            Cmd::Pull { site, url, key } => {
+                assert_eq!(site, "hdvideo");
+                assert!(url.contains("78856"));
+                assert!(key.is_none());
+            }
+            _ => panic!("expected pull command"),
+        }
+    }
+
+    #[test]
+    fn pull_command_keeps_old_name_as_hidden_alias() {
+        use clap::CommandFactory as _;
+
+        // 命令改名前写下的脚本还能跑；旧名不出现在 --help 里。
         let cli = Cli::try_parse_from([
             "bsend",
             "reattach",
@@ -1956,14 +1981,10 @@ mod tests {
             "https://hdvideo.top/details.php?id=78856",
         ])
         .unwrap();
-        match cli.cmd {
-            Cmd::Reattach { site, url, key } => {
-                assert_eq!(site, "hdvideo");
-                assert!(url.contains("78856"));
-                assert!(key.is_none());
-            }
-            _ => panic!("expected reattach command"),
-        }
+        assert!(matches!(cli.cmd, Cmd::Pull { .. }));
+        let help = Cli::command().render_long_help().to_string();
+        assert!(help.contains("pull"));
+        assert!(!help.contains("reattach"), "{help}");
     }
 
     #[test]
