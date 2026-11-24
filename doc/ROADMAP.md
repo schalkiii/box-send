@@ -65,6 +65,11 @@
 还没完成：
 
 - 用更多真实站点跑完整链路，覆盖“站上已有 / existed / 下载被拒 / 校验失败”等分支；
+- **三条“站上已发、qB 未挂回”待补挂**（2026-11-24，详见 `SITES.md` 2.3）：pthome `284701`、nanyang `226159`、ubits `379266`。三站下载回来的目标种 hash 都和上传时构造的不同，还不在 hash 改写白名单里，所以挂回校验拒绝。下一步是人工按详情页核对标题、上传者，确认分片一致后把三站加入白名单，再 `bsend reattach`；**不要重发**。
+- **hdfans `existed_pending`**：发《伪装者》时回包带 `existed=1`（指向 287791，未验证）。先人工确认 287791 是不是同一条：是就补挂，不是才考虑重发。
+- **tjupt 没发出去**：tracker 正式地址需要裁决（qB 现有种子走 `tracker-public.tjupt.org`，配置的 announce 是 `pttracker6.tjupt.org`）；剧集分类的三个动态字段已能自动填，最后一次是 `takeupload.php` 超时，要重试一次才知道是网络抖动还是站点问题。
+- **audiences**：判重检索被人机验证拦住，程序按“未确认重复不上传”中止。人机验证过不了之前，这个站发不了。
+- **qingwa 的 Poirot 合集**：上传回包是“HTTP 200 未识别的返回”，要先看站上有没有这条，再决定补挂还是重试。
 - 藏宝阁 43994 已换 imgbox 图并重提，熊猫 141276 已改英文标题/重排简介，两条都还在等站点复审，审核状态未解除；
 - 死图重传目前是 `scripts/imgbox-upload.py` + `scripts/edit-seed.py` 手工/半自动，尚未接成发布前自动重传；门禁会先拦住，不会带死图上传。
 
@@ -99,7 +104,11 @@
 - 发后定位缺陷已修（2026-11-23）：`extract_posted_links` 不再取第一条链接，而是按 id 配对详情/下载；最终跳转是详情页时优先用它；多个链接对不上时两个都不用，转 `posted_unresolved`；`userdetails.php` 不再被当成种子详情。无链接时再按名称 + 总大小检索，避免同名不同版本抓错。
 - 挂回前校验已补（2026-11-23）：新发种下载回来的 `.torrent` 默认必须与上传构造的新 hash 相同，pieces 必须与本地源种一致，否则拒绝挂回；下载/挂回失败不再记失败，落 `posted_unresolved`，判重路径落 `existed_unresolved`。
 - 站点改写种子元信息的例外（2026-11-23）：ptba、cspt、dubhe、ptsbao、crabpt、hdbao、tey、oshen、ptfans、itzmx、railgun、lemonhd 实机确认站上 hash 与构造 hash 不同，pieces 和 `info.name` 一致；十二站加入白名单后自动放行，其他站仍严格拒绝。ptba 已确认被改写的是 `info.source`，cspt/dubhe/ptsbao/crabpt/hdbao/tey/oshen/ptfans/itzmx/railgun/lemonhd 的具体改写字段未逐字节核对。
-- announce 别名已补（2026-11-23）：baozi、novahd、xingyunge、ptlgs、pthome、agsvpt、cspt、tey 加了站点别名，`www.` 与裸域也归一化；cspt 的 `tracker.cspt.cc`、tey 的 `tracker.tey.cc` 都是“页面域和 tracker 域后缀不同”的例子，tey 不补别名会被误判成 qB 覆盖 0。
+- announce 别名已补（2026-11-23）：baozi、novahd、xingyunge、ptlgs、pthome、agsvpt、cspt、tey 加了站点别名，`www.` 与裸域也归一化；cspt 的 `tracker.cspt.cc`、tey 的 `tracker.tey.cc` 都是“页面域和 tracker 域后缀不同”的例子，tey 不补别名会被误判成 qB 覆盖 0。2026-11-24 又补了 qingwa 的 `tracker.qingwapt.org`。
+- 详情页大小解析纠偏（2026-11-24）：`4e3a8b1` 为了补 0.01 显示余量，把大小解析放宽成“任意位置的数字都试”，又留着缺单位按 B 算的旧逻辑，结果“上传于 2026.11.23”“做种 12”这类计数被当成字节数；标准 NexusPHP 的大小又和类型、媒介挤在同一格（超过 40 字）根本取不到。两条路都指向同一个后果：发后定位、源站检索把正确候选判成“大小不符”跳过。现在只认“数字 + 显式单位”，优先取以“大小 / Size”开头的单元格，再退回“整格只有一个带单位大小”的短单元格，MediaInfo、文件列表、页眉账户统计都跳过；取不到就不参与大小比对。用 `Tests/BoxSendTests/Fixtures/` 里 7 张真实详情页做了断言。
+- 详情页标题比对前先裁掉站点角标（2026-11-24）：`[免费] 剩余时间：23时59分钟` 这类后缀不是标题正文，不裁会把真重复判成“标题不符”。同日又修了裁的位置：原来按内置角标表的顺序裁，`X [2X] [Free]` 会留下 `X [2X]`；现在裁在标题里最早出现的那个角标上。
+- 选 announce 与校验 `overrides.announceURL` 的 host 口径统一（2026-11-24）：这两处原来写的是“相等或以 `.host` 结尾”，和“已在做种预筛”的 `host_matches` 不是一套；站点地址带 `www.` 时（如 `www.pthome.net`）会把自己的 `t.pthome.net` 当成别站，没内置别名就报“不在 announceHosts 里”。现在三处都走 `host_matches`。
+- 新站字段补齐（2026-11-24）：tjupt 剧集分类的 `cname/ename/specificcat`（上传页静态 HTML 里没有，是分类页动态插入的）、ubits 的 `source_sel[4]`（地区）/`team_sel[4]`（`Other`）都能自动填；不补会被 `takeupload.php` 直接拒绝。
 - 手工补挂入口已补：`bsend reattach --site <id> --url <详情页>`，可用 `--key` 指定内容；不再接受本地构造的 `.torrent`，避免挂上站点没通过的废种。
 - hdvideo 78856、qilin 479362、panda 141276 三条历史结果已补挂完成，qB 校验 100%；qilin 站点仍显示审核不通过（缺图），不影响做种。
 
@@ -137,6 +146,11 @@ reseed/coverage_io.rs  覆盖记录读写
 - **agsvpt**：提交域和登录域不一致，返回“你没有该权限”；2026-11-23 已 disable 并移出自动发种白名单。
 - **ptba / cspt / dubhe / ptsbao / crabpt / hdbao / tey / oshen / ptfans / itzmx / railgun / lemonhd**：2026-11-23 首次实发（hdbao 2 条，其余各 1 条）并挂回成功；十二站都会改写种子元信息，站上 hash 与构造 hash 不同，已加入 hash 改写白名单。cspt 另有 `tracker.cspt.cc` 别名，tey 另有 `tracker.tey.cc` 别名；dubhe 判重搜索偶发 30 秒超时；ptsbao 的 `source_sel` 是二级分类，已按 type 父类 + 标题自动填；crabpt 此前候选源站 `hdfans` 502 退避，改走 `hdsky` 源后成功；hdbao 的 `autopost --limit` 计数缺陷已修；tey 表单没有 Blu-ray 媒介档，蓝光/Remux 源会被门禁拦，HDTV/WEB-DL 可发；oshen 前两次站点抖动，第三次才恢复；ptfans 此前上传页/判重超时，恢复后一次通过；railgun、lemonhd 上传回包都没给详情链接，按详情页补挂成功。
 - **itzmx**：站点 torrent 文件上限 `266,240 bytes`，大合集/大剧包会被拒；改用 `ubits` 源的《Liar Game》小种（源种 96,934 bytes）首次实发 `13134` 并挂回，qB 校验 100%。后续给该站选种先看 `.torrent` 文件大小，不要只看内容体积；详情页没有“完结/中字”标签，发布后人工补。
+- **pthome / nanyang / ubits**：2026-11-24 首次上传成功（`284701` / `226159` / `379266`），下载回来的目标种 hash 与构造的不同，未入 hash 改写白名单，落 `posted_unresolved` 待补挂，不要重发。ubits 的 `source_sel[4]`、`team_sel[4]` 不补会被拒，现已自动填。
+- **hdfans**：回包带 `existed=1`（指向 287791，未验证），落 `existed_pending`，待人工确认。
+- **tjupt**：动态字段已能填，仍未发布（tracker 地址待裁决，最后一次 `takeupload.php` 超时）。
+- **audiences**：判重检索被人机验证拦住，未发布。
+- **qingwa**：announce 别名已补；《知否》回包“已存在！”且 qB 已在做种；Poirot 合集回包未识别，待核对。
 
 ### 5.2 工程
 

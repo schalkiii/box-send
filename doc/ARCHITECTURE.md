@@ -160,6 +160,8 @@ qB 没有 tracker，也不等于站上一定没发过。可能是站上已经有
 
 大小初筛的容差是 `max(0.5%, min(2 MiB, 1%))`，再额外带上站点文本的显示精度：页面写 `274.04 GiB` 时，`0.01` 个显示单位（约 10.7 MiB）也算合法余量；`1.00 MB` 的量子只有 10 KiB 级，不会套用 GB 的绝对余量。这个余量只用于「名字 + 大小」挑候选，最终仍靠下载回来的 `pieces` 精确比对，不能拿显示大小当同一内容的证据。
 
+详情页上的总大小不是“看到数字就算”，同一个页面里有好几种带数字的东西都不是种子总大小：做种数、日期这类纯数字，简介里 MediaInfo 的单个文件体积（`Size : 7.99 GiB`），文件列表每一行的体积，页眉的账户统计（`上传量：1.35 TB`）。标准 NexusPHP 还把大小和类型、媒介写在同一格里（`大小：77.43 GB 类型: 动漫 …`）。程序只认“数字 + 显式单位”，先找以「大小 / Size」开头的单元格并取标签后的第一个大小，找不到再退回“整格只有一个带单位大小”的短单元格；MediaInfo、文件列表、页眉统计一律跳过。取不到就不参与大小比对，不会拿计数凑一个字节数，也不会因为一个假大小把正确候选判成“大小不符”。
+
 挂回前还要过两道校验：下载回来的目标种 `info hash` 默认必须等于上传时构造的新 hash（判重/existed 路径没有“新 hash”，只核对 pieces）；目标种 pieces 必须与本地源种一致。已知会改写 `info.source` 的站（ptba、cspt、dubhe、ptsbao、crabpt、hdbao、tey、oshen、ptfans、itzmx、railgun、lemonhd）只有在 pieces 和 `info.name` 都一致时才放行 hash 差异，其他站仍拒绝；任何一条不满足就拒绝挂回，宁可人工处理，不往 qB 塞错种。
 
 站点上其实已经发布（新发成功或 existed），但下载目标种、校验或挂回 qB 失败时，不记发种失败：格子落 `ReviewPending`，note 前缀 `posted_unresolved` 或 `existed_unresolved`，不进退避、不占发布额度，下一轮或人工按详情页补挂。
@@ -168,7 +170,9 @@ qB 没有 tracker，也不等于站上一定没发过。可能是站上已经有
 
 挂回 qB 时沿用源内容的保存目录，并处理“多文件种子是否带根目录”的差异，否则 qB 会新建一个空目录，校验一直是 0%。这部分见 7.2。
 
-挂回后核对 tracker：全部 tracker 的 host 必须属于目标站。站点自己的种子偶尔带两条同站 announce（例如 hdvideo 的 `tracker.hdvideo.top` 和 `hdvideo.top`），这不是多站合并，保留站点原样；只要出现别的站 host 就中止，不补挂、不改原种子。`host_matches` 会把 `www.` 剥掉再比，并认站点配置里的 announce 别名；例如 cspt 页面在 `cspt.top`、种子 tracker 在 `tracker.cspt.cc`，tey 页面在 `pt.tey.cc`、种子 tracker 在 `tracker.tey.cc`，不补别名会被误判成别站或 qB 覆盖 0。
+挂回后核对 tracker：全部 tracker 的 host 必须属于目标站。站点自己的种子偶尔带两条同站 announce（例如 hdvideo 的 `tracker.hdvideo.top` 和 `hdvideo.top`），这不是多站合并，保留站点原样；只要出现别的站 host 就中止，不补挂、不改原种子。`host_matches` 会把 `www.` 剥掉再比，并认站点配置里的 announce 别名；例如 cspt 页面在 `cspt.top`、种子 tracker 在 `tracker.cspt.cc`，tey 页面在 `pt.tey.cc`、种子 tracker 在 `tracker.tey.cc`，qingwa 页面在 `qingwapt.com`、种子 tracker 在 `tracker.qingwapt.org`，不补别名会被误判成别站或 qB 覆盖 0。
+
+选 announce 也是同一套口径：从 qB 现有种子里取该站 announce、校验 `overrides.announceURL` 的 host、挂回后核对 tracker，三处都走 `host_matches`（选 announce 和校验经 `qbittorrent::announce_host_matches`）。2026-11-24 之前前两处写的是另一套“相等或以 `.host` 结尾”，站点地址带 `www.` 时（如 `www.pthome.net`）会把自己的 `t.pthome.net` 当成别站，没内置别名就报“不在 announceHosts 里”。
 
 ### 5.7 校验
 
@@ -215,6 +219,8 @@ qB 加多文件种子时，默认会放到 `<保存目录>/<种子根目录>/`�
 - 页面错误框里出现明确的重复措辞，例如“已经上传”“已存在”“被人上传”“already exists”。
 
 上传表单被原样返回不算重复，页面里随便出现“存在”两个字也不算。旧逻辑就因为整页搜“已存在”，把校验失败页误判成重复。
+
+比对标题之前会先裁掉站点追加的角标，例如 `[免费] 剩余时间：23时59分钟`、`[50%]`：它们不是标题正文，不裁的话真重复会因为“标题不符”被放过，或者反过来把不同的条目当成同一条。裁的位置是标题里最早出现的那个角标，和内置角标表的顺序无关；正常不带角标的标题不会被误裁。
 
 ## 8. 失败、退避和限额
 
