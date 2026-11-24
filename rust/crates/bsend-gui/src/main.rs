@@ -627,8 +627,14 @@ fn status_chip(status: CoverageStatus, count: usize) -> StatusChip {
         CoverageStatus::WaitSource => ("待找源", 0x39c5cf),
         CoverageStatus::Failed => ("失败", 0xf85149),
         CoverageStatus::ReseedDraft => ("转种草稿", 0xdb61a2),
-        // 兜底：引擎侧新增状态（如内容黑名单跳过）不让图例崩，统一按「已跳过」灰展示
-        _ => ("已跳过", 0x6e7681),
+        // 等站点侧动作的几类：都是“已发布或站上有动作、等人或等回访”，不是已跳过。
+        // 图例按名字汇总、按颜色认，所以每类各给一种颜色，不跟“失败 / 校验中 / 已跳过”撞色
+        CoverageStatus::PendingOffers => ("等走候选", 0xffa657),
+        CoverageStatus::PendingReview => ("等站点审核", 0xe3b341),
+        CoverageStatus::ReviewRejected => ("审核没过", 0xda3633),
+        CoverageStatus::GoneFromSite => ("站上已没有", 0x8b949e),
+        CoverageStatus::Skipped => ("已跳过", 0x6e7681),
+        // 这里穷举了全部状态、不设兜底：引擎侧再新增状态时编译会报错，图例不会悄悄显示错
     };
     StatusChip {
         label,

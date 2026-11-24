@@ -26,6 +26,7 @@ use bsend::qbittorrent::QBittorrent;
 use bsend::report::{
     draft_count_for_site, split_drafts_by_allow, whitelist_without_drafts, CoverageReport,
 };
+use bsend::review::ReviewCheckOptions;
 use bsend::sites::nexusphp::NexusPhp;
 
 #[derive(Parser)]
@@ -177,6 +178,25 @@ enum Cmd {
         key: Option<String>,
     },
 
+    /// 回访站点审核：再看一眼“等站点审核 / 审核没过 / 站上已找不到”的详情页，审完了就把站点种子挂回 qB（不上传、不发帖）
+    Reviewcheck {
+        /// 只看和报告：不改覆盖记录，不往下载器里加种子（照样会打开详情页、下载站点种子）
+        #[arg(long)]
+        dry_run: bool,
+        /// 连我们自己发的、已经在做种 / 校验中的条目也回访一遍（找出还没记下来的“未审 / 审核不通过”）
+        #[arg(long)]
+        all: bool,
+        /// 只回访这些站（逗号分隔的站点 id）
+        #[arg(long, value_delimiter = ',')]
+        sites: Option<Vec<String>>,
+        /// 最多回访多少条
+        #[arg(long)]
+        limit: Option<usize>,
+        /// 输出 JSON（给脚本/GUI 吃）
+        #[arg(long)]
+        json: bool,
+    },
+
     /// 站点档案汇总：配置开关 + 最近一次实测结论 + pieces 支持 + cookie 概况
     Sites {
         /// 输出 JSON（给脚本/GUI 吃）
@@ -226,6 +246,13 @@ fn main() -> Result<()> {
         Cmd::Status => cmd_status(&cfg),
         Cmd::Reseed { draft, yes } => cmd_reseed(&cfg, draft, yes),
         Cmd::Pull { site, url, key } => cmd_pull(&cfg, &site, &url, key.as_deref()),
+        Cmd::Reviewcheck {
+            dry_run,
+            all,
+            sites,
+            limit,
+            json,
+        } => cmd_reviewcheck(&cfg, dry_run, all, sites, limit, json),
         Cmd::Report { top, json, sites } => cmd_report(&cfg, top, json, sites),
         Cmd::Formcheck { sites } => cmd_formcheck(&cfg, sites),
         Cmd::Layoutcheck { limit, only } => cmd_layoutcheck(&cfg, limit, only),
@@ -435,6 +462,44 @@ fn print_report(r: &RoundReport) {
     }
 }
 
+/// 待跟进清单的一行：「内容名」→ 站点：站点当时说的话（截掉操作提示和原始回包，最多 90 个字）
+fn follow_up_item(name: &str, site: &str, note: Option<&str>) -> String {
+    let why: String = note
+        .map(|n| {
+            n.split("（原始回包")
+                .next()
+                .unwrap_or(n)
+                .split("：需人工")
+                .next()
+                .unwrap_or(n)
+                .trim()
+                .to_string()
+        })
+        .unwrap_or_default();
+    let short = |s: &str, n: usize| -> String {
+        let head: String = s.chars().take(n).collect();
+        if s.chars().count() > n {
+            format!("{head}…")
+        } else {
+            head
+        }
+    };
+    if why.is_empty() {
+        format!("「{}」→ {site}", short(name, 48))
+    } else {
+        format!("「{}」→ {site}：{}", short(name, 48), short(&why, 90))
+    }
+}
+
+fn print_follow_up_items(items: &[String]) {
+    for item in items.iter().take(10) {
+        println!("      {item}");
+    }
+    if items.len() > 10 {
+        println!("      ……还有 {} 条", items.len() - 10);
+    }
+}
+
 fn cmd_status(cfg: &Config) -> Result<()> {
     let index = ContentIndex::load(&cfg.coverage_state_path());
     let mut by_status: BTreeMap<CoverageStatus, usize> = BTreeMap::new();
@@ -442,9 +507,10 @@ fn cmd_status(cfg: &Config) -> Result<()> {
     let mut gone = 0usize;
     let mut resolved_sources = 0usize;
     let mut posted_unresolved = 0usize;
-    let mut pending_offers = 0usize;
     let mut drafts = Vec::new();
-    let mut pending_offer_items: Vec<String> = Vec::new();
+    // 待跟进的几类都要点名（光有总数没法跟进）：每类一个清单，附一句站点当时说的话
+    let mut follow: BTreeMap<CoverageStatus, Vec<String>> = BTreeMap::new();
+    let mut posted_unresolved_items: Vec<String> = Vec::new();
     let mut pending_by_status: BTreeMap<CoverageStatus, usize> = BTreeMap::new();
     for e in index.contents.values() {
         member_torrents += e.torrents.len();
@@ -463,35 +529,15 @@ fn cmd_status(cfg: &Config) -> Result<()> {
                     .is_some_and(|n| n.starts_with("posted_unresolved"))
             {
                 posted_unresolved += 1;
+                posted_unresolved_items.push(follow_up_item(&e.name, site, cell.note.as_deref()));
             }
-            if cell.status == CoverageStatus::PendingOffers {
-                pending_offers += 1;
-                // 光有总数没法跟进：把条目点名出来，附一句站点当时说的话（操作提示和原始回包留给 audit）。
-                let why = cell
-                    .note
-                    .as_deref()
-                    .map(|n| {
-                        n.split("（原始回包")
-                            .next()
-                            .unwrap_or(n)
-                            .split("：需人工")
-                            .next()
-                            .unwrap_or(n)
-                            .trim()
-                            .to_string()
-                    })
-                    .unwrap_or_default();
-                let name: String = e.name.chars().take(48).collect();
-                let name = if e.name.chars().count() > 48 {
-                    format!("{name}…")
-                } else {
-                    name
-                };
-                if why.is_empty() {
-                    pending_offer_items.push(format!("「{name}」→ {site}"));
-                } else {
-                    pending_offer_items.push(format!("「{name}」→ {site}：{why}"));
-                }
+            // 等站点侧动作的几类（操作提示和原始回包留给 audit）
+            if cell.status.is_review_related() || cell.status == CoverageStatus::PendingOffers {
+                follow.entry(cell.status).or_default().push(follow_up_item(
+                    &e.name,
+                    site,
+                    cell.note.as_deref(),
+                ));
             }
             match cell.status {
                 CoverageStatus::ReseedDraft => {
@@ -578,23 +624,43 @@ fn cmd_status(cfg: &Config) -> Result<()> {
     for (st, n) in &by_status {
         println!("  {} {}", st.label(), n);
     }
-    if posted_unresolved > 0 || pending_offers > 0 {
+    let follow_total: usize = follow.values().map(Vec::len).sum::<usize>() + posted_unresolved;
+    if follow_total > 0 {
         println!("  待跟进（等站点侧动作，程序不自动重试）：");
-        if pending_offers > 0 {
-            println!("    等走候选入口：{pending_offers}（站点判种子过大，需到该站候选页提交）");
-            for item in pending_offer_items.iter().take(10) {
-                println!("      {item}");
-            }
-            if pending_offer_items.len() > 10 {
-                println!(
-                    "      ……还有 {} 条，明细见 `bsend audit --days 1`",
-                    pending_offer_items.len() - 10
-                );
-            }
+        let groups: [(&CoverageStatus, &str); 4] = [
+            (
+                &CoverageStatus::PendingOffers,
+                "等走候选入口（站点判种子过大，需到该站候选页提交）",
+            ),
+            (
+                &CoverageStatus::PendingReview,
+                "等站点审核（每轮自动发种开头、以及 `bsend reviewcheck` 会回访；审完自动把站点种子挂回 qB）",
+            ),
+            (
+                &CoverageStatus::ReviewRejected,
+                "站点审核没过（要人改简介或种子后在站上处理；程序不重发）",
+            ),
+            (
+                &CoverageStatus::GoneFromSite,
+                "站上已找不到（下载器里那条还挂着该站 tracker，删不删由人定）",
+            ),
+        ];
+        for (st, title) in groups {
+            let Some(items) = follow.get(st) else {
+                continue;
+            };
+            println!("    {title}：{}", items.len());
+            print_follow_up_items(items);
         }
         if posted_unresolved > 0 {
-            println!("    站上已发、qB 未挂回：{posted_unresolved}（按详情页手工挂回，勿重发）");
+            println!(
+                "    站上已发、qB 未挂回：{posted_unresolved}（按详情页用 `bsend pull` 挂回，勿重发）"
+            );
+            print_follow_up_items(&posted_unresolved_items);
         }
+        println!(
+            "      （清单只列前 10 条；回访：`bsend reviewcheck`，明细：`bsend audit --days 7`）"
+        );
     }
 
     // 草稿按白名单拆分：未启用组只计数、不改覆盖记录，不算待发
@@ -769,6 +835,74 @@ fn cmd_pull(cfg: &Config, site: &str, url: &str, key: Option<&str>) -> Result<()
     let (status, detail) =
         bsend::reseed::pull_published(cfg, &qb, site, url, key, &mut index, &mut log)?;
     println!("挂回结果：{} → {}", status.label(), detail);
+    Ok(())
+}
+
+/// 回访站点审核：逐条打开“等站点审核 / 审核没过 / 站上已找不到”的详情页，按页面上的结论改格子；
+/// 审完了就把站点种子下回来挂进 qB。不上传、不发帖。自动发种每轮开头也会跑一遍同样的回访。
+fn cmd_reviewcheck(
+    cfg: &Config,
+    dry_run: bool,
+    all: bool,
+    sites: Option<Vec<String>>,
+    limit: Option<usize>,
+    as_json: bool,
+) -> Result<()> {
+    let qb = connect_qb(cfg)?;
+    let mut index = ContentIndex::load(&cfg.coverage_state_path());
+    let opts = ReviewCheckOptions {
+        all_posted: all,
+        dry_run,
+        sites: sites.map(|v| v.into_iter().collect()),
+        limit,
+    };
+    if !as_json && dry_run {
+        println!("演练：照样打开详情页、下载站点种子来看结论，但不改覆盖记录、不往下载器里加种子");
+    }
+    let mut log = |line: &str| println!("  {line}");
+    let s = bsend::review::recheck_reviews(cfg, &qb, &mut index, &opts, &mut log)?;
+    if as_json {
+        println!("{}", serde_json::to_string_pretty(&s)?);
+        return Ok(());
+    }
+    println!(
+        "回访结果：选出 {} 条，打开了 {} 条详情页（{}）",
+        s.selected,
+        s.checked,
+        cfg.coverage_state_path().display()
+    );
+    println!(
+        "  结论没变：仍在等审核 {}、仍是不通过或站上没有 {}",
+        s.still_pending, s.still_bad
+    );
+    println!(
+        "  新记下：等站点审核 {}、站点审核没过 {}、站上已找不到 {}",
+        s.marked_pending, s.marked_rejected, s.marked_gone
+    );
+    if dry_run {
+        println!(
+            "  审完了（正式回访才会改格子、挂回 qB）：{}",
+            s.would_settle
+        );
+    }
+    println!(
+        "  审核结束已收尾：{}（站点种子已挂进 qB，或下载器里本来就在做种）",
+        s.settled
+    );
+    println!(
+        "  页面正常没有审核标记：{}；打不开不算结论：{}；没领到请求额度：{}",
+        s.clean, s.errors, s.no_budget
+    );
+    if s.selected == 0 {
+        println!(
+            "  没有要回访的条目（只看记了审核结论的格子{}）",
+            if all {
+                ""
+            } else {
+                "；加 --all 连自己发的、已在做种的也看一遍"
+            }
+        );
+    }
     Ok(())
 }
 
@@ -1227,6 +1361,8 @@ fn cmd_audit(cfg: &Config, days: usize, site: Option<String>, as_json: bool) -> 
         println!("  {}", header.join(" "));
         let mut sub = (0usize, 0usize, 0usize, 0usize, 0usize, 0usize);
         let mut pend = 0usize;
+        let mut waiting = 0usize;
+        let mut refused = 0usize;
         for (sid, c) in &day.by_site {
             let row = [
                 pad_right(sid, 14),
@@ -1245,6 +1381,8 @@ fn cmd_audit(cfg: &Config, days: usize, site: Option<String>, as_json: bool) -> 
             sub.4 += c.other_version;
             sub.5 += c.other;
             pend += c.pending_offers;
+            waiting += c.pending_review;
+            refused += c.review_rejected;
         }
         let sub_row = [
             pad_right("当日小计", 14),
@@ -1256,16 +1394,22 @@ fn cmd_audit(cfg: &Config, days: usize, site: Option<String>, as_json: bool) -> 
             pad_left(&commas(sub.5 as i64), 8),
         ];
         println!("  {}", sub_row.join(" "));
-        if pend > 0 {
-            println!("  其中待走候选入口：{pend}（等人工提交候选，不是失败）");
+        if pend + waiting + refused > 0 {
+            println!(
+                "  其中待跟进（不是失败）：待走候选入口 {pend}｜等站点审核 {waiting}｜站点审核没过 {refused}"
+            );
         }
         println!();
     }
 
     let t = &report.totals;
     println!(
-        "合计：发布 {}｜拦截 {}｜失败 {}｜重复 {}｜其他版本 {}｜其他 {}｜待走候选 {}",
-        t.posted, t.blocked, t.failed, t.duplicate, t.other_version, t.other, t.pending_offers
+        "合计：发布 {}｜拦截 {}｜失败 {}｜重复 {}｜其他版本 {}｜其他 {}",
+        t.posted, t.blocked, t.failed, t.duplicate, t.other_version, t.other
+    );
+    println!(
+        "待跟进：待走候选入口 {}｜等站点审核 {}｜站点审核没过 {}（等回访或人工处理，不算失败、不重试）",
+        t.pending_offers, t.pending_review, t.review_rejected
     );
     println!(
         "计入记录 {} 条；畸形行 {} 条（跳过未计入）。",
@@ -1704,7 +1848,8 @@ fn cmd_autopost(
         loop_mode,
         interval_secs,
     };
-    let mut emit = |ev: AutopostEvent| match ev {
+    let mut emit = |ev: AutopostEvent| {
+        match ev {
         AutopostEvent::Log(line) => println!("{line}"),
         AutopostEvent::DraftStart {
             name,
@@ -1730,9 +1875,18 @@ fn cmd_autopost(
             "pending_offers" => {
                 println!("   → 站点要求走候选入口（offers.php），已记入待跟进，不自动重试\n")
             }
+            "pending_review" => println!(
+                "   → 站点收下了，但还没审完，暂时拿不到站点种子；已记入待跟进，审完会自动挂回 qB\n      {}\n",
+                error.unwrap_or_default()
+            ),
+            "review_rejected" => println!(
+                "   → 站点审核没过：已记入待跟进，要人改简介或种子后在站上处理；程序不重发\n      {}\n",
+                error.unwrap_or_default()
+            ),
             "failed" => println!("   → 发布失败：{}\n", error.unwrap_or_default()),
             _ => {}
         },
+    }
     };
     if !loop_mode {
         run_autopost(cfg, &opts, &mut emit)?;

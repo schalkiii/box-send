@@ -437,14 +437,26 @@ impl NexusPhp {
 
     /// 抓详情页并解析出发布名 + 下载链接
     pub fn fetch_torrent_page(&self, detail_url: &str) -> Result<TorrentPage> {
+        self.fetch_torrent_page_marked(detail_url)
+            .map(|(page, _)| page)
+    }
+
+    /// 抓详情页：解析结果 + 页面上明写的审核标记（未审 / 审核不通过）。
+    /// 详情页明说“没有这条种子”（或 HTTP 404）时返回 [`NoSuchTorrent`]，
+    /// 调用方据此把它和网络故障、登录失效区分开。
+    pub fn fetch_torrent_page_marked(
+        &self,
+        detail_url: &str,
+    ) -> Result<(TorrentPage, Option<(ReviewMark, String)>)> {
         let resp = self.get(detail_url, self.base.as_str())?;
         let status = resp.status().as_u16();
         let html = resp.text().unwrap_or_default();
         if status == 404 {
             // 401/403 已在 get 里按 cookie 失效拦下；这里只剩详情页本身不存在
-            return Err(anyhow!(
-                "详情页不存在（HTTP 404，种子可能已被删除）：{detail_url}"
-            ));
+            return Err(anyhow::Error::new(NoSuchTorrent {
+                detail_url: detail_url.to_string(),
+                what: "HTTP 404，页面不存在".to_string(),
+            }));
         }
         if status != 200 {
             let head: String = html.chars().take(120).collect();
@@ -454,8 +466,19 @@ impl NexusPhp {
             return Err(anyhow!("站点限流（{notice}）：{detail_url}"));
         }
         let base = Url::parse(detail_url).unwrap_or_else(|_| self.base.clone());
-        parse_torrent_page(&html, detail_url, &base)
-            .ok_or_else(|| anyhow!("详情页解析不出标题/下载链接：{detail_url}"))
+        let Some(page) = parse_torrent_page(&html, detail_url, &base) else {
+            // NexusPHP 对不存在的 id 回的是 HTTP 200 的报错页（实测熊猫：错误 没有该ID的种子），
+            // 不是 404；解析不出标题时先看页面是不是在说“没有这条”。
+            if let Some(what) = no_such_torrent_mark(&html) {
+                return Err(anyhow::Error::new(NoSuchTorrent {
+                    detail_url: detail_url.to_string(),
+                    what: format!("详情页写：{what}"),
+                }));
+            }
+            return Err(anyhow!("详情页解析不出标题/下载链接：{detail_url}"));
+        };
+        let review = review_mark(&html, &page.name);
+        Ok((page, review))
     }
 
     /// 下载 .torrent（referer 用详情页，站点的防盗链检查需要）
@@ -511,11 +534,58 @@ impl NexusPhp {
             } else {
                 format!("站点提示：{notice}")
             };
-            return Err(anyhow!("{reason}：{}", page.download_url));
+            // 只认提示里那一句的审核结论：整页（可能带导航/列表）里别的种子的“未审”不算数
+            let review = if notice.is_empty() {
+                None
+            } else {
+                // 不给下载的提示里不会有“通过”；真出现了也只当普通提示
+                review_mark_in(&notice).filter(|(m, _)| *m != ReviewMark::Approved)
+            };
+            return Err(anyhow::Error::new(SiteNotice {
+                text: format!("{reason}：{}", page.download_url),
+                review,
+            }));
         }
         Ok(data)
     }
 }
+
+/// 详情页明说“没有这条种子”（NexusPHP 的报错页）或 HTTP 404。
+/// 单独一个类型，是为了让回访能分清“站上删了”和“网络故障 / 登录失效”。
+#[derive(Debug)]
+pub struct NoSuchTorrent {
+    pub detail_url: String,
+    /// 页面上的原话（“详情页写：没有该ID的种子” / “HTTP 404，页面不存在”）
+    pub what: String,
+}
+
+impl std::fmt::Display for NoSuchTorrent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "站上已没有这条种子（{}）：{}",
+            self.what, self.detail_url
+        )
+    }
+}
+
+impl std::error::Error for NoSuchTorrent {}
+
+/// 下载 .torrent 时站点回的是提示页而不是种子文件。
+/// `text` 是完整提示（日志/覆盖记录用），`review` 是提示里能认出的审核结论。
+#[derive(Debug)]
+pub struct SiteNotice {
+    pub text: String,
+    pub review: Option<(ReviewMark, String)>,
+}
+
+impl std::fmt::Display for SiteNotice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.text)
+    }
+}
+
+impl std::error::Error for SiteNotice {}
 
 /// 检索报错是不是站点在限流（429/503）：调用方据此给该站间隔退避，别按原节奏接着敲
 /// （PT 站对无视限流的行为会警告甚至封号）。Swift 版 `SiteThrottle.penalize` 预留了
@@ -1730,6 +1800,257 @@ fn find_subsequence(haystack: &[char], needle: &[char]) -> Option<usize> {
     (0..=haystack.len() - needle.len()).find(|&i| haystack[i..i + needle.len()] == *needle)
 }
 
+/// 站点对一条已发布种子的审核结论（只认页面上明写的字样，不猜）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReviewMark {
+    /// 站点还没放行：详情页标着未审，或下载种子时回“尚未通过审核，请稍后再试”
+    Pending,
+    /// 站点明写审核不通过（多半附原因）
+    Rejected,
+    /// 详情页的审核图标标着“通过”（藏宝阁实测：`title="通过"`，绿色对勾）
+    Approved,
+}
+
+impl ReviewMark {
+    /// 人话标签
+    pub fn label(self) -> &'static str {
+        match self {
+            ReviewMark::Pending => "等站点审核",
+            ReviewMark::Rejected => "审核不通过",
+            ReviewMark::Approved => "审核通过",
+        }
+    }
+}
+
+/// 「还没审完」的字样。必须先于「没通过」比对：`尚未通过审核` 里含 `未通过审核`，
+/// 顺序反了会把“还没审”判成“没通过”。都是实见样本：tey 的 `title="未审"`、
+/// 站点下载提示“尚未通过审核，请稍后再试”。
+const REVIEW_PENDING_MARKS: &[&str] = &[
+    "尚未通过审核",
+    "尚未审核",
+    "等待审核",
+    "正在审核",
+    "待审核",
+    "未审核",
+    "未审",
+    "待审",
+];
+
+/// 「审核没过」的字样（正文里写的）。实见样本：麒麟详情页红字“审核不通过，原因：缺少海报或截图（图片少于 2 张）”。
+const REVIEW_REJECTED_MARKS: &[&str] = &[
+    "审核不通过",
+    "审核未通过",
+    "未通过审核",
+    "审核没有通过",
+    "审核被拒",
+];
+
+/// 审核图标主题下的“不通过”形态。同一套图标（tey `title="未审"`、藏宝阁 `title="通过"`）
+/// 的不通过写法没见过实例，按同一位置、同一种写法推断；只认 `title="…"` 属性形式，
+/// 不会和正文里的普通字样混淆。
+const REVIEW_REJECTED_ATTR_MARKS: &[&str] = &[
+    "title=\"不通过\"",
+    "title=\"未通过\"",
+    "title=\"拒绝\"",
+    "title=\"驳回\"",
+    "title='不通过'",
+    "title='未通过'",
+];
+
+/// 审核图标主题下的“通过”形态。实见样本：藏宝阁 43994 `title="通过"`。
+/// 只认属性形式——正文里的“通过”（比如考核结果“通過”）和审核无关。
+const REVIEW_APPROVED_ATTR_MARKS: &[&str] = &[
+    "title=\"通过\"",
+    "title=\"审核通过\"",
+    "title='通过'",
+    "title='审核通过'",
+];
+
+/// `title="…"` 形式的标记里引号中间那几个字
+fn attr_title(mark: &str) -> String {
+    let open = mark.find(['\'', '"']).map(|i| i + 1).unwrap_or(0);
+    let close = mark.rfind(['\'', '"']).unwrap_or(mark.len());
+    mark[open..close.max(open)].to_string()
+}
+
+/// 「没有这条种子」的字样。实测熊猫对不存在的 id 回 HTTP 200 报错页“错误 没有该ID的种子”。
+const NO_SUCH_TORRENT_MARKS: &[&str] = &[
+    "没有该ID的种子",
+    "没有该 ID 的种子",
+    "没有这个ID的种子",
+    "No torrent with this ID",
+    "Torrent does not exist",
+    "Torrent not found",
+];
+
+/// 页面是不是在说“没有这条种子”。命中返回页面上那句原话。
+pub fn no_such_torrent_mark(html: &str) -> Option<&'static str> {
+    NO_SUCH_TORRENT_MARKS
+        .iter()
+        .copied()
+        .find(|m| html.contains(m))
+}
+
+/// ASCII 大小写不敏感的子串查找（只认 ASCII 字母，字节偏移可直接用于切片）
+fn find_ci(hay: &str, needle: &str) -> Option<usize> {
+    let (h, n) = (hay.as_bytes(), needle.as_bytes());
+    if n.is_empty() || h.len() < n.len() {
+        return None;
+    }
+    (0..=h.len() - n.len()).find(|&i| {
+        h[i..i + n.len()]
+            .iter()
+            .zip(n)
+            .all(|(a, b)| a.eq_ignore_ascii_case(b))
+    })
+}
+
+/// 不落在多字节字符中间的切片下界
+fn floor_char(s: &str, mut i: usize) -> usize {
+    i = i.min(s.len());
+    while i > 0 && !s.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
+}
+
+/// 详情页里“标题到下载链接”之间的一段：审核角标就挂在这里（tey 的 `title="未审"` 在标题
+/// `<h1>` 里，麒麟的“审核不通过，原因：…”在标题和基本信息表之间）。只在这一段里找，
+/// 免得把导航栏/公告里的“审核”字样算到这条种子头上。
+/// 发布名在页面上找不到时返回 `None`（多半是站点回了提示页），由调用方决定要不要整页找。
+///
+/// 返回的文本已经解码过 HTML 实体：发布名里的 `&`、引号在页面上是 `&amp;` 之类，
+/// 不解码就对不上；角标属性里的 `&#26410;&#23457;` 解码后也才认得出“未审”。
+fn title_region(html: &str, torrent_name: &str) -> Option<String> {
+    // 只在正文里找标题：`<title>` 里也有发布名，但它在 `<head>`，后面跟着整页导航
+    let body = match find_ci(html, "</head>") {
+        Some(i) => &html[i + "</head>".len()..],
+        None => html,
+    };
+    let body = decode_entities(body);
+    // 发布名开头取长一点最好认；太短容易在导航里先撞上，所以只在长的那几次都没找到时才退到 4 个字
+    let mut start = None;
+    for take in [12usize, 6, 4] {
+        let probe: String = torrent_name.chars().take(take).collect();
+        let found = find_ci(&body, &probe).filter(|_| probe.trim().chars().count() >= 3);
+        if found.is_some() {
+            start = found;
+            break;
+        }
+    }
+    let start = floor_char(&body, start?.saturating_sub(160));
+    // 角标也可能排在标题前面，往前多留一点；往后到下载链接为止，最长 6KB
+    let end = body[start..]
+        .find("download.php?id=")
+        .map(|i| start + i)
+        .unwrap_or(body.len())
+        .min(start + 6000);
+    let end = floor_char(&body, end);
+    Some(body[start..end].to_string())
+}
+
+/// 从一句站点原话里截出审核没过的原因：以句号类标点为界，最多 100 个字。
+fn sentence_from(text: &str) -> String {
+    let cut = text
+        .find(['。', '！', '？', '；', ';'])
+        .unwrap_or(text.len());
+    let s = &text[..cut];
+    s.chars().take(100).collect()
+}
+
+/// 可见文字里有没有“审核中”这个说法。“审核中心”是导航项，后面紧跟“心”的不算。
+fn mentions_review_in_progress(visible: &str) -> bool {
+    let mut rest = visible;
+    while let Some(i) = rest.find("审核中") {
+        let after = &rest[i + "审核中".len()..];
+        if !after.starts_with('心') {
+            return true;
+        }
+        rest = after;
+    }
+    false
+}
+
+/// 审核没过的原因：标记后面到下一个标签为止就是站点给的原因；
+/// 中间被标签拆开时只剩标记本身，再退到整句。
+fn rejected_reason(text: &str, visible: &str, at: usize, m: &str) -> String {
+    let tail = &text[at..];
+    let stop = tail[m.len()..]
+        .find('<')
+        .map(|j| m.len() + j)
+        .unwrap_or(tail.len());
+    let same_run = decode_entities(&tail[..stop]);
+    if same_run.chars().count() > m.chars().count() + 1 {
+        sentence_from(&collapse_spaces(&same_run))
+    } else {
+        let at = visible.find(m).unwrap_or(0);
+        sentence_from(&visible[at..])
+    }
+}
+
+/// 在一段页面文本里找审核标记，返回（结论，站点原话）。
+///
+/// 顺序：明写的“还没审完” → 明写的“没通过” → 含糊的“还没定”（请稍后再试 / 审核中）→
+/// 属性形式的不通过 → 属性形式的通过。明写的永远压过含糊的。
+/// 等审核的字样连 HTML 属性一起找（tey 的角标是 `<span title="未审">`，剥了标签就看不见）；
+/// 没通过的原因取标记所在的同一小段文字（麒麟是 `&nbsp;审核不通过，原因：…</div>`）。
+pub fn review_mark_in(text: &str) -> Option<(ReviewMark, String)> {
+    // 角标属性可能把汉字写成 `&#26410;&#23457;`，先解码再找（后面的偏移都在解码后的文本里算）
+    let text: &str = &decode_entities(text);
+    let visible = collapse_spaces(&strip_tags(text));
+    // 1. 明写的“还没审完”
+    if let Some(m) = REVIEW_PENDING_MARKS.iter().find(|m| text.contains(**m)) {
+        return Some((ReviewMark::Pending, (*m).to_string()));
+    }
+    let find_mark = |m: &'static str| text.find(m).map(|i| (i, m));
+    // 2. 明写的“没过”。“未通过审核”留到第 3 步单独看：它带“请稍后再试”时多半是还没审
+    if let Some((i, m)) = REVIEW_REJECTED_MARKS
+        .iter()
+        .copied()
+        .filter(|m| *m != "未通过审核")
+        .find_map(find_mark)
+    {
+        return Some((ReviewMark::Rejected, rejected_reason(text, &visible, i, m)));
+    }
+    // 3. 含糊的“还没定”：请稍后再试 / 审核中（导航项“审核中心”不算）。
+    //    “稍后”只在很短的一句话里才算数——详情页那一段里随便一个“稍后”不该推翻结论。
+    let in_progress = mentions_review_in_progress(&visible)
+        || (visible.contains("稍后") && visible.chars().count() <= 200);
+    if in_progress && visible.contains("审核") {
+        return Some((ReviewMark::Pending, "审核中".to_string()));
+    }
+    if let Some((i, m)) = find_mark("未通过审核") {
+        return Some((ReviewMark::Rejected, rejected_reason(text, &visible, i, m)));
+    }
+    if let Some(m) = REVIEW_REJECTED_ATTR_MARKS
+        .iter()
+        .find(|m| text.contains(**m))
+    {
+        return Some((ReviewMark::Rejected, attr_title(m)));
+    }
+    if let Some(m) = REVIEW_APPROVED_ATTR_MARKS
+        .iter()
+        .find(|m| text.contains(**m))
+    {
+        return Some((ReviewMark::Approved, attr_title(m)));
+    }
+    None
+}
+
+/// 详情页上的审核标记。`torrent_name` 是解析出来的发布名，用来定位“标题到下载链接”那一段；
+/// 页面上找不到发布名（站点回了提示页）且整页很短时才整页找一次。
+pub fn review_mark(html: &str, torrent_name: &str) -> Option<(ReviewMark, String)> {
+    if let Some(region) = title_region(html, torrent_name) {
+        return review_mark_in(&region);
+    }
+    // 页面上找不到发布名：多半是站点回了提示页。整页很短才整页找一次，
+    // 免得把首页/列表页里别的种子的“未审”角标算到这条头上。
+    if strip_tags(html).chars().count() < 600 {
+        return review_mark_in(html);
+    }
+    None
+}
+
 /// 查询词百分号编码（未保留字符直通，其余 %XX；空格 → %20）
 fn url_encode(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -2109,6 +2430,161 @@ mod tests {
                 .contains("审核")
         );
         assert_eq!(download_notice("一切正常"), "");
+    }
+
+    // ---- 审核标记：样本照 2026-11-24 抓到的真实页面结构缩写（长路径、无关内容删掉） ----
+
+    /// tey 623：审核图标在标题 `<h1>` 里，`title="未审"`
+    const TEY_PENDING: &str = "<html><head><title>Tey :: 种子详情 \"The Disguiser Complete HDTV 1080p AAC x264-JING\"</title></head><body>\
+<aside class=\"n8-ubar\"><a href=\"userdetails.php?id=1\"><span>UID 10444</span><svg viewBox=\"0 0 24 24\"><path d=\"M9 6l6 6-6 6\"/></svg></a></aside>\
+<div class=\"n8-content\" id=\"outer\">\
+<div class=\"n8-promo\"><b><a href=\"torrents.php\"><font color=\"white\">全站 [Free] 生效中！</font></a></b></div>\
+<h1 align=\"center\" id=\"top\">The Disguiser Complete HDTV 1080p AAC x264-JING&nbsp;&nbsp;&nbsp; <b>[<font class='free' >免费</font>]</b><span style=\"margin-left: 6px\" title=\"未审\"><svg class=\"icon\" viewBox=\"0 0 1024 1024\" width=\"16\" height=\"16\"><path d=\"M450.267 772.245\"/></svg></span></h1>\
+<table width=\"97%\"><tr><td class=\"rowhead\">下载</td><td class=\"rowfollow\"><a class=\"index\" href=\"download.php?id=623\">[Tey].torrent</a></td></tr></table>\
+</div></body></html>";
+
+    /// 麒麟 479362：标题下面的红底横幅写“审核不通过，原因：…”；导航里有“审核中心 / 一键审种”
+    const QILIN_REJECTED: &str = "<html><head><title>HD-Kylin :: 种子详情 \"Cinderella Man 2005\"</title></head><body>\
+<div id=\"nav\">首页 论坛 审核中心 一键审种</div>\
+<div style=\"text-align: center;margin-bottom: 10px\"><h1 id=\"top\">Cinderella Man 2005 1080p x265-BeiTai&nbsp;&nbsp; <b>[<font class='free'>免费</font>]</b></h1>\
+<div style=\"display: flex;background-color: black; color: white;font-weight: bold; padding: 10px 100px\"><svg viewBox=\"0 0 1024 1024\" width=\"16\" height=\"16\"><path d=\"M963.5 856.8\" fill=\"#d81e06\"/></svg>&nbsp;审核不通过，原因：缺少海报或截图（图片少于 2 张）</div></div>\
+<table width=\"97%\"><tr><td class=\"rowhead\">下载</td><td class=\"rowfollow\"><a class=\"index\" href=\"download.php?id=479362\">[HD-Kylin].Cinderella.torrent</a></td></tr></table>\
+</body></html>";
+
+    /// 藏宝阁 43994：同一套审核图标，这条标的是 `title="通过"`
+    const CANGBAO_APPROVED: &str = "<html><head><title>藏宝阁 :: 种子详情 \"Quick Change 1990 BDRip X264 iNT-TLF\"</title></head><body>\
+<table><tr><td><b><a href=\"messages.php\"><font color=\"white\">你有1条新短讯！点击查看</font></a></b></td></tr></table><br />\
+<h1 align=\"center\" id=\"top\">Quick Change 1990 BDRip X264 iNT-TLF&nbsp;&nbsp;&nbsp; <b>[<font class='free' >免费</font>]</b> <font color='#0000FF'>剩余时间：<span title=\"2026-11-25 14:44:48\">18时27分钟</span></font><span style=\"margin-left: 6px\" title=\"通过\"><svg viewBox=\"0 0 1413 1024\" width=\"16\" height=\"16\"><path d=\"M1381.8\" fill=\"#1afa29\"/></svg></span></h1>\
+<table><tr><td class=\"rowhead\">下载</td><td class=\"rowfollow\"><a class=\"index\" href=\"download.php?id=43994\">x.torrent</a></td></tr></table>\
+</body></html>";
+
+    /// sbpt 21683：没有审核标记。标题带 H&R 图标（`title="H&R"`）、书签带 `title="收藏"`，
+    /// 上方还有考核结果“結果：通過！”
+    const SBPT_CLEAR: &str = "<html><head><title>SB :: 种子详情 \"Agatha Christies Poirot S01-S13 Collection Bluray 1080p x265 10bit MNHD-FRDS\"</title></head><body>\
+<table><tr><td><b><a href=\"rules.php\"><font>要求：8 , 當前：32, 結果：通過！</font></a></b></td></tr></table><br />\
+<h1 align=\"center\" id=\"top\">Agatha Christies Poirot S01-S13 Collection Bluray 1080p x265 10bit MNHD-FRDS<img class=\"hitandrun\" src=\"pic/trans.gif\" alt=\"H&R\" title=\"H&R\" /></h1>\
+<table width=\"97%\"><tr><td class=\"rowhead\">下載</td><td class=\"rowfollow\"><a class=\"index\" href=\"download.php?id=21683\">[SB].torrent</a>&nbsp;&nbsp;<a id=\"bookmark0\" href=\"javascript: bookmark(21683,0);\"><img class=\"delbookmark\" src=\"pic/trans.gif\" title=\"收藏\" /></a></td></tr></table>\
+</body></html>";
+
+    #[test]
+    fn review_mark_on_real_page_shapes() {
+        assert_eq!(
+            review_mark(
+                TEY_PENDING,
+                "The Disguiser Complete HDTV 1080p AAC x264-JING"
+            ),
+            Some((ReviewMark::Pending, "未审".to_string()))
+        );
+        assert_eq!(
+            review_mark(QILIN_REJECTED, "Cinderella Man 2005 1080p x265-BeiTai"),
+            Some((
+                ReviewMark::Rejected,
+                "审核不通过，原因：缺少海报或截图（图片少于 2 张）".to_string()
+            ))
+        );
+        assert_eq!(
+            review_mark(CANGBAO_APPROVED, "Quick Change 1990 BDRip X264 iNT-TLF"),
+            Some((ReviewMark::Approved, "通过".to_string()))
+        );
+        // 导航里的“审核中心”、考核结果的“通過”、H&R / 收藏的 title 都不是审核标记
+        assert_eq!(
+            review_mark(
+                SBPT_CLEAR,
+                "Agatha Christies Poirot S01-S13 Collection Bluray 1080p x265 10bit MNHD-FRDS"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn review_mark_order_pending_before_rejected() {
+        // “尚未通过审核”里含“未通过审核”：必须判成还没审，不能判成没过
+        assert_eq!(
+            review_mark_in("对不起，该种子尚未通过审核，请稍后再试。"),
+            Some((ReviewMark::Pending, "尚未通过审核".to_string()))
+        );
+        // 带“请稍后再试”的“未通过审核”也还没定
+        assert_eq!(
+            review_mark_in("该种子未通过审核，请稍后再试"),
+            Some((ReviewMark::Pending, "审核中".to_string()))
+        );
+        assert_eq!(
+            review_mark_in("审核不通过，原因：缺少海报或截图"),
+            Some((
+                ReviewMark::Rejected,
+                "审核不通过，原因：缺少海报或截图".to_string()
+            ))
+        );
+        // 明写的“不通过”压过含糊的“稍后”：改完再提交的话术，不是还在审
+        assert_eq!(
+            review_mark_in(
+                "审核不通过，原因：缺少海报或截图（图片少于 2 张）。请修改后稍后再提交审核。"
+            ),
+            Some((
+                ReviewMark::Rejected,
+                "审核不通过，原因：缺少海报或截图（图片少于 2 张）".to_string()
+            ))
+        );
+        // 导航项“审核中心”不是“审核中”
+        assert_eq!(review_mark_in("首页 论坛 审核中心 一键审种"), None);
+    }
+
+    #[test]
+    fn review_mark_attribute_and_split_forms() {
+        // 同一套审核图标的不通过形态（只认属性形式）
+        assert_eq!(
+            review_mark_in("<span class=\"x\" title=\"不通过\"><svg/></span>"),
+            Some((ReviewMark::Rejected, "不通过".to_string()))
+        );
+        // 实体写法的未审
+        assert_eq!(
+            review_mark_in("<span title=\"&#26410;&#23457;\"><svg/></span>"),
+            Some((ReviewMark::Pending, "未审".to_string()))
+        );
+        // 正文里的“通过”和繁体“通過”都不算通过，只有 title="通过" 算
+        assert_eq!(review_mark_in("考核结果：通过！"), None);
+        assert_eq!(review_mark_in("結果：通過！"), None);
+        assert_eq!(
+            review_mark_in("<span title=\"通过\"><svg/></span>"),
+            Some((ReviewMark::Approved, "通过".to_string()))
+        );
+        // 原因被标签拆开：退到整句
+        assert_eq!(
+            review_mark_in("提示：<b>审核不通过</b>，原因：缺图，请补图后再提交。后面是别的话"),
+            Some((
+                ReviewMark::Rejected,
+                "审核不通过，原因：缺图，请补图后再提交".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn review_mark_outside_title_area_does_not_count() {
+        // 发布名不在页面上（比如回的是首页）：别的种子的“未审”角标不能算到这条头上
+        let listing = format!(
+            "<html><head><title>首页</title></head><body><h1>最新种子</h1><p>{}</p>\
+             {SBPT_CLEAR}{CANGBAO_APPROVED}{TEY_PENDING}</body></html>",
+            "这里是站点公告和列表页的长篇文字，和这条种子没有关系。".repeat(12)
+        );
+        assert_eq!(review_mark(&listing, "Some Other Release 2024 1080p"), None);
+        // 发布名里的 `&` 在页面上是 `&amp;`：照样能定位到标题那一段
+        let amp = "<html><body><div id=\"nav\">首页 一键审种</div>\
+            <h1 id=\"top\">Tom &amp; Jerry 2020 1080p WEB-DL<span title=\"未审\"><svg/></span></h1>\
+            <table><tr><td><a href=\"download.php?id=9\">t.torrent</a></td></tr></table></body></html>";
+        assert_eq!(
+            review_mark(amp, "Tom & Jerry 2020 1080p WEB-DL"),
+            Some((ReviewMark::Pending, "未审".to_string()))
+        );
+    }
+
+    #[test]
+    fn no_such_torrent_page_is_recognized() {
+        // 熊猫对不存在的 id 回的是 HTTP 200 报错页
+        assert_eq!(
+            no_such_torrent_mark("<table><tr><td class=\"text\">错误</td></tr><tr><td class=\"text\">没有该ID的种子</td></tr></table>"),
+            Some("没有该ID的种子")
+        );
+        assert_eq!(no_such_torrent_mark(TEY_PENDING), None);
     }
 
     #[test]

@@ -51,6 +51,18 @@ pub enum CoverageStatus {
     /// 这不是“已跳过”，而是要人后续去候选页提交：覆盖记录留着、`status` 单列“待跟进”，
     /// 但程序不自动重试（重试只会再被同一规则挡住）。
     PendingOffers,
+    /// 站上已经发布，但站点还没放行：详情页标着未审，或下载种子时回“尚未通过审核，请稍后再试”。
+    /// 种子在站上，只是拿不到、挂不了 qB。不算失败（不进失败冷却）、不重发（重发只会得到重复种）；
+    /// 也不做站内检索兜底（只会命中同名旧种）。等回访（`bsend reviewcheck` / 自动发种每轮开头）
+    /// 看到审核标记消失，再把站点种子下回来挂进 qB。
+    PendingReview,
+    /// 站点明写审核不通过（附原因）。种子可能仍在 qB 做种；要人改简介/种子后在站上处理，
+    /// 程序不重发、不自动重试。
+    ReviewRejected,
+    /// 回访时详情页报“没有该ID的种子”（或 HTTP 404）：站上已经没有这条。
+    /// qB 里那条种子可能还挂着该站 tracker，但站上没有对应种子了；由人决定删不删、要不要重发。
+    /// 这条结论比“qB 里有该站 tracker”更直接，扫描时的做种标记不覆盖它。
+    GoneFromSite,
 }
 
 impl CoverageStatus {
@@ -70,6 +82,9 @@ impl CoverageStatus {
             CoverageStatus::ReseedDraft => "转种草稿",
             CoverageStatus::Skipped => "已跳过（内容类型）",
             CoverageStatus::PendingOffers => "待走候选入口",
+            CoverageStatus::PendingReview => "等站点审核",
+            CoverageStatus::ReviewRejected => "站点审核没过",
+            CoverageStatus::GoneFromSite => "站上已找不到",
         }
     }
 
@@ -93,6 +108,21 @@ impl CoverageStatus {
                 // 等站点候选入口：程序重试只会再被同一规则挡住，所以不入队；
                 // 但它不是“完事”，`status` / `report` 会单列成待跟进。
                 | CoverageStatus::PendingOffers
+                // 等站点审核 / 审核没过 / 站上已找不到：都在等站点侧或人来处理，
+                // 程序再排一次只会重复上传；同样单列成待跟进，由回访（reviewcheck）收尾。
+                | CoverageStatus::PendingReview
+                | CoverageStatus::ReviewRejected
+                | CoverageStatus::GoneFromSite
+        )
+    }
+
+    /// 站点侧审核相关的三个状态：要回访详情页才能收尾。
+    pub fn is_review_related(&self) -> bool {
+        matches!(
+            self,
+            CoverageStatus::PendingReview
+                | CoverageStatus::ReviewRejected
+                | CoverageStatus::GoneFromSite
         )
     }
 }
@@ -483,6 +513,17 @@ mod tests {
         assert!(!CoverageStatus::Failed.is_settled());
         // 等站点候选入口：不入队重试，但也不算“完事”（`status` 单列待跟进）
         assert!(CoverageStatus::PendingOffers.is_settled());
+        // 等站点审核 / 审核没过 / 站上已找不到：都不入队重发，由回访收尾
+        for s in [
+            CoverageStatus::PendingReview,
+            CoverageStatus::ReviewRejected,
+            CoverageStatus::GoneFromSite,
+        ] {
+            assert!(s.is_settled(), "{s:?} 应该是不入队重发的状态");
+            assert!(s.is_review_related());
+        }
+        assert!(!CoverageStatus::PendingOffers.is_review_related());
+        assert!(!CoverageStatus::Reseeded.is_review_related());
     }
 
     #[test]

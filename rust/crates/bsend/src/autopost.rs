@@ -14,6 +14,7 @@ use crate::models::LocalTorrent;
 use crate::qbittorrent::QBittorrent;
 use crate::report::{reconcile_marks, CoverageReport};
 use crate::reseed;
+use crate::review::ReviewCheckOptions;
 
 pub struct AutopostOptions {
     /// 只跑门禁与审阅，不碰站点写接口
@@ -137,6 +138,9 @@ pub fn run_autopost(
     let torrents = qb
         .list_torrents()
         .with_context(|| "拉取下载器种子列表失败（对账/辅种都需要全量列表）")?;
+    // 每轮开头先回访站点审核：之前发出去、站点还没放行的，审完了就趁这一轮把站点种子挂回 qB。
+    // 回访自己出错只记日志，不挡后面的发种。
+    recheck_reviews_once(cfg, &qb, emit);
     run_autopost_with(
         cfg,
         opts,
@@ -148,6 +152,28 @@ pub fn run_autopost(
             None => reseed::run_reseed(cfg, &qb, req, index, log, throttle),
         },
     )
+}
+
+/// 自动发种每轮开头的一次审核回访（只看记了审核结论的格子；`bsend reviewcheck` 不带参数时一样）。
+/// 没有要回访的条目就不出声；回访出错只记日志，不影响后面的发种。
+fn recheck_reviews_once(cfg: &Config, qb: &QBittorrent, emit: &mut impl FnMut(AutopostEvent)) {
+    let mut index = ContentIndex::load(&cfg.coverage_state_path());
+    let opts = ReviewCheckOptions::default();
+    let ran = {
+        let mut log = |line: &str| emit(AutopostEvent::Log(format!("审核回访｜{line}")));
+        crate::review::recheck_reviews(cfg, qb, &mut index, &opts, &mut log)
+    };
+    match ran {
+        Ok(s) if s.selected == 0 => {}
+        Ok(s) => emit(AutopostEvent::Log(format!(
+            "审核回访：看了 {} 条详情页；仍在等审核 {}、仍是不通过或站上没有 {}；新记下等审核 {} / 不通过 {} / 站上已找不到 {}；审完收尾 {}；打不开 {}",
+            s.checked, s.still_pending, s.still_bad, s.marked_pending, s.marked_rejected,
+            s.marked_gone, s.settled, s.errors
+        ))),
+        Err(e) => emit(AutopostEvent::Log(format!(
+            "审核回访没跑完（不影响发种）：{e:#}"
+        ))),
+    }
 }
 
 /// `run_autopost` 的编排主体（不含下载器连接与总闸）：调用方负责把 reviewer/runner
@@ -494,16 +520,14 @@ pub fn run_autopost_with(
                     serde_json::json!({"site": site, "key": d.content_key,
                         "result": result, "url": dup.url, "note": dup.note, "gates": gate_json}),
                 )?;
+                // 等站点审核 / 审核没过：把站点原话带给界面（`bsend status` 的待跟进里也会列）
+                let says_why = matches!(result, "failed" | "pending_review" | "review_rejected");
                 emit(AutopostEvent::Outcome {
                     key: d.content_key.clone(),
                     site: site.clone(),
                     result,
                     url: dup.url,
-                    error: if result == "failed" {
-                        Some(dup.note)
-                    } else {
-                        None
-                    },
+                    error: says_why.then_some(dup.note),
                 });
             }
             Ok(reseed::ReseedOutcome::Posted(url)) => {

@@ -24,6 +24,7 @@ pub mod qbittorrent;
 pub mod report;
 pub mod reseed;
 pub mod resolver;
+pub mod review;
 pub mod sites;
 pub mod throttle;
 pub mod torrent_rewrite;

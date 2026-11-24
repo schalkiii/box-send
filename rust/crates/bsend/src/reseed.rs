@@ -29,8 +29,9 @@ use crate::coverage::now_unix;
 use crate::index::{ContentIndex, CoverageStatus, SiteCoverage};
 use crate::qbittorrent::QBittorrent;
 use crate::sites::nexusphp::{
-    decode_entities, decode_entities_once, is_detail_href, resolve_url, search_names_match,
-    sizes_close_with_slack, strip_tags, NexusPhp, SearchOutcome, TorrentPage,
+    decode_entities, decode_entities_once, is_detail_href, resolve_url, review_mark,
+    search_names_match, sizes_close_with_slack, strip_tags, NexusPhp, ReviewMark, SearchOutcome,
+    SiteNotice, TorrentPage,
 };
 use crate::throttle::{BudgetKind, SiteThrottle};
 use crate::torrent_rewrite;
@@ -3711,6 +3712,8 @@ pub fn extract_posted_links(body: &str, final_url: &str, base: &Url) -> PostedLi
 /// 只在 takeupload.php 回包/跳转没有给出详情或下载链接时使用。命中后先核对详情页标题，
 /// 再核对详情页大小（结果行大小解析不出来时也要过这一关），最后只下载站点生成的
 /// `.torrent`；不会拿本地上传构造的种子顶替站种，避免把审核没过的废种挂进 qB。
+/// `held` 是出参：候选页面找到了、但站点因为审核没放行不给下载时，记下（详情页，审核结论），
+/// 调用方据此落“等站点审核”，而不是“定位不到新种”。
 fn locate_posted_by_search(
     tgt: &NexusPhp,
     info: &ReleaseInfo,
@@ -3718,6 +3721,7 @@ fn locate_posted_by_search(
     relaxed_retry: bool,
     throttle: &SiteThrottle,
     log: &mut dyn FnMut(&str),
+    held: &mut Option<(String, ReviewMark, String)>,
 ) -> Option<(String, Vec<u8>)> {
     for relaxed in [false, true] {
         if relaxed && !relaxed_retry {
@@ -3793,10 +3797,104 @@ fn locate_posted_by_search(
                 ));
                 return Some((outcome.detail_url, data));
             }
-            Err(e) => log(&format!("发后定位·候选站点种下载失败（{e:#}）")),
+            Err(e) => match site_review_hold(&e) {
+                // 新种找到了，只是站点要先审才给下载：这就是刚发的那条，记下交给调用方落格
+                Some((mark, why)) => {
+                    *held = Some((outcome.detail_url.clone(), mark, why));
+                    return None;
+                }
+                None => log(&format!("发后定位·候选站点种下载失败（{e:#}）")),
+            },
         }
     }
     None
+}
+
+/// 下载失败是不是因为站点审核没放行（`SiteNotice`，且提示里认出了审核结论）。
+/// “通过”不算：站点标着通过却不给下载，那是别的问题，走普通的下载失败路径。
+fn site_review_hold(err: &anyhow::Error) -> Option<(ReviewMark, String)> {
+    err.downcast_ref::<SiteNotice>()?
+        .review
+        .clone()
+        .filter(|(m, _)| *m != ReviewMark::Approved)
+}
+
+/// 站点收下了种子，但审核没放行（要先审，或已经判了不通过）：拿不到站点种子，挂不了 qB。
+/// 这不是发种失败：不记 failed、不进失败冷却、不重发（重发只会得到重复种）；
+/// 落专门的格子，等回访（`bsend reviewcheck` / 自动发种每轮开头）收尾。
+fn review_hold_outcome(
+    index: &mut ContentIndex,
+    key: &str,
+    site: &str,
+    url: Option<String>,
+    mark: ReviewMark,
+    why: &str,
+    log: &mut dyn FnMut(&str),
+) -> Result<ReseedOutcome> {
+    let (status, note) = match mark {
+        ReviewMark::Pending => (
+            CoverageStatus::PendingReview,
+            format!("站上已发布，等站点审核（站点原话：{why}）；审完前拿不到站点种子，没挂回 qB"),
+        ),
+        ReviewMark::Rejected => (
+            CoverageStatus::ReviewRejected,
+            format!("站点审核没过（{why}）；没挂回 qB。改简介或种子后在站上处理，程序不重发"),
+        ),
+        // site_review_hold 已经把“通过”滤掉了；真走到这里，说明不是审核在等，按原文记下来让人看
+        ReviewMark::Approved => (
+            CoverageStatus::ReviewPending,
+            format!("posted_unresolved：站点页面标着“通过”却不给下载（{why}），待人工确认；勿重发"),
+        ),
+    };
+    log(&format!("站点审核·{}：{}", status.label(), note));
+    write_cell(index, key, site, status, url.clone(), &note);
+    index.save()?;
+    Ok(ReseedOutcome::Duplicate(DuplicateOutcome {
+        status,
+        url,
+        note,
+    }))
+}
+
+/// 站点让下载、种子也挂回 qB 在做种了，但页面上还标着审核结论（tey：`title="未审"`；
+/// 麒麟：“审核不通过，原因：…”）。做种不受影响，可这条种子留不留得下来要看审核，
+/// 所以格子按审核结论落，等回访收尾。
+fn review_seeding_outcome(
+    index: &mut ContentIndex,
+    key: &str,
+    site: &str,
+    detail_url: &str,
+    mark: ReviewMark,
+    why: &str,
+    log: &mut dyn FnMut(&str),
+) -> Result<ReseedOutcome> {
+    let (status, note) = match mark {
+        ReviewMark::Pending => (
+            CoverageStatus::PendingReview,
+            format!("站上已发布，种子已挂回 qB 做种；站点页面还标着“{why}”，等审核结果"),
+        ),
+        ReviewMark::Rejected => (
+            CoverageStatus::ReviewRejected,
+            format!("站点审核没过：{why}；种子已挂回 qB，仍在做种"),
+        ),
+        // 调用前已经把“通过”滤掉了；标着通过就是正常发布完成，格子不动
+        ReviewMark::Approved => return Ok(ReseedOutcome::Posted(detail_url.to_string())),
+    };
+    log(&format!("站点审核·{}：{}", status.label(), note));
+    write_cell(
+        index,
+        key,
+        site,
+        status,
+        Some(detail_url.to_string()),
+        &note,
+    );
+    index.save()?;
+    Ok(ReseedOutcome::Duplicate(DuplicateOutcome {
+        status,
+        url: Some(detail_url.to_string()),
+        note,
+    }))
 }
 
 /// existed 回包详情页标题核对：只采信回包给的 hint 页面，标题一致才返回。
@@ -3862,10 +3960,22 @@ fn strip_site_title_badges(title: &str) -> &str {
     title.trim()
 }
 
-pub fn verify_posted(target: &NexusPhp, detail_url: &str, info: &ReleaseInfo) -> Vec<String> {
+/// 发后自检：回读新种页核对标题/MediaInfo/链接。同一次请求顺带带回页面上明写的审核结论
+/// （未审 / 审核不通过），不额外打站点。抓不到页面时只返回一条警告，审核结论为 `None`。
+pub fn verify_posted(
+    target: &NexusPhp,
+    detail_url: &str,
+    info: &ReleaseInfo,
+) -> (Vec<String>, Option<(ReviewMark, String)>) {
     match target.fetch_html(detail_url, target.base.as_str()) {
-        Ok(html) => verify_posted_html(&html, info),
-        Err(e) => vec![format!("抓新种详情页失败（{e:#}），请手动核对发布结果")],
+        Ok(html) => (
+            verify_posted_html(&html, info),
+            review_mark(&html, &info.name),
+        ),
+        Err(e) => (
+            vec![format!("抓新种详情页失败（{e:#}），请手动核对发布结果")],
+            None,
+        ),
     }
 }
 
@@ -4735,6 +4845,10 @@ impl ReseedOutcome {
                 // 站点要人走候选入口：既不是失败（不进失败冷却），也不是“已结束”，
                 // 单独一个审计词，周报里能数出来。
                 CoverageStatus::PendingOffers => "pending_offers",
+                // 站上已发布但要先过站点审核：等回访收尾，不是失败
+                CoverageStatus::PendingReview => "pending_review",
+                // 站点明写审核不通过：要人改种子/简介，程序不重发
+                CoverageStatus::ReviewRejected => "review_rejected",
                 CoverageStatus::ReviewPending => {
                     if d.note.starts_with("posted_unresolved") {
                         // 定位不到 ≠ 发种失败：不进 blocked/failed/review_failed 失败冷却表
@@ -4990,9 +5104,34 @@ pub fn pull_published(
     log(&format!("拉取目标种：{detail_url}"));
     let page = tgt.fetch_torrent_page(detail_url)?;
     let tdata = tgt.download_torrent(&page, detail_url)?;
+    pull_with_data(
+        cfg,
+        qb,
+        site_id,
+        detail_url,
+        content_key,
+        &tdata,
+        index,
+        log,
+    )
+}
+
+/// 站点种子已经下回来了，按它挂进 qB（`pull_published` 的后半段；站点审核回访也走这里）。
+/// 返回最终格子状态和详情页 URL。
+#[allow(clippy::too_many_arguments)] // 内部管道：挂回需要的全部共享件
+pub(crate) fn pull_with_data(
+    cfg: &Config,
+    qb: &QBittorrent,
+    site_id: &str,
+    detail_url: &str,
+    content_key: Option<&str>,
+    tdata: &[u8],
+    index: &mut ContentIndex,
+    log: &mut dyn FnMut(&str),
+) -> Result<(CoverageStatus, String)> {
     let key = match content_key {
         Some(k) => k.to_string(),
-        None => find_content_key_by_pieces(qb, index, &tdata)?,
+        None => find_content_key_by_pieces(qb, index, tdata)?,
     };
     let (name, source_site, source_url) = {
         let entry = index.contents.get(&key).with_context(|| {
@@ -5012,7 +5151,7 @@ pub fn pull_published(
                 .unwrap_or_default(),
         )
     };
-    let member = matching_local_member(qb, &index.contents[&key], &tdata)?
+    let member = matching_local_member(qb, &index.contents[&key], tdata)?
         .with_context(|| format!("目标种分片与本地内容 {key} 不一致，拒绝挂回"))?;
     let req = ReseedRequest {
         content_key: key,
@@ -5022,7 +5161,7 @@ pub fn pull_published(
         name: name.clone(),
     };
     let status = push_target_torrent(
-        cfg, qb, &req, &name, detail_url, &tdata, None, member, index, log,
+        cfg, qb, &req, &name, detail_url, tdata, None, member, index, log,
     )?;
     index.save()?;
     Ok((status, detail_url.to_string()))
@@ -5595,15 +5734,30 @@ fn run_reseed_inner(
         .or_else(|| links.detail.clone());
     let mut download_url = links.download.clone();
     let mut tdata: Option<Vec<u8>> = None;
+    // 站点页面上明写的审核结论（未审 / 审核不通过）。回包本身就是新种详情页时先看回包；
+    // 之后真抓到的新种页（取下载链接、发后自检）以它为准。
+    // `page_seen`：这条新种的详情页这一轮是不是已经看过了（看过就不用再抓）。
+    let body_is_detail = is_detail_href(&up.final_url);
+    let mut page_seen = body_is_detail;
+    let mut page_mark = if body_is_detail {
+        review_mark(&up.body, &info.name)
+    } else {
+        None
+    };
 
     // 回包只给详情页时，从详情页拿站点的 download.php；不要自己拼目标站种子。
     if download_url.is_none() {
         if let Some(detail) = detail_url.as_deref() {
-            match tgt.fetch_torrent_page(detail) {
-                Ok(p) if !p.download_url.is_empty() => {
-                    download_url = Some(p.download_url);
+            match tgt.fetch_torrent_page_marked(detail) {
+                Ok((p, mark)) => {
+                    page_seen = true;
+                    page_mark = mark.or(page_mark);
+                    if !p.download_url.is_empty() {
+                        download_url = Some(p.download_url);
+                    } else {
+                        log(&format!("回包详情页没有下载链接：{detail}"));
+                    }
                 }
-                Ok(_) => log(&format!("回包详情页没有下载链接：{detail}")),
                 Err(e) => log(&format!("回包详情页打不开（{e:#}）：{detail}")),
             }
         }
@@ -5622,13 +5776,29 @@ fn run_reseed_inner(
         };
         match tgt.download_torrent(&page, referer) {
             Ok(d) => tdata = Some(d),
-            Err(e) => log(&format!("站点种子下载失败（{e:#}）：{url}")),
+            Err(e) => match site_review_hold(&e) {
+                // 站点收下了种子，但要先审才给下载：种子就在站上，不用再去站内检索
+                // （检索只会命中同名旧种），直接落“等站点审核 / 审核没过”。
+                Some((mark, why)) => {
+                    return review_hold_outcome(
+                        index,
+                        &req.content_key,
+                        &req.target_site,
+                        detail_url.clone().or_else(|| up.detail_url.clone()),
+                        mark,
+                        &why,
+                        log,
+                    );
+                }
+                None => log(&format!("站点种子下载失败（{e:#}）：{url}")),
+            },
         }
     }
 
     // 回包没给链接、或链接下载失败：用发布名 + 本地总大小检索新种。
     // 只接受站点详情页标题和大小都对上的候选，再下载站点种；绝不拿本地构造种顶替。
     if tdata.is_none() {
+        let mut held: Option<(String, ReviewMark, String)> = None;
         if let Some((found_detail, found_data)) = locate_posted_by_search(
             &tgt,
             &info,
@@ -5636,9 +5806,20 @@ fn run_reseed_inner(
             cfg.coverage.relaxed_retry_search,
             throttle,
             log,
+            &mut held,
         ) {
             detail_url = Some(found_detail);
             tdata = Some(found_data);
+        } else if let Some((found_detail, mark, why)) = held {
+            return review_hold_outcome(
+                index,
+                &req.content_key,
+                &req.target_site,
+                Some(found_detail),
+                mark,
+                &why,
+                log,
+            );
         }
     }
 
@@ -5674,13 +5855,24 @@ fn run_reseed_inner(
     });
 
     // ---- 发后自检：回读新种页核对标题/MediaInfo/链接（只警告不推翻）----
-    if !cfg.coverage.skip_post_check {
-        if let Some(d) = &detail_url {
-            for w in verify_posted(&tgt, d, &info) {
-                log(&format!("发后自检·{w}"));
+    // 同一次请求顺带看页面上明写的审核结论（未审 / 审核不通过）。
+    // 跳过自检时，只有这一轮还没看过新种详情页才为看审核标记单独抓一次。
+    if let Some(d) = &detail_url {
+        if !cfg.coverage.skip_post_check || (!page_seen && page_mark.is_none()) {
+            let (warns, mark) = verify_posted(&tgt, d, &info);
+            if !cfg.coverage.skip_post_check {
+                for w in warns {
+                    log(&format!("发后自检·{w}"));
+                }
             }
+            page_mark = mark.or(page_mark);
         }
     }
+    // 站点已经标“通过”的，和没有审核标记一样：照常算发布完成
+    if matches!(page_mark, Some((ReviewMark::Approved, _))) {
+        log("站点审核：新种页面上标着“通过”");
+    }
+    let page_mark = page_mark.filter(|(m, _)| *m != ReviewMark::Approved);
 
     // ---- 6 已拿到站点 .torrent（下载或检索补定位），作为独立种子挂回 qB（绝不追加 tracker）----
     let reported_url = detail_url
@@ -5699,7 +5891,30 @@ fn run_reseed_inner(
         index,
         log,
     ) {
-        Ok(_) => Ok(ReseedOutcome::Posted(reported_url)),
+        Ok(CoverageStatus::Reseeded) => match page_mark {
+            // 站点让下载、也挂回 qB 在做种了，但页面上还标着审核结论：做种不受影响，
+            // 可这条种子留不留得下来要看审核，格子按审核结论落，等回访收尾。
+            Some((mark, why)) => review_seeding_outcome(
+                index,
+                &req.content_key,
+                &req.target_site,
+                &reported_url,
+                mark,
+                &why,
+                log,
+            ),
+            None => Ok(ReseedOutcome::Posted(reported_url)),
+        },
+        Ok(other) => {
+            if let Some((mark, why)) = &page_mark {
+                log(&format!(
+                    "站点页面标着审核结论（{}：{why}）；本轮格子是 {}，等回访时再记",
+                    mark.label(),
+                    other.label()
+                ));
+            }
+            Ok(ReseedOutcome::Posted(reported_url))
+        }
         Err(e) => unresolved_after_site(
             index,
             &req.content_key,
@@ -5777,7 +5992,7 @@ fn append_reseed_log(
     }
 }
 
-fn write_cell(
+pub(crate) fn write_cell(
     index: &mut ContentIndex,
     key: &str,
     site: &str,
@@ -6082,7 +6297,7 @@ fn push_target_torrent(
     Ok(CoverageStatus::Verifying)
 }
 
-fn adapter_for(cfg: &Config, site_id: &str) -> Result<NexusPhp> {
+pub(crate) fn adapter_for(cfg: &Config, site_id: &str) -> Result<NexusPhp> {
     let s = cfg
         .sites
         .iter()
@@ -8189,6 +8404,117 @@ Language : Chinese"));
             .as_deref()
             .unwrap_or("")
             .starts_with("posted_unresolved"));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn review_hold_and_seeding_outcomes_persist_distinct_cells() {
+        let path = std::env::temp_dir().join(format!(
+            "bsend-review-hold-{}-{}.json",
+            std::process::id(),
+            now_unix()
+        ));
+        let entry = serde_json::json!({
+            "name": "x",
+            "totalSize": 1,
+            "fileCount": 0,
+            "manifestDigest": "",
+            "torrents": {},
+            "trackerHosts": [],
+            "firstSeen": 0,
+            "goneSince": null,
+            "coverage": {},
+            "source": null,
+            "forbidReseed": false
+        });
+        let seed = serde_json::json!({ "contents": { "m:held": entry, "m:seed": entry.clone(), "m:ok": entry } });
+        std::fs::write(&path, seed.to_string()).unwrap();
+        let mut index = ContentIndex::load(&path);
+        let mut log = |_l: &str| {};
+        let url = "https://www.hdkyl.in/details.php?id=479362";
+
+        // 站点收下了但不给下载（等审核）：落“等站点审核”，不是 posted_unresolved、不算失败
+        let out = review_hold_outcome(
+            &mut index,
+            "m:held",
+            "qilin",
+            Some(url.to_string()),
+            ReviewMark::Pending,
+            "尚未通过审核，请稍后再试",
+            &mut log,
+        )
+        .unwrap();
+        assert_eq!(out.audit_result(), "pending_review");
+        let ReseedOutcome::Duplicate(d) = &out else {
+            panic!("expected duplicate outcome, got {out:?}");
+        };
+        assert_eq!(d.status, CoverageStatus::PendingReview);
+        assert!(!d.note.starts_with("posted_unresolved"), "{}", d.note);
+        assert!(d.note.contains("尚未通过审核"), "{}", d.note);
+        let cell = &index.contents["m:held"].coverage["qilin"];
+        assert_eq!(cell.status, CoverageStatus::PendingReview);
+        assert_eq!(cell.url.as_deref(), Some(url));
+
+        // 能下载、也挂回 qB 了，但页面标着不通过：落“站点审核没过”，审计词 review_rejected
+        let out = review_seeding_outcome(
+            &mut index,
+            "m:seed",
+            "qilin",
+            url,
+            ReviewMark::Rejected,
+            "审核不通过，原因：缺少海报或截图（图片少于 2 张）",
+            &mut log,
+        )
+        .unwrap();
+        assert_eq!(out.audit_result(), "review_rejected");
+        let cell = &index.contents["m:seed"].coverage["qilin"];
+        assert_eq!(cell.status, CoverageStatus::ReviewRejected);
+        assert!(cell
+            .note
+            .as_deref()
+            .is_some_and(|n| n.contains("缺少海报或截图")));
+
+        // 页面标着“通过”＝正常发布完成：返回已发布，格子不动
+        let out = review_seeding_outcome(
+            &mut index,
+            "m:ok",
+            "qilin",
+            url,
+            ReviewMark::Approved,
+            "通过",
+            &mut log,
+        )
+        .unwrap();
+        assert!(matches!(out, ReseedOutcome::Posted(ref u) if u == url));
+        assert!(!index.contents["m:ok"].coverage.contains_key("qilin"));
+
+        // “通过”不算审核卡住：站点标着通过却不给下载，走普通的下载失败路径
+        let notice = |mark, why: &str| {
+            anyhow::Error::new(SiteNotice {
+                text: "提示".to_string(),
+                review: Some((mark, why.to_string())),
+            })
+        };
+        assert_eq!(
+            site_review_hold(&notice(ReviewMark::Pending, "尚未通过审核")).map(|(m, _)| m),
+            Some(ReviewMark::Pending)
+        );
+        assert_eq!(
+            site_review_hold(&notice(ReviewMark::Approved, "通过")),
+            None
+        );
+        assert!(site_review_hold(&anyhow::anyhow!("HTTP 500")).is_none());
+
+        index.save().unwrap();
+        let reloaded = ContentIndex::load(&path);
+        assert_eq!(
+            reloaded.contents["m:held"].coverage["qilin"].status,
+            CoverageStatus::PendingReview
+        );
+        assert_eq!(
+            reloaded.contents["m:seed"].coverage["qilin"].status,
+            CoverageStatus::ReviewRejected
+        );
         let _ = std::fs::remove_file(path);
     }
 

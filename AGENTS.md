@@ -35,7 +35,7 @@ Rust 2021；crate：`bsend`（引擎）、`bsend-cli`、`bsend-gui`。错误用 
 - 判重以 info hash 和分片（pieces）为准；只有名称相同且总大小相等时才进人工核对，总大小不同就是不同内容。
 - `existed` 只认最终跳转的 `existed=1`，或错误框里的明确重复措辞；上传表单原样返回不算重复。
 - **面向人的文字一律说白话**：不用自造缩写或代号当术语。比如“把站点上的种子下回来挂进 qB”就写这句话，不要只丢一个命令名；命令名只出现在命令示例或“命令是 `bsend xxx`”这种明确指代里，正文先讲做什么，再给命令。日志、`status` / `audit` 输出、文档同样遵守。
-- **等站点侧动作要留成待跟进**：站点要求改走候选入口（如 `torrent_too_large` → `offers.php`）记 `pending_offers`（待走候选入口），不算失败、不自动重试，但必须能在 `bsend status` / `bsend audit` 里看到；不要写成 `skipped` 一了百了。等站点审核的（如藏宝阁、熊猫）同样记进 `doc/ROADMAP.md` 跟踪。
+- **等站点侧动作要留成待跟进**：站点要求改走候选入口（如 `torrent_too_large` → `offers.php`）记 `pending_offers`（待走候选入口）；站上已发布但站点还没审完记 `pending_review`（等站点审核）；站点明写审核不通过记 `review_rejected`；回访时详情页说没有这条记 `gone_from_site`。都不算失败、不自动重发、不进失败冷却，但必须能在 `bsend status` / `bsend audit` 里看到；不要写成 `skipped` 一了百了。审核这三类由回访收尾（`bsend reviewcheck`；自动发种每轮开头也会跑一次）：页面不再有审核标记就把站点种子下回来挂进 qB。页面标记只认明写的字样，判定规则在 `sites/nexusphp.rs` 的 `review_mark_in`。
 - 失败冷却默认关闭：`assist.backoffHours` 不填或填 0 时，被拦或失败的条目下一轮直接重试；只有显式配小时数才在窗口内跳过（拦截与失败共用同一个窗口，`--dry-run` 同样受限），依据写在 `auto-audit.jsonl`。
 - 待发条数从 qB 的实时缺口生成：`autopost` 读下载器种子列表，`--dry-run` 读索引里最后一次扫描结果。旧 `reseed_draft` 记录只作过渡期兼容。加白名单不会凭空产生待发条目。
 - 内容范围由 `assist.skipKeywords` 拦教育/成人，命中不占上传额度。

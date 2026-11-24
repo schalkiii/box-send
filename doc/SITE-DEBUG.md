@@ -165,7 +165,7 @@ luckpt 的候选规则（**还没有写进 `boxsend.json`**）：
 
 ### 6.6 qilin 和 panda
 
-站上其实已经发布（qilin 479362、panda 141276），但旧逻辑拿旧种或错误详情页当结果，记成了失败；新 hash 不在 qB。这是发后定位错误，不是上传失败。新版流程已经改成从回包正文/跳转里按 id 配对详情和下载链接，再下载目标种独立挂回；发后定位缺陷已修（见 `ROADMAP.md` 4.3）。2026-11-23 已补挂：qilin 479362（hash `bd348dfc…`，站点审核仍显示缺图，不影响做种）、panda 141276（hash `3f8ed774…`），两条 qB 校验 100%。panda 的审核拒绝（主标题中文/简介顺序）已在 6.11 修复并重提，等复审。
+站上其实已经发布（qilin 479362、panda 141276），但旧逻辑拿旧种或错误详情页当结果，记成了失败；新 hash 不在 qB。这是发后定位错误，不是上传失败。新版流程已经改成从回包正文/跳转里按 id 配对详情和下载链接，再下载目标种独立挂回；发后定位缺陷已修（见 `ROADMAP.md` 4.3）。2026-11-23 已补挂：qilin 479362（hash `bd348dfc…`，站点审核仍显示缺图，不影响做种）、panda 141276（hash `3f8ed774…`），两条 qB 校验 100%。panda 的审核拒绝（主标题中文/简介顺序）已在 6.11 修复并重提，等复审。2026-11-24 回访：详情页报“没有该ID的种子”，重提的版本没留在站上，覆盖记录已改 `gone_from_site`；qB 里那条还在。
 
 ### 6.7 2026-11-23 新实发：ptba、cspt、dubhe、ptsbao、crabpt、hdbao、tey、oshen、ptfans、itzmx
 
@@ -177,7 +177,7 @@ luckpt 的候选规则（**还没有写进 `boxsend.json`**）：
 - **ptsbao**：源 `soulvoice` 的同一条《知否知否应是绿肥红瘦》→ `https://ptsbao.club/details.php?id=135787`，站上 hash `0b0087f7…`，构造 hash `bf6e43ae…`。`source_sel[1]` 是二级分类（`剧集-美剧` / `电影-WEB-DL`），旧逻辑会按“WEB-DL”错填成 `电影-WEB-DL`；已改成先识别二级分类、type 选完后再按父子关系填，实发时选到 `剧集-大陆(23)`。已把站点种子下回来挂进 qB，qB 校验 100%；表单没有“完结”标签，发布后需要人工补。
 - **crabpt**：源 `hdsky` 的 `The Disguiser`（88.9 GB）→ `https://crabpt.vip/details.php?id=240242`，站上 hash `732e2c99…`，构造 hash `fe9204e8…`。此前候选《人民的名义》卡在源站 `hdfans` 502（当时按 6 小时失败冷却被挡住），这次改选 `hdsky` 源后一次通过；站上已有同片 2160p 其他版本 214580，按策略继续发布。已把站点种子下回来挂进 qB，qB 校验 100%。
 - **hdbao**：`autopost --sites hdbao --limit 1` 实际发了 2 条：源 `ptba` 的 `Mad Men S01-S07`（102.1 GB）→ `https://hdbao.cc/details.php?id=54402`，站上 hash `95eacf24…`，构造 hash `e88d740e…`；源 `hdfans` 的《人民的名义》（95.8 GB）→ `https://hdbao.cc/details.php?id=54403`，站上 hash `51ededb2…`，构造 hash `1f8a0104…`。两条都先落 `posted_unresolved`，挂回后 qB 校验 100%。`--limit` 少算 `posted_unresolved` 的缺陷已修，后续同站不再连发。
-- **tey**：源 `hdsky` 的 `The Disguiser`（HDTV 1080p，82.8 GB）→ `https://pt.tey.cc/details.php?id=623`，站上 hash `c9570904…`，构造 hash `465916fd…`。该站 `medium_sel[4]` 没有 Blu-ray，蓝光/Remux 候选会被选档门禁拦住；这次改用 HDTV 源才通过。qB 里 5 条老种全走 `tracker.tey.cc`，页面域是 `pt.tey.cc`，补 announce 别名后 qB 覆盖从 0 变 5，也能抄到 passkey。上传回包同样没给详情链接，落 `posted_unresolved`；挂回后 qB 校验 100%。新种在站上暂时显示“未审”，等站点审核。
+- **tey**：源 `hdsky` 的 `The Disguiser`（HDTV 1080p，82.8 GB）→ `https://pt.tey.cc/details.php?id=623`，站上 hash `c9570904…`，构造 hash `465916fd…`。该站 `medium_sel[4]` 没有 Blu-ray，蓝光/Remux 候选会被选档门禁拦住；这次改用 HDTV 源才通过。qB 里 5 条老种全走 `tracker.tey.cc`，页面域是 `pt.tey.cc`，补 announce 别名后 qB 覆盖从 0 变 5，也能抄到 passkey。上传回包同样没给详情链接，落 `posted_unresolved`；挂回后 qB 校验 100%。新种在站上暂时显示“未审”，等站点审核。2026-11-24 回访仍未审，覆盖记录落 `pending_review`，由回访接着跟。
 - **oshen**：源 `soulvoice` 的《知否知否应是绿肥红瘦》（119.6 GB）→ `http://www.oshen.win/details.php?id=57082`，站上 hash `22e3dd63…`，构造 hash `0f73ae73…`。前两次分别断在“send failed because receiver is gone”和判重搜索超时；第三次站点恢复，判重正常、上传成功。回包没给详情链接，落 `posted_unresolved`；挂回后 qB 校验 100%，tracker 为 `https://www.oshen.win/announce.php?...`。表单没有“完结”标签，发布后需要人工补。
 - **ptfans**：源 `carpt` 的 `Agatha.Christies.Poirot.S01-S13.Collection`（294.3 GB）→ `https://ptfans.cc/details.php?id=11111`，站上 hash `fdf27b29…`，构造 hash `4fd4392f…`。此前上传页和 IMDb 判重都超时；2026-11-23 站点恢复后一次通过。站上已有 720p 其他版本 `6095`，按“同名其他版本照样发”的策略继续上传。回包没给详情链接，落 `posted_unresolved`；挂回后 qB 校验 100%，tracker 为 `https://ptfans.cc/announce.php?...`。表单没有“完结”标签，发布后需要人工补。
 - **itzmx**：源 `ubits` 的 `Liar.Game.S01.2007.2160p.WEB-DL.H264.AAC-ADWeb`（40.0 GB）→ `https://pt.itzmx.com/details.php?id=13134`，站上 hash `88e3103b…`，构造 hash `7744200c…`。此前大合集候选都被站点以“种子文件过大”拒绝；改用这个源种只有 96,934 bytes 的条目后一次通过。上传回包没给详情链接，落 `posted_unresolved`，但 `reseed-log.jsonl` 已记录详情页；补 `itzmx` 到 hash 改写白名单后挂回，qB 校验 100%，tracker 为 `https://pt.itzmx.com/announce.php?...`。详情页没找到“中字/完结”标签，发布后需要人工补。
@@ -199,7 +199,7 @@ luckpt 的候选规则（**还没有写进 `boxsend.json`**）：
 - 简介：站点简介框是 BBCode 编辑器，源站 hdfans 的简介是裸 HTML；原样提交后数据库里是 `&lt;fieldset&gt;…`，页面显示字面标签，审核端看不到 `<img>`。代码已改为默认把 HTML 简介转 BBCode（`descrFormat=html` 才保留 HTML），43994 已用 `[quote]`/`[img]` 重新提交，详情页正常渲染。
 - 2026-11-23 抽查 29 条已发布种子，lajidui、ptcafe、sbpt、luckpt、ptlgs、tangpt、longpt、cyanbug、kufei、xingyunge、city13、shuioudao、xdy、baozi、novahd、ptzone 等站的历史简介也是字面 HTML；已用 `scripts/fix-bbcode-descr.py` 批量改成 BBCode，只改简介、不换种子文件，29 条复查全部为 BBCode。
 - 修复后先只编辑 43994，不新发种；2026-11-23 已重提，等复审再考虑恢复藏宝阁自动发种。
-- 2026-11-23 复审仍拒绝，原因变成“简介图片全部无法访问”。用登录 Cookie 读 43994 编辑页确认简介只剩两张图：豆瓣海报 `img9.doubanio.com` 裸请求 418/HTML 防盗链，`imgs.loukky.com` 本机 TLS 失败；都不可达。已用 imgbox 重传海报/截图（`images4.imgbox.com/f6/3a/MpwvlgiL_o.jpg`、`/af/5c/Z9Nm7U76_o.jpg`），带藏宝阁 Referer 均 200 image/jpeg，`edit-seed.py` 只改简介后详情页两张图正常显示。等站审核，不再私信管理。
+- 2026-11-23 复审仍拒绝，原因变成“简介图片全部无法访问”。用登录 Cookie 读 43994 编辑页确认简介只剩两张图：豆瓣海报 `img9.doubanio.com` 裸请求 418/HTML 防盗链，`imgs.loukky.com` 本机 TLS 失败；都不可达。已用 imgbox 重传海报/截图（`images4.imgbox.com/f6/3a/MpwvlgiL_o.jpg`、`/af/5c/Z9Nm7U76_o.jpg`），带藏宝阁 Referer 均 200 image/jpeg，`edit-seed.py` 只改简介后详情页两张图正常显示。等站审核，不再私信管理。2026-11-24 回访：详情页审核图标已标 `title="通过"`，审核已过。
 - 发种前门禁已加：`pruneDeadImages=true` 逐图探测，`requireImages=2` 少于两张可达图直接拦；不再出现“图片全死但照样提交”。
 
 ### 6.11 panda（熊猫高清）审核拒绝

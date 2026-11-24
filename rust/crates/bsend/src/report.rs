@@ -96,7 +96,9 @@ impl CoverageReport {
     ///
     /// `allowed` 是自动发种白名单；`per_site_limit` 是每站本轮最多保留的草稿数
     /// （通常传当站今日剩余额度）。同一条内容不会重复出现；`Skipped` / `Rejected` /
-    /// `SameHashSkip` / `Verifying` 这类终态或人工态不会被重新排队。
+    /// `SameHashSkip` / `Verifying` 这类终态或人工态不会被重新排队；
+    /// 站点审核相关（`PendingOffers` / `PendingReview` / `ReviewRejected` / `GoneFromSite`）
+    /// 同样不排：种子已经在站上，再发只会得到重复种，等回访收尾。
     /// 返回清点后的草稿数。
     pub fn derive_qb_gap_drafts(
         &mut self,
@@ -186,6 +188,11 @@ impl CoverageReport {
                             | CoverageStatus::Verifying
                             // 站点要人走候选入口：再排一次只会再被同一规则挡住
                             | CoverageStatus::PendingOffers
+                            // 等站点审核 / 审核没过 / 站上已找不到：种子在站上（或曾经在），
+                            // 再排一次就是重复上传；等回访收尾，由人决定要不要重发。
+                            | CoverageStatus::PendingReview
+                            | CoverageStatus::ReviewRejected
+                            | CoverageStatus::GoneFromSite
                     ) {
                         continue;
                     }
@@ -546,6 +553,10 @@ pub struct SiteAuditCounts {
     pub other: usize,
     /// 站点要求走候选入口（`pending_offers`）：等人工提交候选，不是失败
     pub pending_offers: usize,
+    /// 站上已发布但要先过站点审核（`pending_review`）：等回访，不是失败
+    pub pending_review: usize,
+    /// 站点明写审核不通过（`review_rejected`）：要人改种子/简介，不是失败
+    pub review_rejected: usize,
     /// Latest record timestamp (Unix sec) for this site/day; 0 when empty.
     pub last_at: i64,
 }
@@ -571,6 +582,10 @@ pub struct AuditTotals {
     pub other: usize,
     /// 站点要求走候选入口（`pending_offers`）
     pub pending_offers: usize,
+    /// 等站点审核（`pending_review`）
+    pub pending_review: usize,
+    /// 站点审核不通过（`review_rejected`）
+    pub review_rejected: usize,
     /// Records parsed and counted into the buckets above.
     pub records: usize,
     /// Lines that failed to parse or missed required fields.
@@ -593,6 +608,8 @@ pub struct AuditReport {
 /// - `failed`, `review_failed` → 失败（审阅/发布阶段失败；失败冷却口径与 failed 相同）
 /// - `skipped_duplicate`, `existed_pending`, `same_hash_skipped` → 重复（站内已有条目 / 同 hash）
 /// - `other_version` → 其他版本（单列，不计入重复）
+/// - `pending_offers` → 待走候选入口（等人工提交候选）
+/// - `pending_review` / `review_rejected` → 等站点审核 / 审核不通过（等回访或人工处理）
 /// - anything else → `other`
 fn audit_bucket(result: &str) -> &'static str {
     match result {
@@ -602,6 +619,8 @@ fn audit_bucket(result: &str) -> &'static str {
         "skipped_duplicate" | "existed_pending" | "same_hash_skipped" => "duplicate",
         "other_version" => "other_version",
         "pending_offers" => "pending_offers",
+        "pending_review" => "pending_review",
+        "review_rejected" => "review_rejected",
         _ => "other",
     }
 }
@@ -684,6 +703,8 @@ pub fn audit_daily(text: &str, now: i64, days: usize, site: Option<&str>) -> Aud
             "duplicate" => counts.duplicate += 1,
             "other_version" => counts.other_version += 1,
             "pending_offers" => counts.pending_offers += 1,
+            "pending_review" => counts.pending_review += 1,
+            "review_rejected" => counts.review_rejected += 1,
             _ => counts.other += 1,
         }
         if at > counts.last_at {
@@ -696,6 +717,8 @@ pub fn audit_daily(text: &str, now: i64, days: usize, site: Option<&str>) -> Aud
             "duplicate" => totals.duplicate += 1,
             "other_version" => totals.other_version += 1,
             "pending_offers" => totals.pending_offers += 1,
+            "pending_review" => totals.pending_review += 1,
+            "review_rejected" => totals.review_rejected += 1,
             _ => totals.other += 1,
         }
         totals.records += 1;

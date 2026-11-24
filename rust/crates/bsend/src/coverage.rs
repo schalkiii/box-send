@@ -210,14 +210,16 @@ pub fn run_round(
                 continue;
             }
             let cur = entry.coverage.get(&site.id).map(|c| c.status);
-            // 已辅/已转/校验中/否决是更强的结论，别被覆盖
+            // 已辅/已转/校验中/否决是更强的结论，别被覆盖。
+            // 站点审核相关的三条同理：qB 里挂着该站 tracker，不代表站上还在审/没删这条种子
+            // （实测熊猫 141276：qB 还挂着 tracker，站上详情页已经报“没有该ID的种子”）。
             let overwrite = !matches!(
                 cur,
                 Some(CoverageStatus::Assisted)
                     | Some(CoverageStatus::Reseeded)
                     | Some(CoverageStatus::Verifying)
                     | Some(CoverageStatus::Rejected)
-            );
+            ) && !cur.is_some_and(|s| s.is_review_related());
             if overwrite && cur != Some(CoverageStatus::Seeding) {
                 entry.coverage.insert(
                     site.id.clone(),
