@@ -79,7 +79,7 @@ status / at / url / note / verifyHash
 | `review_pending` | 站上命中了，但清单或 hash 对不上，等人核对 |
 | `pending_offers` | 站点要求改走候选入口（`offers.php`），程序不自动重试；等人工去候选页提交，`status` 里单列“待跟进” |
 
-`bsend status` 把两类“等站点侧动作”的记录单列成“待跟进（等站点侧动作，程序不自动重试）”：等走候选入口（`pending_offers`）和站上已发、qB 未挂回（note 以 `posted_unresolved` / `existed_unresolved` 开头）。这两类都不能拿普通 `review_pending` 的处置方式去重发。
+`bsend status` 把两类“等站点侧动作”的记录单列成“待跟进（等站点侧动作，程序不自动重试）”：等走候选入口（`pending_offers`）和站上已发、qB 未挂回（note 以 `posted_unresolved` / `existed_unresolved` 开头）。等候选的条目会点名列出（最多 10 条，附站点当时给的原因），超过 10 条提示去 `bsend audit --days 1` 看明细。这两类都不能拿普通 `review_pending` 的处置方式去重发。
 
 ## 3. 覆盖率怎么读
 

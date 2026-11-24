@@ -163,7 +163,7 @@ enum Cmd {
         interval_secs: u64,
     },
 
-    /// 把站上已发布、qB 还没挂回的种子重新挂回（不重发、不占发布额度）
+    /// 把站上已发布、qB 还没挂回的种子下回来挂进 qB（不重发、不占发布额度）
     Reattach {
         /// 目标站 id（boxsend.json 的 sourceSites[].id）
         #[arg(long)]
@@ -443,6 +443,7 @@ fn cmd_status(cfg: &Config) -> Result<()> {
     let mut posted_unresolved = 0usize;
     let mut pending_offers = 0usize;
     let mut drafts = Vec::new();
+    let mut pending_offer_items: Vec<String> = Vec::new();
     let mut pending_by_status: BTreeMap<CoverageStatus, usize> = BTreeMap::new();
     for e in index.contents.values() {
         member_torrents += e.torrents.len();
@@ -464,6 +465,32 @@ fn cmd_status(cfg: &Config) -> Result<()> {
             }
             if cell.status == CoverageStatus::PendingOffers {
                 pending_offers += 1;
+                // 光有总数没法跟进：把条目点名出来，附一句站点当时说的话（操作提示和原始回包留给 audit）。
+                let why = cell
+                    .note
+                    .as_deref()
+                    .map(|n| {
+                        n.split("（原始回包")
+                            .next()
+                            .unwrap_or(n)
+                            .split("：需人工")
+                            .next()
+                            .unwrap_or(n)
+                            .trim()
+                            .to_string()
+                    })
+                    .unwrap_or_default();
+                let name: String = e.name.chars().take(48).collect();
+                let name = if e.name.chars().count() > 48 {
+                    format!("{name}…")
+                } else {
+                    name
+                };
+                if why.is_empty() {
+                    pending_offer_items.push(format!("「{name}」→ {site}"));
+                } else {
+                    pending_offer_items.push(format!("「{name}」→ {site}：{why}"));
+                }
             }
             match cell.status {
                 CoverageStatus::ReseedDraft => {
@@ -554,6 +581,15 @@ fn cmd_status(cfg: &Config) -> Result<()> {
         println!("  待跟进（等站点侧动作，程序不自动重试）：");
         if pending_offers > 0 {
             println!("    等走候选入口：{pending_offers}（站点判种子过大，需到该站候选页提交）");
+            for item in pending_offer_items.iter().take(10) {
+                println!("      {item}");
+            }
+            if pending_offer_items.len() > 10 {
+                println!(
+                    "      ……还有 {} 条，明细见 `bsend audit --days 1`",
+                    pending_offer_items.len() - 10
+                );
+            }
         }
         if posted_unresolved > 0 {
             println!("    站上已发、qB 未挂回：{posted_unresolved}（按详情页手工挂回，勿重发）");

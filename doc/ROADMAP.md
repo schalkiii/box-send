@@ -67,9 +67,9 @@
 - 用更多真实站点跑完整链路，覆盖“站上已有 / existed / 下载被拒 / 校验失败”等分支；
 - **三条“站上已发、qB 未挂回”已补齐**（2026-11-24，详见 `SITES.md` 2.3）：pthome `284701`、nanyang `226159`、ubits `379266` 三站加入 hash 改写白名单后，用 `bsend reattach` 把站点种子下回来挂进 qB，qB 校验 100%、只挂单站 tracker、状态 `seeding`。站上 hash 与构造 hash 的不同点（具体改了哪个 info 字段）仍未逐字节核对。
 - **hdfans `287791` 已核实**（2026-11-24）：就是《伪装者》同一条，qB 里 `b1e600a6…` 校验 100%，覆盖记录 `reseeded`，没有重发。
-- **tjupt**：announce 地址按站点下载的种子定案为 `tracker-public.tjupt.org`（https、带 passkey），已写进 `overrides.announceURL`；上传仍撞 `takeupload.php` 超时——30s 全局超时不够，上传单步已放宽到 120s，等下一次实跑验证。站上已有 `416154`（FLAC/DDP5.1）与 `236519`（同名 FRDS 合集，pieces 与本地不同），属实不同内容，不算重复。
+- **tjupt**：announce 地址按站点下载的种子定案为 `tracker-public.tjupt.org`（https、带 passkey），已写进 `overrides.announceURL`；上传撞 `takeupload.php` 超时——先放宽到 120s，2026-11-24 11:35 再跑仍是超时且没留下回包，同时手工请求 `takeupload.php` / `details.php` 都被 302 到 `login.php`，当前登录态已失效。下一步要先刷新 tjupt 登录态，再判断是超时还是站点拒收。站上已有 `416154`（FLAC/DDP5.1）与 `236519`（同名 FRDS 合集，pieces 与本地不同），属实不同内容，不算重复。
 - **audiences**：判重检索被人机验证拦住，程序按“未确认重复不上传”中止。浏览器里过了验证也救不了无头请求：cookie 里没有 `uid/pass` 类鉴权字段，直连会被跳 `login.php`。后续不改无头请求，改成走 Kimi WebBridge 复用用户浏览器的登录态做判重（可行性待验证，验证前这个站仍只人工发）。
-- **qingwa 的 Poirot 合集**：不是“回包未识别”，回包是 `torrent_too_large` 表单（自动 submit 到 `offers.php?add_offer=1`），站点要求改走候选入口；程序记 `pending_offers`（待走候选入口），不算失败、不自动重试，`bsend status` 单列“待跟进”，等人去候选页提交。
+- **qingwa 的 Poirot 合集**：不是“回包未识别”，回包是 `torrent_too_large` 表单（自动 submit 到 `offers.php?add_offer=1`），站点要求改走候选入口；程序记 `pending_offers`（待走候选入口），不算失败、不自动重试，`bsend status` 单列“待跟进”，等人去候选页提交（2026-11-24 已真跑复现，覆盖记录与审计都落这个新状态）。
 - 藏宝阁 43994 已换 imgbox 图并重提，熊猫 141276 已改英文标题/重排简介，两条都还在等站点复审，审核状态未解除；这两条作为待跟进事项留在本文件，覆盖记录里没有格子，暂时只能人工盯。后续可考虑把“等站点审核”也落成可查询的待跟进状态（目前只有 `pending_offers` 是机器化的）；
 - 死图重传目前是 `scripts/imgbox-upload.py` + `scripts/edit-seed.py` 手工/半自动，尚未接成发布前自动重传；门禁会先拦住，不会带死图上传。
 
@@ -153,7 +153,7 @@ reseed/coverage_io.rs  覆盖记录读写
 - **itzmx**：站点 torrent 文件上限 `266,240 bytes`，大合集/大剧包会被拒；改用 `ubits` 源的《Liar Game》小种（源种 96,934 bytes）首次实发 `13134` 并挂回，qB 校验 100%。后续给该站选种先看 `.torrent` 文件大小，不要只看内容体积；详情页没有“完结/中字”标签，发布后人工补。
 - **pthome / nanyang / ubits**：2026-11-24 首次上传成功（`284701` / `226159` / `379266`），站上 hash 与构造的不同，三站已加入 hash 改写白名单，把站点种子下回来挂进 qB，校验 100%。ubits 的 `source_sel[4]`、`team_sel[4]` 不补会被拒，现已自动填。
 - **hdfans**：`287791` 已核实是《伪装者》同一条，qB `b1e600a6…` 校验 100%，覆盖记录 `reseeded`，未重发。
-- **tjupt**：动态字段已能填；announce 定案 `tracker-public.tjupt.org`（写进 `overrides.announceURL`）；上传受 `takeupload.php` 超时限制，上传单步已放宽到 120s，待实跑验证。
+- **tjupt**：动态字段已能填；announce 定案 `tracker-public.tjupt.org`（写进 `overrides.announceURL`）；上传 120s 仍超时，且 `access_token` 请求页面被 302 到 `login.php`，先刷新登录态再试。
 - **audiences**：判重检索被人机验证拦住，且无头 HTTP 复用不了浏览器会话；后续改走 Kimi WebBridge 复用用户浏览器登录态（待验证）。
 - **qingwa**：announce 别名已补；《知否》回包“已存在！”且 qB 已在做种；Poirot 合集被站点判 `torrent_too_large`（要求走 `offers.php` 候选），记 `pending_offers`（待走候选入口），不自动重试、`status` 单列待跟进；《伪装者》发 `208575` 并挂回，校验 100%。
 
