@@ -118,12 +118,12 @@ xingyunge
 | qingwa | 1 条新发，等审核 | https://qingwapt.com/details.php?id=208692 | Bitter Moon；伪装者同内容已存在 |
 | cspt | 2 条已发布，补清 MediaInfo | https://cspt.top/details.php?id=260050 | 站点不收 MediaInfo 和图片外 URL 标签，已清 `technical_info` |
 | luckpt | 2 条，等审核 | https://pt.luckpt.de/details.php?id=61666 | 波洛、广告狂人；伪装者 61102 已补 MediaInfo |
-| hdfans | 同 hash 跳过 | http://hdfans.org/details.php?id=287874 | Liar Game 已在做种 |
+| hdfans | 同 hash 跳过，未挂目标 tracker | http://hdfans.org/details.php?id=287874 | Liar Game 的 qB 同 hash 种只有 sbpt/ubits tracker，没有 hdfans；按“不改原种”跳过，实际未给 hdfans 做种 |
 | sbpt | 同 hash / existed 补挂 | https://sbpt.link/details.php?id=21767 | 知否、广告狂人、A Touch of Zen |
 | cyanbug | 判重复核超时 | https://cyanbug.net/details.php?id=32829 | 未上传；不盲目重发 |
 | ubits | 上传被图床黑名单拦下 | https://ubits.club/details.php?id=379266 | 简介含 imgbox，站点要求换 pixhost 等图床 |
 | qilin | 审核未过，简介已转 BBCode | https://www.hdkyl.in/details.php?id=479362 | 等站点重审 |
-| tey | 缺 3 张图，未上传 | https://pt.tey.cc/details.php?id=623 | 待补图 |
+| tey | 波洛候选未上传：源种 0 图 | https://carpt.net/details.php?id=532 | 不是 tey 图床坏；tey 623《伪装者》9 张图正常。carpt 532 简介 0 个 [img]、编辑页无 takeedit 表单，程序每次重建简介都是 0 图，低于 3 张门禁 |
 | tjupt | 294GB 大合集超时，未重发 | https://www.tjupt.org/details.php?id=236519 | 站点同名旧种不是我们的 |
 | itzmx | 大种 403 / 超 266,240 字节 | https://pt.itzmx.com/details.php?id=13134 | 换小种再试 |
 | audiences | 人机验证挡住判重 | — | 需浏览器登录态，暂不盲发 |

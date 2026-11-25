@@ -234,14 +234,14 @@ luckpt 的候选规则（**还没有写进 `boxsend.json`**）：
 
 ### 6.13 2026-11-25 调试期回归：标题、图床与简介字段
 
-- **青蛙标题规则（站内信实测）**：《伪装者》208575 被拒，原因是完结剧集标题不用写 `Complete`，勾“完结”标签即可；参数顺序必须是“分辨率 → 片源类型 → 视频编码 → 音频编码”。代码已加 `reorder_release_title`：完结内容去 `Complete`、技术词按固定顺序排，站点改写标题时也按这套顺序生成。改完标题后详情页仍显示旧拒信，站点说明“修改后自动进待审队列”，不私信管理。
+- **青蛙标题规则（站内信实测）**：《伪装者》208575 被拒，原因是完结剧集标题不用写 `Complete`，勾“完结”标签即可；参数顺序必须是“分辨率 → 片源类型 → 视频编码 → 音频编码”。代码已加 `reorder_release_title`：完结内容去 `Complete`、技术词按固定顺序排，站点改写标题时也按这套顺序生成。2026-11-25 回访 208575 页面已标“待审”，208692 仍“未审”；不私信管理。
 - **Qilin 的简介必须是 BBCode**：479362 原来简介是 HTML `<img>`，站审按 BBCode 图片计数，显示“图片少于 2 张”。`scripts/fix-bbcode-descr.py` 把整段 HTML 转成 `[quote]`/`[img]`，提交后详情页 `[img]` 正常渲染；审核结果还要等站点重跑。
 - **CSpt 不收 MediaInfo 和图片外 URL 标签**：260049/260050 上传后都被拒，原因“简介中包含 Mediainfo”。站点的 `technical_info` 字段单独存 MediaInfo，此外简介里还带 `[url]`。处理方式：清空 `technical_info`、把 `[url=…]` 包皮去掉只留文字，再用 `edit-seed.py --clear-technical-info` 提交；等待重审。以后向 CSpt 发种前先按这条规则预处理源简介，不要等拒绝后再补。
 - **UBITS 图床黑名单**：知否 3 张 imgbox 图被 `takeupload.php` 直接拒绝，错误框写“检测到种子简介中包含黑名单图床，请将图片重新上传至其他图床（例如 pixhost.to）”。这不是网络故障，也不是重复；程序要能在上传前识别站点图床黑名单，或改用 pixhost 直链。测试 pixhost API `POST https://api.pixhost.to/images`（multipart `img`）可用，返回 `show_url`，原图直链在 `img*.pixhost.to/images/...`。
 - **NovaHD 的 4K 60fps 选档**：`standard_sel[4]` 同时有 `2160p/4K` 和 `2160p/4K 60Fps`，旧逻辑按 `2160p` 匹配出两个候选，判为歧义留空，发布检查报 `standard_sel 未选`。新增 `pick_resolution_option`：标题带 `60fps` 就选带 60Fps 的档，没写帧率就选普通 2160p 档；已用人民的名义实发验证。
 - **标题重排的边界**：`Coraline 2009 1080p USA Blu-ray AVC DTS-HD MA 5.1-PIXELPOLICE` 旧算法把 `USA`、`MA`、`5.1` 全塞到技术词后面，页面变成 `DTS-HD USA MA 5.1`。已把地区（USA/UK/JPN…）排在片源后、视频前，把 `MA`/`5.1`/`2Audio` 归到音频细节，压制组仍在最后；hdbao 54657、ptlgs 115313 已手工修正页面标题。
 - **200 未识别不能当失败**：city13 知否上传返回 HTTP 200 未识别，站内搜索 `Ming Lan` 命中自己刚发的 88256，随后 `bsend pull` 成功挂回。遇到这类回包，先站内搜索或看账号上传列表，确认没发出去才允许重试。
-- **审核回访里仍显示旧结论**：qilin、shuioudao、qingwa、luckpt 的页面在改简介/标题后仍显示旧“审核不通过/未审”，但编辑页字段已经更新；`bsend followup` 继续按页面标记跟踪，不把旧文案当新拒绝，也不重发。等站点自动复审或管理处理。
+- **审核回访里仍显示旧结论**：qilin、shuioudao、luckpt 的部分页面在改简介后仍显示旧“审核不通过”；qingwa 208575 改标题后已转“待审”，208692 仍“未审”。编辑页字段已经更新；`bsend followup` 继续按页面标记跟踪，不把旧文案当新拒绝，也不重发。等站点自动复审或管理处理。
 
 
 
