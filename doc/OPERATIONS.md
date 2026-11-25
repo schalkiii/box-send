@@ -251,7 +251,7 @@ cargo build --release -p bsend-cli
 
 `targetSites` 是旧界面留下的字段，引擎不读。
 
-`reseedRules.<site>.uploadTimeoutSec` 是上传请求的单独超时，缺省 120 秒。站点服务端解 torrent、查重特别慢时才放宽；2026-11-25 tjupt 的 25GB 单条在 120 秒内能完成，274GB 合集放到 300 秒仍只回空正文，属于站点后端超时，不是超时值不够。
+`reseedRules.<site>.uploadTimeoutSec` 是上传请求的单独超时，缺省 120 秒。站点服务端解 torrent、查重特别慢时才放宽；2026-11-25 tjupt 的 25GB 单条能正常完成，274GB 合集放到 300 秒仍只回空正文，属于站点后端超时，不是超时值不够。
 
 ### 7.1 第一次向一个新站发种：先填 tracker 地址
 
