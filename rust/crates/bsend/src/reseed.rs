@@ -5224,6 +5224,17 @@ impl ReseedOutcome {
     }
 }
 
+/// 发后挂回遇到“同 hash、但原种不是只挂目标站 tracker”：这不是发布成功。
+/// 不能加第二条、也不能给原种补挂 tracker，只能留给人处理；审计词仍是
+/// `same_hash_skipped`，不要包成 `posted`。
+fn same_hash_skip_after_push(url: String) -> ReseedOutcome {
+    ReseedOutcome::Duplicate(DuplicateOutcome {
+        status: CoverageStatus::SameHashSkip,
+        url: Some(url),
+        note: "站上已发布，但下载器里同 info hash 的种子没有只挂目标站 tracker；qB 不允许同 hash 存两条，按策略不改原种，当前没做种，待人工处理".to_string(),
+    })
+}
+
 /// 源站解析 + 预检（`review_reseed` 与 `run_reseed` 共用）。
 /// 预检不通过不拦在这里，由调用方决定（审阅要出报告，正式转种要拦）。
 struct Released {
@@ -6286,6 +6297,14 @@ fn run_reseed_inner(
             ),
             None => Ok(ReseedOutcome::Posted(reported_url)),
         },
+        // 同 hash 跳过不是“发布成功”：站上已有条目，但 qB 里那条不是只挂目标站
+        // tracker，不能加第二条，也没补挂原种，当前并没有做种。旧版把它包成
+        // Posted，日志里出现 posted + same_hash_skip，用户会以为已经在做种。
+        Ok(CoverageStatus::SameHashSkip) => {
+            let outcome = same_hash_skip_after_push(reported_url);
+            log(&format!("发后挂回·未做种：{}", outcome.display()));
+            Ok(outcome)
+        }
         Ok(other) => {
             if let Some((mark, why)) = &page_mark {
                 log(&format!(
@@ -8945,6 +8964,24 @@ Language : Chinese"));
             .unwrap_or("")
             .starts_with("posted_unresolved"));
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn same_hash_skip_after_push_is_not_reported_as_posted() {
+        // 2026-11-22 panda 10265 的现场：上传成功、qB 同 hash 但不是只挂熊猫的种，
+        // 旧代码把 same_hash_skip 包成 posted，日志看起来发布成功、实际没做种。
+        let out = same_hash_skip_after_push("https://pandapt.net/details.php?id=10265".into());
+        assert!(matches!(
+            out,
+            ReseedOutcome::Duplicate(ref d) if d.status == CoverageStatus::SameHashSkip
+        ));
+        assert_eq!(out.audit_result(), "same_hash_skipped");
+        assert!(out.display().contains("同 hash 跳过"), "{}", out.display());
+        let ReseedOutcome::Duplicate(d) = &out else {
+            unreachable!()
+        };
+        assert!(d.note.contains("当前没做种"), "{}", d.note);
+        assert!(d.note.contains("待人工处理"), "{}", d.note);
     }
 
     #[test]

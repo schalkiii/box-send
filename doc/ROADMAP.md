@@ -56,7 +56,7 @@
 - 写入目标站专属的 `info.source`；
 - 计算新 hash，确认不在 qB 现有集合里；
 - 上传后优先从回包正文、最终跳转或 `submit_upload` 已解析的详情 id 取目标种；回包没有链接时，按发布名 + 本地总大小站内检索，并核对详情页大小；
-- 从目标站下载种子，先核对 `info hash`（新发种默认必须等于上传构造的新 hash；ptba/cspt/dubhe 这类站会改写 `info.source`，只在 pieces 和 `info.name` 都一致时放行）和 pieces（必须与本地源种一致），再独立添加回 qB；不拿本地构造种顶替；
+- 从目标站下载种子，只核对 pieces 指纹和文件清单（比较时忽略首段根目录名）；站点改写 hash/标题都放行，pieces 或文件清单对不上才拒绝；不拿本地构造种顶替；
 - 站点侧已发布、但下载目标种或挂回 qB 失败时，记 `ReviewPending`、note 前缀 `posted_unresolved` / `existed_unresolved`，不记失败、不进失败冷却、不占发布额度；
 - 手工挂回：只拉详情页、下载站点生成的 `.torrent`，按 pieces 找本地内容后走同一条挂回逻辑（命令 `bsend pull --site <id> --url <详情页>`，2026-11-24 由 `reattach` 改名）；已移除本地构造种的 `--file` 入口。
 

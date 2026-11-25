@@ -174,7 +174,9 @@ audiences 的 `torrents.php` 有 Cloudflare Turnstile，无头 HTTP 拿不到搜
 
 详情页上的总大小不是“看到数字就算”，同一个页面里有好几种带数字的东西都不是种子总大小：做种数、日期这类纯数字，简介里 MediaInfo 的单个文件体积（`Size : 7.99 GiB`），文件列表每一行的体积，页眉的账户统计（`上传量：1.35 TB`）。标准 NexusPHP 还把大小和类型、媒介写在同一格里（`大小：77.43 GB 类型: 动漫 …`）。程序只认“数字 + 显式单位”，先找以「大小 / Size」开头的单元格并取标签后的第一个大小，找不到再退回“整格只有一个带单位大小”的短单元格；MediaInfo、文件列表、页眉统计一律跳过。取不到就不参与大小比对，不会拿计数凑一个字节数，也不会因为一个假大小把正确候选判成“大小不符”。
 
-挂回前还要过两道校验：下载回来的目标种 `info hash` 默认必须等于上传时构造的新 hash（判重/existed 路径没有“新 hash”，只核对 pieces 指纹）；目标种 pieces 指纹必须与 qB 里某个完整本地副本一致（不一定是上传时的源种，分片长度可能不同）。已知会改写 `info.source` 的站（ptba、cspt、dubhe、ptsbao、crabpt、hdbao、tey、oshen、ptfans、itzmx、railgun、lemonhd）只有在 pieces 指纹和 `info.name` 都一致时才放行 hash 差异，其他站仍拒绝；任何一条不满足就拒绝挂回，宁可人工处理，不往 qB 塞错种。
+挂回前只看两件事：目标种 pieces 指纹必须与 qB 里某个完整本地副本一致（不一定是上传时的源种，分片长度可能不同），文件清单也必须一致（比较时忽略首段根目录名）。站点常改写 `info.source` 或标题，目标种 hash、`info.name` 与上传构造不同都不影响；`allows_target_hash_rewrite` 白名单只用于日志标注“该站已实测改写”，不参与放行。pieces 或文件清单对不上就拒绝挂回，宁可人工处理，不往 qB 塞错种。
+
+同 `info hash` 的种子在 qB 里只能有一条。若目标种同 hash 的那条只挂目标站 tracker 且 `progress=1`，记 `Seeding`（已在做种）；否则按策略不改原种、不加第二条，记 `SameHashSkip`。**`SameHashSkip` 不是发布成功**：站上已发布但 qB 没有做种，审计词是 `same_hash_skipped`，note 写“当前没做种，待人工处理”，不能包成 `posted`。
 
 站点上其实已经发布（新发成功或 existed），但下载目标种、校验或挂回 qB 失败时，不记发种失败：格子落 `ReviewPending`，note 前缀 `posted_unresolved` 或 `existed_unresolved`，不进失败冷却、不占发布额度，下一轮或人工按详情页补挂。
 
