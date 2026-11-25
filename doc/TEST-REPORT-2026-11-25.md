@@ -122,12 +122,14 @@ cargo fmt --all -- --check
 
 ### 4.3 远端 CI
 
-2026-11-25 12:54 推送后，GitHub Actions 的 `rust` 工作流**通过**：
+2026-11-25 13:50 推送 `e87f3fa` 后，GitHub Actions 的 `rust` 工作流**通过**（运行 `45627704740`）：
 
 - Linux：`fmt`、`clippy`（核心库 + CLI）、`test`（核心库 + CLI）全部通过。
 - Windows：`clippy`（全部 crate，含 GPUI GUI）通过，`test`（全部 crate）通过；这补上了本机缺 MSVC 链接器、跑不了 GUI 3 个测试的缺口。
 
-旧的 `打包` 工作流也在同一提交上触发并处于运行中；这是审计问题 E3 描述的遗留 Swift/.NET 流水线，和 Rust 测试结果无关。
+`scripts` 工作流同时通过（运行 `45627704172`，8 秒），`bash -n` 和 `python3 -m py_compile` 都过。
+
+旧的 `打包` 工作流在同一提交上跑完并**成功**（10 分 36 秒）；这是审计问题 E3 描述的遗留 Swift/.NET 流水线，和 Rust 测试结果无关。`329e70f` 起 `master` push 不再触发旧打包，`v*` tag 也不再和 `rust-release.yml` 重复出包；`e87f3fa` 这次 push 只出现 `rust` 和 `scripts` 两个工作流，`scripts` 8 秒通过。
 
 ## 5. 覆盖缺口前后对比
 

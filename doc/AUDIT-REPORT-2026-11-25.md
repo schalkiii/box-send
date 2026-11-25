@@ -14,6 +14,17 @@
 - **MSRV**：项目声明支持的最低 Rust 版本，本仓库是 `1.82`。
 - **P1 / P2 / P3**：优先级。P1 是先修，P2 是排期修，P3 是顺手清理。
 
+## 0.1 处理状态（2026-11-25 收尾）
+
+47 条按 `software-improvement` 的分支纪律分批处理：文档、代码质量、工程规范的一部分、测试的一部分。最新测试和提交见 `doc/TEST-REPORT-2026-11-25.md`。
+
+| 状态 | 编号 | 说明 |
+| --- | --- | --- |
+| 已解决（26 条） | D1–D10、G1–G3、C1–C6、T1、R1、R4、E3–E6 | 文档口径、`mounted` 显式标记、审计桶穷举、qB 剩余契约测试、CI 重复打包/本地检查/checkout 版本 |
+| 部分完成（5 条） | A4、T2、T4、T5、E8 | A4 只把 `seeded` 改成显式 `mounted`，状态/标签单一真源未做；T2 只补了 CLI 入口冒烟；T4 补了桥接错误，等待/后台标签分支未测；T5 只补了 `review_rejected` e2e；E8 只有 shell/Python 语法门禁 |
+| 未完成（16 条） | A1、A2、A3、A5、A6、T3、T6、T7、T8、T9、R2、R3、R5、E1、E2、E7 | 大文件拆分、GUI 可测化、`ReviewPending` 分状态、覆盖率门禁、MSRV 作业、依赖审计、脚本行为测试等，需要单独排期 |
+
+
 ## 1. 现状描述
 
 ### 1.1 规模
@@ -36,9 +47,9 @@
 
 ### 1.3 质量水平
 
-核心链路测试比较扎实：`reseed.rs` 有 124 个单测，`coverage_e2e.rs` 有 28 个端到端用例，`bencode`、`matcher`、`gates`、`report` 都有针对性用例。CI 已在 Linux/Windows 上跑 `fmt`、`clippy -D warnings`、测试，2026-11-25 最新远端 rust 与打包任务均为 success。
+核心链路测试比较扎实：`reseed.rs` 有 124 个单测，`coverage_e2e.rs` 有 28 个端到端用例，`bencode`、`matcher`、`gates`、`report` 都有针对性用例。CI 已在 Linux/Windows 上跑 `fmt`、`clippy -D warnings`、测试，2026-11-25 最新远端 rust 与打包任务均为 success。审计后测试分支把 `coverage_e2e` 补到 29 个，全 workspace 到 432 个。
 
-主要短板是**结构头和测试厚度不匹配**：`reseed.rs` 9,262 行，`bsend-cli/src/main.rs` 2,277 行，`bsend-gui` 3,282 行；而 CLI 只有 15 个测试、GUI 只有 3 个测试，qB 客户端虽然有 15 个测试，但仍有多个公开方法没有契约测试。文档整体详细，但有几处关键口径已经落后于代码。
+主要短板是**结构头和测试厚度不匹配**：`reseed.rs` 9,262 行，`bsend-cli/src/main.rs` 2,277 行，`bsend-gui` 3,282 行；而 CLI 审计时只有 15 个测试、GUI 只有 3 个测试，qB 客户端虽然有 15 个测试，但仍有多个公开方法没有契约测试；测试分支后 CLI 单测 16 个 + 集成冒烟 3 个，qB 21 个。文档整体详细，但有几处关键口径已经落后于代码。
 
 ## 2. 七个维度结论
 
