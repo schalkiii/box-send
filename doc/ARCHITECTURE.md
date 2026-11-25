@@ -180,6 +180,8 @@ audiences 的 `torrents.php` 有 Cloudflare Turnstile，无头 HTTP 拿不到搜
 
 同 `info hash` 的种子在 qB 里只能有一条。若目标种同 hash 的那条只挂目标站 tracker 且 `progress=1`，记 `Seeding`（已在做种）；否则按策略不改原种、不加第二条，记 `SameHashSkip`。**`SameHashSkip` 不是发布成功**：站上已发布但 qB 没有做种，审计词是 `same_hash_skipped`，note 写“当前没做种，待人工处理”，不能包成 `posted`。
 
+上传成功、种子已加入 qB，但等到校验窗口结束还没到 100% 时，格子落 `Verifying`，结果走 `PostedVerifying`，审计词是 `posted_verifying`，界面写“已发布，种子已加入下载器，校验还没跑完，不能算已在做种”，下一轮接着收尾。它算一次发布额度（上传确实发生了），但不算已做种。旧版把它和 `Reseeded` 一起包成 `Posted`，界面会直接写“转种完成”。
+
 站点上其实已经发布（新发成功或 existed），但下载目标种、校验或挂回 qB 失败时，不记发种失败：格子落 `ReviewPending`，note 前缀 `posted_unresolved` 或 `existed_unresolved`，不进失败冷却、不占发布额度，下一轮或人工按详情页补挂。
 
 历史欠账可以手工补：把站点详情页上的种子下回来、按 pieces 找到本地内容后挂进 qB，不重新上传；命令是 `bsend pull --site <站点id> --url <详情页>`（旧名 `reattach` 仍可用）。它只拉详情页、下载站点生成的 `.torrent`。**不再接受本地构造的 `.torrent`**：站点审核没通过时挂本地构造种只会得到一条永远没有 tracker 响应的废种。

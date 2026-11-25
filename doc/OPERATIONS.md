@@ -77,6 +77,7 @@ status / at / url / note / verifyHash
 | `other_version` | 站上同内容但分片不同，不是“重复” |
 | `existed_pending` | 回包说重复，但回包里没有可核对的详情页/下载链接；回包 id 经常是错的。note 以 `existed_unresolved` 开头时，表示站上已有、下载/挂回 qB 失败 |
 | `posted_unresolved` | 站上已发布（新发或 existed），但下载目标种、校验或挂回 qB 失败；待人工补挂，不记失败、不进失败冷却、不占发布额度 |
+| `posted_verifying` | 上传成功、种子已加入 qB，但校验没跑完；界面不写“转种完成”，下一轮接着收尾。算一次发布额度，但还不算已做种 |
 | `wait_source` | 没有任何可用成员种子，导不出源文件 |
 | `review_pending` | 站上命中了，但清单或 hash 对不上，等人核对 |
 | `pending_offers` | 站点要求改走候选入口（`offers.php`），程序不自动重试；等人工去候选页提交，`status` 里单列“待跟进” |
@@ -112,11 +113,11 @@ at / site / key / result / url? / error? / note? / gates?
 
 `result` 常见值：
 
-`posted / blocked / failed / review_failed / skipped_duplicate / other_version / existed_pending / pending_offers / same_hash_skipped`
+`posted / posted_verifying / blocked / failed / review_failed / skipped_duplicate / other_version / existed_pending / pending_offers / same_hash_skipped`
 
 用途：
 
-- **日限额**：按北京时间切日，统计 `posted`；
+- **日限额**：按北京时间切日，`posted` 和 `posted_verifying` 都算一次上传；后者只是做种还没确认；
 - **失败冷却**：默认关闭（`assist.backoffHours` 不填或填 0）。同一内容 + 同一站点被拦或失败后，下一轮直接重试，由人看审计再决定要不要再跑；只有显式配了小时数（例如 6）才会在窗口内跳过，且拦截和失败共用这一个窗口。`pending_offers` 不进冷却，因为它不是失败；
 - **聚合查看**：`bsend audit --days N [--site X] [--json]`，按六类汇总：
   `posted / blocked / failed / duplicate / other_version / other`，另外报告格式坏掉的行数。

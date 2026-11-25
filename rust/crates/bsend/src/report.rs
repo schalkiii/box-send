@@ -603,7 +603,7 @@ pub struct AuditReport {
 
 /// Map an audit `result` string onto a report bucket.
 ///
-/// - `posted` → 发布
+/// - `posted` / `posted_verifying` → 发布（后者种子还在校验，做种未确认）
 /// - `blocked` → 拦截（门禁拦截，转人工）
 /// - `failed`, `review_failed` → 失败（审阅/发布阶段失败；失败冷却口径与 failed 相同）
 /// - `skipped_duplicate`, `existed_pending`, `same_hash_skipped` → 重复（站内已有条目 / 同 hash）
@@ -613,7 +613,7 @@ pub struct AuditReport {
 /// - anything else → `other`
 fn audit_bucket(result: &str) -> &'static str {
     match result {
-        "posted" => "posted",
+        "posted" | "posted_verifying" => "posted",
         "blocked" => "blocked",
         "failed" | "review_failed" => "failed",
         "skipped_duplicate" | "existed_pending" | "same_hash_skipped" => "duplicate",
@@ -1143,6 +1143,7 @@ mod tests {
             audit_line(now, "a", "other_version"),
             audit_line(now, "a", "blocked"),
             audit_line(now, "a", "posted"),
+            audit_line(now, "a", "posted_verifying"),
         ]
         .join("\n");
         let r = audit_daily(&text, now, 7, None);
@@ -1151,8 +1152,8 @@ mod tests {
         assert_eq!(c.duplicate, 3);
         assert_eq!(c.other_version, 1);
         assert_eq!(c.blocked, 1);
-        assert_eq!(c.posted, 1);
-        assert_eq!(r.totals.records, 8);
+        assert_eq!(c.posted, 2, "posted_verifying 校验没跑完也要算发布");
+        assert_eq!(r.totals.records, 9);
     }
 
     #[test]

@@ -5192,7 +5192,7 @@ pub struct DuplicateOutcome {
 }
 
 /// 一次转种的结果：发布成功带详情页，或判重命中带明确分类。
-/// 自动发种据此写审计（posted / skipped_duplicate / other_version / failed /
+/// 自动发种据此写审计（posted / posted_verifying / skipped_duplicate / other_version / failed /
 /// existed_pending / posted_unresolved）。
 ///
 /// 「上传成功但回包定位不到新种」复用 `Duplicate(ReviewPending)`：note 以
@@ -5200,6 +5200,8 @@ pub struct DuplicateOutcome {
 #[derive(Debug, Clone)]
 pub enum ReseedOutcome {
     Posted(String),
+    /// 站上已发布、种子已加入下载器，但本轮校验没跑完；不能当“已在做种”。
+    PostedVerifying(String),
     Duplicate(DuplicateOutcome),
 }
 
@@ -5208,6 +5210,8 @@ impl ReseedOutcome {
     pub fn audit_result(&self) -> &'static str {
         match self {
             ReseedOutcome::Posted(_) => "posted",
+            // 上传成功、种子已加入 qB，但校验还没到 100%：算发布额度，界面不能写“转种完成”。
+            ReseedOutcome::PostedVerifying(_) => "posted_verifying",
             ReseedOutcome::Duplicate(d) => match d.status {
                 CoverageStatus::Assisted | CoverageStatus::Seeding => "skipped_duplicate",
                 CoverageStatus::OtherVersion => "other_version",
@@ -5236,6 +5240,9 @@ impl ReseedOutcome {
     pub fn display(&self) -> String {
         match self {
             ReseedOutcome::Posted(url) => format!("转种完成：{url}"),
+            ReseedOutcome::PostedVerifying(url) => format!(
+                "已发布，种子已加入下载器，校验还没跑完（不能算已在做种，下一轮接着收尾）：{url}"
+            ),
             ReseedOutcome::Duplicate(d) => format!("转种结束（{}）：{}", d.status.label(), d.note),
         }
     }
@@ -6322,6 +6329,18 @@ fn run_reseed_inner(
             log(&format!("发后挂回·未做种：{}", outcome.display()));
             Ok(outcome)
         }
+        // 上传成功、种子已加入 qB，但等到校验窗口结束还没到 100%。旧版和普通发布
+        // 一起走 `Ok(other) => Posted`，界面写“转种完成”，实际还没做种。
+        Ok(CoverageStatus::Verifying) => {
+            if let Some((mark, why)) = &page_mark {
+                log(&format!(
+                    "站点页面标着审核结论（{}：{why}）；本轮种子还在校验，等回访时再记",
+                    mark.label()
+                ));
+            }
+            log("发后挂回·校验未完成：站上已发布，种子已加入 qB，当前还没到 100%，下一轮接着收尾");
+            Ok(ReseedOutcome::PostedVerifying(reported_url))
+        }
         Ok(other) => {
             if let Some((mark, why)) = &page_mark {
                 log(&format!(
@@ -6369,6 +6388,11 @@ fn append_reseed_log(
         .unwrap_or_else(|| std::path::PathBuf::from("reseed-log.jsonl"));
     let (word, url, note): (&str, Option<&str>, Option<String>) = match result {
         Ok(ReseedOutcome::Posted(u)) => ("posted", Some(u.as_str()), None),
+        Ok(ReseedOutcome::PostedVerifying(u)) => (
+            "posted_verifying",
+            Some(u.as_str()),
+            Some("站上已发布，种子已加入 qB，校验还没跑完；下一轮接着收尾".to_string()),
+        ),
         Ok(ReseedOutcome::Duplicate(d)) => (
             ReseedOutcome::Duplicate(d.clone()).audit_result(),
             d.url.as_deref(),
@@ -9016,6 +9040,16 @@ Language : Chinese"));
         };
         assert!(d.note.contains("当前没做种"), "{}", d.note);
         assert!(d.note.contains("待人工处理"), "{}", d.note);
+    }
+
+    #[test]
+    fn verifying_outcome_is_not_displayed_as_complete() {
+        let out = ReseedOutcome::PostedVerifying("https://example.test/details.php?id=1".into());
+        assert_eq!(out.audit_result(), "posted_verifying");
+        let text = out.display();
+        assert!(!text.contains("转种完成"), "{text}");
+        assert!(text.contains("校验还没跑完"), "{text}");
+        assert!(text.contains("不能算已在做种"), "{text}");
     }
 
     #[test]

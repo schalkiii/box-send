@@ -520,6 +520,28 @@ pub fn run_autopost_with(
                     error: says_why.then_some(dup.note),
                 });
             }
+            Ok(reseed::ReseedOutcome::PostedVerifying(url)) => {
+                index.save()?;
+                // 上传已成功、种子已加入下载器，只是校验没跑完：日限额必须占，
+                // 但界面和审计都要写明“还没做种”，不能再叫 posted。
+                append_audit(
+                    &audit_path,
+                    serde_json::json!({"at": now, "site": site, "key": d.content_key,
+                        "result": "posted_verifying", "url": url, "gates": gate_json}),
+                )
+                .with_context(|| {
+                    format!("已发布 {url} 但审计落盘失败，停止后续发布以免超日限额，请手工补记")
+                })?;
+                summary.posted += 1;
+                *posted_today.entry(site.clone()).or_insert(0) += 1;
+                emit(AutopostEvent::Outcome {
+                    key: d.content_key.clone(),
+                    site: site.clone(),
+                    result: "posted_verifying",
+                    url: Some(url),
+                    error: None,
+                });
+            }
             Ok(reseed::ReseedOutcome::Posted(url)) => {
                 index.save()?;
                 // 先落审计再记账：审计写失败就中止后续发布，避免日限额失守
@@ -589,7 +611,8 @@ pub fn parse_audit(text: &str, now: i64) -> (PostedToday, LastBad) {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
             let result = v.get("result").and_then(|r| r.as_str()).unwrap_or("");
             let at = v.get("at").and_then(|a| a.as_i64()).unwrap_or(0);
-            if result == "posted" && at >= today_start {
+            // posted_verifying 也是一次真实上传，日限额要算上；只是做种还没确认。
+            if (result == "posted" || result == "posted_verifying") && at >= today_start {
                 if let Some(s) = v.get("site").and_then(|s| s.as_str()) {
                     *posted_today.entry(s.to_string()).or_insert(0) += 1;
                 }
@@ -1108,6 +1131,11 @@ mod tests {
         assert_eq!(
             reseed::ReseedOutcome::Posted("u".into()).audit_result(),
             "posted"
+        );
+        assert_eq!(
+            reseed::ReseedOutcome::PostedVerifying("u".into()).audit_result(),
+            "posted_verifying",
+            "上传成功但校验没跑完，不能写成 posted"
         );
     }
 
