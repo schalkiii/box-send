@@ -2951,9 +2951,46 @@ pub fn submitted_descr<'a>(prep: &'a PreparedUpload, fallback: &'a str) -> &'a s
     fallback
 }
 
+/// 已知在站点侧打不开的图床：本机探测可能 200，但站点服务器会判死图。
+/// 这些域名即使探测可达也直接剪掉，避免“本机预检通过、站点审核退回”。
+fn blocked_image_host(src: &str, site_url: &str) -> bool {
+    let lower = src.to_ascii_lowercase();
+    let global = ["i.imgur.com", "imgur.com", "hdsky.me", "img.hdsky.me"];
+    if global.iter().any(|h| lower.contains(*h)) {
+        return true;
+    }
+    // UBits 审核明确报过 imgbox 图床域名失效；该站只认 pixhost。
+    if site_url.contains("ubits") && lower.contains("imgbox.com") {
+        return true;
+    }
+    false
+}
+
+/// 本机抽帧后上传到 pixhost 的图是发布时注入的可信资产，不参与死图探测。
+fn trusted_image_host(src: &str) -> bool {
+    let lower = src.to_ascii_lowercase();
+    lower.contains("pixhost.to/") || lower.contains("pixhost.cc/")
+}
+
 /// 剪掉简介里不可访问的 `<img>`（预审逐图校验；只处理绝对 URL）。
-/// `probe` 返回 true 表示图片可访问，便于单测注入。
-pub fn prune_dead_images_with(html: &str, probe: &mut dyn FnMut(&str) -> bool) -> (String, usize) {
+/// 先剪 HTML，再剪 BBCode；`site_url` 用于按站点追加禁用图床。
+pub fn prune_dead_images_with_site(
+    html: &str,
+    site_url: &str,
+    probe: &mut dyn FnMut(&str) -> bool,
+) -> (String, usize) {
+    let (html_out, html_removed) =
+        prune_dead_html_images_with_site(html, site_url, &mut *probe);
+    let (bb_out, bb_removed) =
+        prune_dead_bbcode_images_with_site(&html_out, site_url, &mut *probe);
+    (bb_out, html_removed + bb_removed)
+}
+
+fn prune_dead_html_images_with_site(
+    html: &str,
+    site_url: &str,
+    probe: &mut dyn FnMut(&str) -> bool,
+) -> (String, usize) {
     let mut out = String::with_capacity(html.len());
     let mut i = 0usize;
     let mut removed = 0usize;
@@ -2967,11 +3004,7 @@ pub fn prune_dead_images_with(html: &str, probe: &mut dyn FnMut(&str) -> bool) -
             .unwrap_or(html.len());
         let tag = &html[start..end];
         let src = attr(tag, "src").unwrap_or_default();
-        // 本机截帧上传的 Imgur 图是发布时注入的可信资产，不参与死图探测；
-        // 源页原有图片仍逐张探测。
-        let trusted = src.contains("i.imgur.com/");
-        let keep = src.starts_with("http") && (trusted || probe(&src));
-        if keep {
+        if image_should_keep(&src, site_url, &mut *probe) {
             out.push_str(tag);
         } else {
             removed += 1;
@@ -2980,6 +3013,63 @@ pub fn prune_dead_images_with(html: &str, probe: &mut dyn FnMut(&str) -> bool) -
     }
     out.push_str(&html[i..]);
     (out, removed)
+}
+
+/// BBCode 图片（`[img]…[/img]`、`[img=尺寸]…[/img]`）也逐张探测，
+/// 避免只处理 HTML 时源站热链图原样带到目标站。
+fn prune_dead_bbcode_images_with_site(
+    text: &str,
+    site_url: &str,
+    probe: &mut dyn FnMut(&str) -> bool,
+) -> (String, usize) {
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0usize;
+    let mut removed = 0usize;
+    let lower = text.to_ascii_lowercase();
+    while let Some(p) = lower[i..].find("[img") {
+        let start = i + p;
+        let open_end = text[start..].find(']').map(|j| start + j + 1);
+        let Some(open_end) = open_end else {
+            break;
+        };
+        let open_tag = &text[start..open_end];
+        // `[imgs]` 不是图片标签，跳过。
+        let rest = &open_tag[4..];
+        if !rest.starts_with(']') && !rest.starts_with('=') {
+            out.push_str(&text[i..open_end]);
+            i = open_end;
+            continue;
+        }
+        let Some(close_rel) = lower[open_end..].find("[/img]") else {
+            out.push_str(&text[i..open_end]);
+            i = open_end;
+            continue;
+        };
+        let close_end = open_end + close_rel + "[/img]".len();
+        let src = text[open_end..open_end + close_rel].trim();
+        out.push_str(&text[i..start]);
+        if image_should_keep(src, site_url, &mut *probe) {
+            out.push_str(&text[start..close_end]);
+        } else {
+            removed += 1;
+        }
+        i = close_end;
+    }
+    out.push_str(&text[i..]);
+    (out, removed)
+}
+
+fn image_should_keep(src: &str, site_url: &str, probe: &mut dyn FnMut(&str) -> bool) -> bool {
+    !src.is_empty()
+        && src.starts_with("http")
+        && !blocked_image_host(src, site_url)
+        && (trusted_image_host(src) || probe(src))
+}
+
+
+/// 兼容旧调用的无站点版本（单测和不带站点上下文的探测用）。
+pub fn prune_dead_images_with(html: &str, probe: &mut dyn FnMut(&str) -> bool) -> (String, usize) {
+    prune_dead_images_with_site(html, "", probe)
 }
 
 /// 图片响应是否可当图床资源：2xx 且 content-type 是图片（或二进制流）。
@@ -3009,7 +3099,7 @@ fn prune_dead_images(html: &str, referer: &str) -> (String, usize) {
     let Ok(client) = builder.build() else {
         return (html.to_string(), 0);
     };
-    prune_dead_images_with(html, &mut |url| {
+    prune_dead_images_with_site(html, referer, &mut |url| {
         client
             .get(url)
             .send()
@@ -3151,7 +3241,7 @@ pub fn apply_site_rules(prep: &mut PreparedUpload, rules: &crate::gates::SiteRul
         if removed > 0 {
             set_field(&mut prep.fields, field, next);
             prep.select_notes.push(format!(
-                "简介剪掉 {removed} 张不可访问图片（逐图探测，硬规则）"
+                "简介剪掉 {removed} 张不可用图片（逐图探测 + 已知失效图床，硬规则）"
             ));
         }
     }
@@ -8195,6 +8285,54 @@ Language : Chinese"
         assert_eq!(n, 1);
         assert!(
             out.contains("ok/1.jpg") && !out.contains("dead/2.jpg"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn prune_known_hotlink_and_imgur_even_when_probe_says_ok() {
+        let html = r#"正文<img src="https://hdsky.me/a.jpg"><img src="https://i.imgur.com/b.jpg"><img src="https://img3.pixhost.to/images/1/c.jpg">"#;
+        let (out, n) =
+            prune_dead_images_with_site(html, "https://cangbao.ge/upload.php", &mut |_| true);
+        assert_eq!(n, 2, "{out}");
+        assert!(out.contains("img3.pixhost.to"), "{out}");
+        assert!(
+            !out.contains("hdsky.me") && !out.contains("imgur.com"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn prune_keeps_injected_pixhost_without_probe() {
+        let html = r#"<img src="https://img3.pixhost.to/images/1/a.jpg"><img src="https://unknown.example/b.jpg">"#;
+        let (out, n) = prune_dead_images_with(html, &mut |_| false);
+        assert_eq!(n, 1);
+        assert!(
+            out.contains("pixhost") && !out.contains("unknown.example"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn prune_imgbox_on_ubits_but_not_other_sites() {
+        let html = r#"<img src="https://images4.imgbox.com/a.jpg">"#;
+        let (out, n) =
+            prune_dead_images_with_site(html, "https://ubits.club/upload.php", &mut |_| true);
+        assert_eq!(n, 1, "{out}");
+        let (out2, n2) =
+            prune_dead_images_with_site(html, "https://qingwapt.com/upload.php", &mut |_| true);
+        assert_eq!(n2, 0);
+        assert!(out2.contains("imgbox.com"));
+    }
+
+    #[test]
+    fn prune_bbcode_hotlink_keeps_pixhost() {
+        let text = "正文[img]https://hdsky.me/a.jpg[/img][img=200x100]https://img3.pixhost.to/images/1/a.jpg[/img]";
+        let (out, n) =
+            prune_dead_images_with_site(text, "https://cangbao.ge/upload.php", &mut |_| true);
+        assert_eq!(n, 1, "{out}");
+        assert!(
+            out.contains("pixhost") && !out.contains("hdsky.me"),
             "{out}"
         );
     }
