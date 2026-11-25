@@ -7,7 +7,7 @@
 BoxSend 做两件事：
 
 - **发种**：qBittorrent（下称 qB）里已经下好的影视内容，上传到另一个 PT 站。
-- **辅种**：目标站已经有同分片的内容，把站点的种子下载回来，挂进 qB 一起做种。
+- **辅种**：目标站已经有同一套文件内容，把站点的种子下载回来，挂进 qB 一起做种。
 
 只处理影视、剧集、纪录片。教育、成人等类型由标题关键词黑名单拦掉，命中后不占当天的发布额度。
 
@@ -53,7 +53,7 @@ qB 没有 tracker，也不等于站上一定没发过。可能是站上已经有
 | `skipped` | 终态，不再自动发。只用于命中内容类型黑名单（`assist.skipKeywords`） |
 | `pending_offers` | 站点明确要求改走候选入口（例如青蛙的 `torrent_too_large` 只肯走 `offers.php`）。不入队重试，但也不算完事：`status` 单列“待跟进”，等人去候选页提交，`bsend audit` 单独数 `pending_offers` |
 | `other_version` | 站上已有同片的其他版本，分片不一样 |
-| `same_hash_skip` | 目标种子和 qB 已有种子完全同一个 hash，qB 不允许重复添加 |
+| `same_hash_skip` | 目标种子和 qB 已有种子完全同一个 `info hash`，qB 不允许重复添加；查原种 tracker 和 progress，只挂目标站且 progress=1 时记 `seeding`（已做种），挂别站、没有 tracker 或还没下完才记本状态 |
 
 从 2026-11-23 起，`autopost` 不再要求覆盖记录里先有 `reseed_draft` 条目。它每一轮直接读 qB 的实时种子列表，找出“白名单站点没有 tracker、源种子已定位、内容还在 qB”的组合，现场生成待发清单。`reseed_draft` 只作为过渡期的旧记录保留。
 
@@ -153,6 +153,17 @@ qB 没有 tracker，也不等于站上一定没发过。可能是站上已经有
 
 `scripts/edit-seed.py` 默认只读演练，`--apply` 才 POST；除指定字段外其余表单原样回填，避免误改分类/媒介/标签。编辑已发布种子后，站点会重新进审核队列，是否通过以站点状态为准。
 
+### 5.5.2 站内判重：audiences 走 Kimi WebBridge（2026-11-25 起）
+
+audiences 的 `torrents.php` 有 Cloudflare Turnstile，无头 HTTP 拿不到搜索结果，还可能把挑战页当成“站内没有”。这条路固定走 Kimi WebBridge：
+
+- 用用户已登录的真实浏览器打开 `{base}/torrents.php`，轮询 `input[name=cf-turnstile-response]`，最多 40 次、每 500ms；没有挑战区或 token 非空才算页面就绪。状态里同时读 `document.visibilityState` 和 `hasFocus`。
+- 就绪后用同源 `fetch(url, {credentials:'include'})` 抓带查询的搜索页，HTTP 非 200 或回包含“搜索人机验证未通过”直接报错。
+- IMDb 区判重也走同一个浏览器抓取入口，不再单独发无头 HTTP 请求；否则挑战页会被误读成“没有 IMDb 命中”。
+- token 为空且页面 `visibilityState=hidden` 时，明确报“标签页在后台，Turnstile 不会生成验证框”，提示把标签页切到前台；不退回无头 HTTP、不盲发。2026-11-25 实测：Kimi 能选中已打开的 audiences 标签页，但 Edge 窗口最小化时页面一直是 hidden，显式 `turnstile.render` 也没有 token；把页面切到前台后重试。
+
+代码在 `kimi.rs` 和 `sites/nexusphp.rs` 的 `uses_kimi_search` / `fetch_search_html` / `search_sized_browser`；`KimiBrowser` 默认 `http://127.0.0.1:10086/command`，session 固定 `bsend-audiences`，可用 `KIMI_WEBBRIDGE_URL` 覆盖地址。
+
 ### 5.6 上传与挂回
 
 上传成功后，从目标站下载刚发布的 `.torrent`，作为一份**独立种子**加进 qB。这是**硬步骤**：下载失败不是“发完就算”，程序会在 4 轮、每轮 15 秒内重试（站点刚建种时常先回 `torrent not registered`），仍拿不到才记 `posted_unresolved` 待人工，回访用 `bsend pull` 补；站点要先审才给下载的落 `pending_review`，审完由回访自动挂回。上传回包里的 `details.php?id=` 不能单独当证据：成功页常混着侧边栏的相关旧种，实测直接取第一条会挂错。程序现在按 id 配对详情和下载链接，最终跳转是详情页时优先用它；只有一类链接时用唯一那条；详情和下载的 id 对不上就两个都不用。拿不到链接时会再按「发布名 + 本地总大小」做站内检索，结果行或详情页大小对不上就不采；仍然定位不到才记 `posted_unresolved` 待人工确认，不会拿本地构造种顶替。
@@ -161,7 +172,7 @@ qB 没有 tracker，也不等于站上一定没发过。可能是站上已经有
 
 详情页上的总大小不是“看到数字就算”，同一个页面里有好几种带数字的东西都不是种子总大小：做种数、日期这类纯数字，简介里 MediaInfo 的单个文件体积（`Size : 7.99 GiB`），文件列表每一行的体积，页眉的账户统计（`上传量：1.35 TB`）。标准 NexusPHP 还把大小和类型、媒介写在同一格里（`大小：77.43 GB 类型: 动漫 …`）。程序只认“数字 + 显式单位”，先找以「大小 / Size」开头的单元格并取标签后的第一个大小，找不到再退回“整格只有一个带单位大小”的短单元格；MediaInfo、文件列表、页眉统计一律跳过。取不到就不参与大小比对，不会拿计数凑一个字节数，也不会因为一个假大小把正确候选判成“大小不符”。
 
-挂回前还要过两道校验：下载回来的目标种 `info hash` 默认必须等于上传时构造的新 hash（判重/existed 路径没有“新 hash”，只核对 pieces）；目标种 pieces 必须与本地源种一致。已知会改写 `info.source` 的站（ptba、cspt、dubhe、ptsbao、crabpt、hdbao、tey、oshen、ptfans、itzmx、railgun、lemonhd）只有在 pieces 和 `info.name` 都一致时才放行 hash 差异，其他站仍拒绝；任何一条不满足就拒绝挂回，宁可人工处理，不往 qB 塞错种。
+挂回前还要过两道校验：下载回来的目标种 `info hash` 默认必须等于上传时构造的新 hash（判重/existed 路径没有“新 hash”，只核对 pieces 指纹）；目标种 pieces 指纹必须与 qB 里某个完整本地副本一致（不一定是上传时的源种，分片长度可能不同）。已知会改写 `info.source` 的站（ptba、cspt、dubhe、ptsbao、crabpt、hdbao、tey、oshen、ptfans、itzmx、railgun、lemonhd）只有在 pieces 指纹和 `info.name` 都一致时才放行 hash 差异，其他站仍拒绝；任何一条不满足就拒绝挂回，宁可人工处理，不往 qB 塞错种。
 
 站点上其实已经发布（新发成功或 existed），但下载目标种、校验或挂回 qB 失败时，不记发种失败：格子落 `ReviewPending`，note 前缀 `posted_unresolved` 或 `existed_unresolved`，不进失败冷却、不占发布额度，下一轮或人工按详情页补挂。
 
@@ -193,15 +204,22 @@ qB 没有 tracker，也不等于站上一定没发过。可能是站上已经有
 
 ## 7. 辅种怎么做
 
-### 7.1 先比分片，不比标题
+### 7.1 先比 pieces 指纹，不比标题
+
+先把几个容易混的叫法定死：
+
+- **`info hash`**：整个 `info` 字典的 SHA1，是种子信息块的身份。tracker/announce 不在 `info` 里，所以同一份内容只换 tracker 仍可能得到同一个 `info hash`；qB 因此不能同时存两份同 hash、不同 tracker 的种子。
+- **`pieces`**：`info` 里按每个分片算出的 20 字节 SHA1 串；分片长度不同，`pieces` 就不同。
+- **pieces 指纹**：代码里的 `pieces_hash`，是对 `pieces` 整串再算一次 SHA1，只用于快速比对内容。它既不是单个分片的 SHA1，也不是 `info hash`；指纹相同通常说明分片串一致，但仍要核对文件清单和分片长度才算同一份内容。
+- **分片长度**：`piece length`，例如 8 MiB、16 MiB；文件内容一样但分片长度不同，`pieces` 和 pieces 指纹都会不同（hdvideo 7607 的 8 MiB 目标种和 sbpt 的 16 MiB 种就是这种情况，只能拿 qB 里同是 8 MiB 的本地副本去对）。
 
 | 情况 | 判断 | 做法 |
 | --- | --- | --- |
-| 目标种子 hash 和 qB 不同，但分片一致 | 可以跨站辅种 | 新加一份种子，复用本地文件，等校验到 100% |
-| 目标种子 hash 和 qB 完全相同 | qB 不允许同 hash 两份 | 不改原种子，记 `same_hash_skip` |
-| 分片不一致 | 站上是另一个版本 | 不能拿本地文件辅种；但可以按“允许其他版本”继续发自己这条 |
+| 目标种 `info hash` 和 qB 不同，但 pieces 指纹与某个本地完整副本一致 | 可以跨站辅种 | 新加一份种子，复用本地文件，等校验到 100% |
+| 目标种 `info hash` 和 qB 完全相同 | qB 不允许同 `info hash` 两份 | 先查原种 tracker 和 progress：只挂目标站且 progress=1 → 记 `seeding`（已做种），不再 add；挂别的站、没有 tracker 或还没下完 → 记 `same_hash_skip`，不能给原种补挂，也不能新增第二条 |
+| pieces 指纹和所有本地完整副本都不一致 | 站上是另一个版本，或分片边界不同 | 不能拿本地文件辅种；但可以按“允许其他版本”继续发自己这条 |
 
-判断以 info hash 和分片为准。标题一样不代表文件一样，标题不同也不代表不能发。
+判断以 `info hash` 和 pieces 指纹为准。标题一样不代表文件一样，标题不同也不代表不能发。
 
 ### 7.2 多文件种子的根目录
 
@@ -265,7 +283,7 @@ Windows 计划任务只给命令示例，不自动创建。需要常驻时用任
 | `coverage.rs` | 内容索引、tracker 归一化、覆盖记录 |
 | `report.rs` | 报表、从 qB 缺口生成待发清单、对账、审计汇总 |
 | `autopost.rs` | 自动发种编排、限额、失败冷却、审计 |
-| `matcher.rs` | hash、分片、名称判重 |
+| `matcher.rs` | `info hash`、pieces 指纹、名称判重 |
 | `sites/nexusphp.rs` | NexusPHP 站点的表单解析与上传 |
 | `config.rs` / `gates.rs` | 配置结构、发布检查规则 |
 | `bsend-cli/src/main.rs` | `status`、`report`、`autopost`、`audit` 等命令 |

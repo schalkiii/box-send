@@ -32,8 +32,9 @@ pub enum CoverageStatus {
     ReviewPending,
     /// 目标站已有同片其他版本（pieces 不一致），程序化判定，不再人工确认
     OtherVersion,
-    /// 目标种与下载器已有种子 info hash 相同：qB 不允许同 hash 两条，
-    /// 按策略**不改动原种子**（不补挂 tracker、不打标签），跳过该站
+    /// 目标种与下载器已有种子 info hash 相同，但不满足“只挂目标站 tracker 且
+    /// progress=1”：qB 不允许同 hash 两条，按策略不改动原种子，跳过该站。
+    /// 原种只挂目标站 tracker 且已完成时走 `Seeding`，不落这个状态。
     SameHashSkip,
     /// 人工否决（不是同一内容）
     Rejected,

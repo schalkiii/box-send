@@ -224,7 +224,7 @@ luckpt 的候选规则（**还没有写进 `boxsend.json`**）：
 - **麒麟 479362**（《铁拳男人》2005 BluRay）：横幅写“审核不通过，原因：缺少海报或截图（图片少于 2 张）”。简介其实有 7 张图，但 1 张豆瓣海报 `img9.doubanio.com` 裸请求回 418/HTML（防盗链），6 张 `img.pterclub.com` 本机 TLS 连不上——站审时等于 0 张可达图。
 - 修法三站一样（新脚本都进了 `scripts/`）：
   1. `py -3 scripts/fetch-descr.py <站点> <id>`：读编辑页 takeedit 表单，把简介字段原样落盘（默认只读，不提交）；
-  2. 备图：海报按原简介里的豆瓣图 id 带 `Referer: https://movie.douban.com/` 取；截图用 Python + cv2 从本地正片按时间比例抓（本机没有 ffmpeg）。《伪装者》41 集取 EP01/EP06/EP11 各 3 帧，《铁拳男人》单文件取 6 帧；
+  2. 备图：海报按原简介里的豆瓣图 id 带 `Referer: https://movie.douban.com/` 取；截图用 `py -3 scripts/seed-images.py --content <内容键> --video <本地视频>` 从本机正片按时间比例抓（本机没有 ffmpeg 时脚本会去 MoviePilot 路径找）。《伪装者》41 集取 EP01/EP06/EP11 各 3 帧，《铁拳男人》单文件取 6 帧；
   3. `py -3 scripts/imgbox-upload.py --json <图...>`：拿 `images4.imgbox.com` 直链；
   4. `py -3 scripts/swap-descr-images.py --descr-file 原简介 --urls 直链,直链,... --out 新简介`：按出现顺序 1:1 只换链接、不动排版；BBCode 与 HTML 都支持，张数对不上直接报错不写文件；
   5. `py -3 scripts/edit-seed.py --site <站点> --id <id> --descr-file 新简介` 先演练，再加 `--apply` 提交；
@@ -242,6 +242,14 @@ luckpt 的候选规则（**还没有写进 `boxsend.json`**）：
 - **标题重排的边界**：`Coraline 2009 1080p USA Blu-ray AVC DTS-HD MA 5.1-PIXELPOLICE` 旧算法把 `USA`、`MA`、`5.1` 全塞到技术词后面，页面变成 `DTS-HD USA MA 5.1`。已把地区（USA/UK/JPN…）排在片源后、视频前，把 `MA`/`5.1`/`2Audio` 归到音频细节，压制组仍在最后；hdbao 54657、ptlgs 115313 已手工修正页面标题。
 - **200 未识别不能当失败**：city13 知否上传返回 HTTP 200 未识别，站内搜索 `Ming Lan` 命中自己刚发的 88256，随后 `bsend pull` 成功挂回。遇到这类回包，先站内搜索或看账号上传列表，确认没发出去才允许重试。
 - **审核回访里仍显示旧结论**：qilin、shuioudao、luckpt 的部分页面在改简介后仍显示旧“审核不通过”；qingwa 208575 改标题后已转“待审”，208692 仍“未审”。编辑页字段已经更新；`bsend followup` 继续按页面标记跟踪，不把旧文案当新拒绝，也不重发。等站点自动复审或管理处理。
+
+### 6.14 2026-11-25 源站无图补图与 audiences 的 Kimi 判重
+
+- **源站 0 图不要当“tey 图床坏了”**：tey 623《伪装者》9 张图全部 HTTP 200；卡住的是《波洛》源种 `carpt 532`，简介 428 字节、0 个 `[img]`，编辑页没有 `takeedit` 表单（无编辑权限）。tey 每次从源种重建简介都只有 0 图，低于 3 张门禁。
+- **补图脚本**：`py -3 scripts/seed-images.py --content <内容键> --video <本地视频>`。脚本用本机 ffmpeg 抽帧（可多条视频各取一帧，或单条按比例取多帧），也可用 `--douban <条目id>` 自动取豆瓣海报，默认上传 pixhost（UBITS 接受；tey 也可用），写入 `screenshot-overrides.json`；`prepare_released` 会把图追加到简介末尾。波洛这次用 S01E01 / S07E01 / S10E01 各取一帧，3 张图都返回 200；tey 预检从“简介图片 0 张”变成“3 张 ≥ 3”。下一道门是 `medium_sel`：tey 的选项只有 WEB-DL / HDTV / DVDR / CD / Track，没有 Bluray，这条 Blu-ray 合集不能硬填 HDTV，所以仍未上传；不是图床问题。
+- **audiences 判重**：代码 `kimi.rs` 固定走 Kimi WebBridge，先在用户已登录的真实浏览器打开 `torrents.php`，等 Cloudflare Turnstile token，再同源 `fetch` 搜索 URL；不再走无头 HTTP。2026-11-25 实测卡点不是“没点勾选框”：Kimi 能选中已打开的 audiences 标签页，但 Edge 窗口最小化时浏览器把页面判为 `document.visibilityState=hidden`，Turnstile 连 iframe 都不生成，`cf-turnstile-response` 一直为空；显式 `turnstile.render` 返回 widget id 也没有 token。程序现在会单独报“标签页在后台、Turnstile 不会生成验证框”，提示把标签页切到前台后重试，不把验证页当“站内没有”。
+- **术语**：`info hash` 是整个 `info` 字典的 SHA1，tracker/announce 不在 `info` 里；`pieces` 是每个分片的 SHA1 串；pieces 指纹（`pieces_hash`）是对 `pieces` 整串再算的 SHA1；分片长度是 piece length。三者不要混叫，详见 `ARCHITECTURE.md` 7.1。
+
 
 
 

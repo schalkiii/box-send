@@ -13,6 +13,7 @@ pub mod cookiecloud;
 pub mod coverage;
 pub mod gates;
 pub mod index;
+pub mod kimi;
 pub mod layout;
 pub mod lock;
 pub mod manifest;

@@ -3790,7 +3790,7 @@ fn target_has_imdb(
         target.base.as_str().trim_end_matches('/'),
         tt
     );
-    let html = match target.fetch_html(&url, target.base.as_str()) {
+    let html = match target.fetch_search_html(&url) {
         Ok(h) => h,
         Err(e) => {
             log(&format!("IMDb 区判重失败：{e:#}"));
@@ -5593,6 +5593,12 @@ fn run_reseed_inner(
                                     "目标站已有同分片「{title}」，下载器里已存在（已补挂 tracker）"
                                 ),
                             ),
+                            CoverageStatus::Seeding => (
+                                CoverageStatus::Seeding,
+                                format!(
+                                    "目标站已有同分片「{title}」，下载器里已有同 hash 种子且只挂目标站 tracker，正在做种"
+                                ),
+                            ),
                             CoverageStatus::SameHashSkip => (
                                 CoverageStatus::SameHashSkip,
                                 format!(
@@ -5893,6 +5899,11 @@ fn run_reseed_inner(
                             CoverageStatus::Assisted => (
                                 CoverageStatus::Assisted,
                                 "上传回包 existed：下载器里已存在（同 hash，按策略不改动原种子）".to_string(),
+                            ),
+                            CoverageStatus::Seeding => (
+                                CoverageStatus::Seeding,
+                                "上传回包 existed：下载器里已有同 hash 种子且只挂目标站 tracker，正在做种"
+                                    .to_string(),
                             ),
                             CoverageStatus::SameHashSkip => (
                                 CoverageStatus::SameHashSkip,
@@ -6338,6 +6349,25 @@ fn ensure_trackers_on_site(site: &SiteConf, urls: &[String]) -> Result<()> {
     Ok(())
 }
 
+/// 同 info hash 已在 qB 时，判断这条种子是不是已经在给目标站做种。
+/// 只认「progress ≥ 0.999、tracker 非空且每条都属于目标站」；读不到 tracker
+/// 或还没下完时按否处理，交给调用方落 `same_hash_skip`，不把未知状态当成已做种。
+fn same_hash_on_target(cfg: &Config, qb: &QBittorrent, hash: &str, target_site: &str) -> bool {
+    let Some(site) = cfg.sites.iter().find(|s| s.id == target_site) else {
+        return false;
+    };
+    let Ok(Some((progress, _))) = qb.torrent_progress(hash) else {
+        return false;
+    };
+    if progress < 0.999 {
+        return false;
+    }
+    let Ok(urls) = qb.trackers(hash) else {
+        return false;
+    };
+    ensure_trackers_on_site(site, &urls).is_ok()
+}
+
 /// 把目标站 `.torrent` 推进下载器并校验：发布成功、或目标站已有同分片条目
 /// （existed / 站内判重命中）时共用——「新站已有条目」也要下载目标种挂到本地数据上，
 /// 否则站点上永远只有发布记录、下载器里没有这个 tracker。
@@ -6387,9 +6417,25 @@ fn push_target_torrent(
             ));
         }
     }
-    // 同 hash 绝不碰原种子：qB 不允许同 hash 两条，提前判掉，连 add 请求都不发
+    // 同 hash 不能 add 第二条，但可以先看原种：如果它只挂目标站 tracker 且
+    // progress=1，就是已经在给目标站做种，不能误记成“跳过”。
     if matches!(qb.torrent_progress(&target_hash), Ok(Some(_))) {
-        let note = "目标种与下载器已有种子 info hash 相同；按策略不改动原种子，跳过该站";
+        if same_hash_on_target(cfg, qb, &target_hash, &req.target_site) {
+            let note =
+                "下载器里已有同 info hash 种子，且只挂目标站 tracker；已在该站做种，不重复添加";
+            write_cell(
+                index,
+                &req.content_key,
+                &req.target_site,
+                CoverageStatus::Seeding,
+                Some(detail_url.to_string()),
+                note,
+            );
+            index.save()?;
+            log(note);
+            return Ok(CoverageStatus::Seeding);
+        }
+        let note = "目标种与下载器已有种子 info hash 相同，但不是“只挂目标站 tracker 且 progress=1”；按策略不改动原种子，跳过该站";
         write_cell(
             index,
             &req.content_key,
@@ -6430,9 +6476,24 @@ fn push_target_torrent(
         log(&format!("下载器回执：{}", add.note));
     }
     if add.already {
-        // 同 hash：qB 不允许同 hash 两条；按策略绝不改动原种子（不补挂 tracker、
-        // 不打标签），只落终态备注，交人工决定是否放弃目标站做种。
-        let note = "目标种与下载器已有种子 info hash 相同；按策略不改动原种子，跳过该站";
+        // 同 hash：qB 不允许同 hash 两条；先看原种到底挂的是不是目标站，
+        // 只挂目标站就是已在做种，只挂别站/没有 tracker 才是真没挂上。
+        if same_hash_on_target(cfg, qb, &target_hash, &req.target_site) {
+            let note =
+                "下载器里已有同 info hash 种子，且只挂目标站 tracker；已在该站做种，不重复添加";
+            write_cell(
+                index,
+                &req.content_key,
+                &req.target_site,
+                CoverageStatus::Seeding,
+                Some(detail_url.to_string()),
+                note,
+            );
+            index.save()?;
+            log(note);
+            return Ok(CoverageStatus::Seeding);
+        }
+        let note = "目标种与下载器已有种子 info hash 相同，但不是“只挂目标站 tracker 且 progress=1”；按策略不改动原种子，跳过该站";
         write_cell(
             index,
             &req.content_key,

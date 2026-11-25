@@ -16,6 +16,8 @@
 - `bsend status` 的“待跟进”按类点名：等走候选入口 / 等站点审核 / 站点审核没过 / 站上已找不到 / 站上已发但 qB 未挂回，每类列出条目和站点当时说的话（原来只有数量，或只有候选入口一类点名）。
 - `bsend audit` 每天小计和合计都带“待跟进”一行（待走候选 / 等站点审核 / 站点审核没过）。
 - GUI 覆盖概览的状态图例补齐：“等走候选”“等站点审核”“审核没过”“站上已没有”各用自己的颜色和名字，不再落进“已跳过”的兜底；图例改为穷举全部状态，以后新增状态编译会报错。
+- **audiences 判重改走 Kimi WebBridge**：`NexusPhp` 对 audiences 不再用无头 HTTP 检索，改在用户已登录的真实浏览器里先打开种子列表页、等 Cloudflare Turnstile token，再同源 `fetch` 搜索 URL；token 未就绪时明确报“需要人工完成一次人机验证”，不把验证页当“站内没有”。2026-11-25 实测补上后台标签页诊断：`visibilityState=hidden` 时 Turnstile 不生成 iframe，程序单独报“标签页在后台”，提示切到前台后重试。
+- **源站简介没有图时自动补图**：新增 `scripts/seed-images.py`，用本机 ffmpeg 从视频抽帧，也可按豆瓣条目自动取海报（`--douban`）或传海报 URL，上传到 pixhost/imgbox，写入 `screenshot-overrides.json`；发布时程序自动把这些图追加到简介。波洛候选 carpt 532 已补 3 张，tey 预检从“0 图”变为“3 张 ≥ 3”；tey 仍未上传，是站点 `medium_sel` 没有 Bluray 选项，不是图床。
 - **图片门禁改成代码硬规则**：剪死图不再读配置，所有站点上传前无条件逐图探测、剪掉死图；要图的站至少 3 张（`gates::image_floor`：藏宝阁/优堡/太乙/麒麟 3 张、熊猫 4 张），配置里的 `pruneDeadImages` / `requireImages` 已删除、写了也会被覆盖。
 - **上传成功就立刻挂回 qB 改成硬步骤**：上传后立即下载站点 `.torrent`、核对分片并加入 qB；站点刚建种时的 `torrent not registered` 固定重试 4 轮、每轮 15 秒，仍拿不到才落待人工。所有站点、所有发种入口都走这条，没有配置开关。
 - **熊猫暂停发种**：`panda` 从 `assist.autoReseedSites` 摘掉并列入 `assist.reseedPausedSites`；站上 141276 是候选种子 24 小时没做种被系统删的，重发需先“上传→立刻挂回 qB 做种”。
@@ -24,6 +26,8 @@
 ### Added
 
 - `scripts/edit-seed.py --clear-technical-info`：清空 `technical_info` 字段，配合 `--descr-file` 处理不收 MediaInfo 的站点（财神 260049/260050 实测）。
+- `scripts/seed-images.py`：源站简介没有图时，按内容键从本地视频抽帧（默认 3 张，可多条视频各取一帧），可选 `--douban` 自动取豆瓣条目海报或 `--poster-url` 传图，上传 pixhost/imgbox 后写 `screenshot-overrides.json`；发布时自动追加进简介。
+- `scripts/seed-images.py` 默认用 pixhost，避免 UBITS 的 imgbox 黑名单；`--dry-run` 只抽帧不上传。
 - “等站点审核”做成机器可跟踪：新增覆盖状态 `pending_review`（等站点审核）、`review_rejected`（站点审核没过）、`gone_from_site`（站上已找不到）和审计词 `pending_review` / `review_rejected`。发种时站点收下了但不给下载（“尚未通过审核”等）或页面标着未审 / 不通过，就落对应的格子，不算失败、不重发；自动发种每轮开头和新命令 `bsend followup` 会回访详情页，审完了自动把站点种子下回来挂进 qB。页面标记只认明写的字样（tey `title="未审"`、麒麟“审核不通过，原因：…”、藏宝阁 `title="通过"`、熊猫“没有该ID的种子”都是实测样本）。
 - 发布前门禁新增 `titleNoCjk`、`requireImages`、`descrOrder`：主标题含汉字、最终简介图片不足、简介段落乱序都会在上传前拦下；门禁改为读 `apply_site_rules` 之后真正要提交的简介，不再看源页原文。藏宝阁配 2 张图 + 剪死图，熊猫高清配 4 张图和【转载出处-制作说明-海报-简介-info-截图】顺序。
 - `scripts/imgbox-upload.py`：匿名上传 imgbox，返回原图直链；无需 API key，单图 10MB，实测带藏宝阁/熊猫 Referer 均 200。
@@ -118,8 +122,11 @@
 - `otherVersion` 纳入终态，不再每 7 天重复入队。
 - 限流地板按轮次保留（一次成功不再回到 8 秒节奏）。
 - `requireLinks` / `requireMediaInfo` 放宽同时作用于发布检查与预检。
-- 同 hash 目标种一律不改动原种子（不补挂 tracker、不打标签），记「同 hash 跳过」；
-  qB 不允许同 hash 两条，新加种子只适用于 hash 不同的目标种。
+- 同 `info hash` 的目标种不再一律记「同 hash 跳过」：qB 不允许同 hash 两条，
+  遇到同 hash 先读原种 tracker 和 progress；只挂目标站 tracker 且 `progress=1` 就是已在该站做种，记 `seeding`，
+  不改原种子、也不 add 第二条；挂别站、没有 tracker 或还没下完才记「同 hash 跳过」。
+  `info hash` 是 `info` 字典的 SHA1，tracker 不在 `info` 里；pieces 指纹是对整串 `pieces` 再算的 SHA1，
+  两者都不等于「站上已有」。hdfans 287874、ptcafe 137241、kufei 142202、sbpt 21764、xdy 8043 已按这条修正。
 
 ### Fixed
 

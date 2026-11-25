@@ -21,7 +21,7 @@ C:\Users\Schal\AppData\Local\BoxSend
 | `pieces-cache.json` | 分片比对缓存 | 删单条或整个文件都行，会重新算 |
 | `formcheck.json` | 上次表单检查的字段和下拉选项 | 可以删，下次检查会重算 |
 | `gatecheck.json` | 发布检查矩阵和官方预审结果 | 可以删，会重算 |
-| `screenshot-overrides.json` | 内容 key 对应的公网截图地址 | 只增删地址 |
+| `screenshot-overrides.json` | 内容 key 对应的公网截图地址；由 `scripts/seed-images.py` 生成 | 只增删地址 |
 | `cookies.json` | 按站点保存的 Chrome Cookie | 删某个站会触发重新同步 |
 | `coverage.json.corrupt` | 解析失败时隔离出来的坏文件 | 保留，程序不会自动覆盖 |
 | `coverage.json.bak-*` | 覆盖记录的自动备份 | 留最近几份 |
@@ -72,7 +72,8 @@ status / at / url / note / verifyHash
 | 结果 | 实际意思 |
 | --- | --- |
 | `skipped_duplicate` | 目标站已经有同分片条目，不是站点拒绝上传 |
-| `same_hash_skip` | 目标种子和 qB 已有种子完全同 hash，不改原种子 |
+| `same_hash_skip` | 目标种子和 qB 已有种子完全同 `info hash`，但不满足“只挂目标站 tracker 且 progress=1”（没挂目标站、挂了别站、或还没下完/校验完）；不改原种子、不 add 第二条。满足条件时记 `seeding`，不记这个 |
+| `pending_review` | 站上已发布，但站点还没审完或还没放行下载；等回访，不算失败 |
 | `other_version` | 站上同内容但分片不同，不是“重复” |
 | `existed_pending` | 回包说重复，但回包里没有可核对的详情页/下载链接；回包 id 经常是错的。note 以 `existed_unresolved` 开头时，表示站上已有、下载/挂回 qB 失败 |
 | `posted_unresolved` | 站上已发布（新发或 existed），但下载目标种、校验或挂回 qB 失败；待人工补挂，不记失败、不进失败冷却、不占发布额度 |
@@ -178,6 +179,7 @@ pwsh scripts/seeding-audit.ps1 -Json -OutFile audit.json
 - `bsend report`：看整体覆盖率。
 - `bsend autopost`：找缺口、生成待发、审阅、发布、挂回。
 - `seeding-audit.ps1`：看哪里卡住了。
+- `scripts/seed-images.py`：源站简介没有图时，按内容键从本地视频抽帧（默认 3 张，可多条视频各取一帧），也可用 `--douban <条目id>` 自动取豆瓣海报或传 `--poster-url`；上传 pixhost/imgbox 后写 `screenshot-overrides.json`；`--dry-run` 只抽帧不上传。
 - `scripts/imgbox-upload.py`：把本地海报/截图传到 imgbox，输出原图直链；匿名、无需 API key、单图 10MB。
 - `scripts/edit-seed.py`：只改已发布种子的标题/简介；默认演练，`--apply` 才提交，其余表单原样回填。
 - `scripts/fetch-descr.py`：读已发布种子的编辑页，把简介字段原样落到 `%TEMP%\bsend-review\`，给换图/改简介做准备；只读，不提交。
@@ -295,7 +297,7 @@ NexusPHP 的简介框是 BBCode 编辑器。源站简介里的 `<fieldset>`、`<
 
 藏宝阁 43994 的两张图（豆瓣海报、`imgs.loukky.com` 截图）都不可达；用 `scripts/imgbox-upload.py` 重传后换成 `images4.imgbox.com` 直链，带 Referer 实测 200。熊猫 141276 原来没有海报/截图，重写简介时补了 1 张海报 + 3 张截图，顺序按站点要求。死图不要靠关门禁绕过；先重传，再改简介。
 
-2026-11-24 又碰上三次：ubits 379266 的 9 张图全在已失效的 `i13.tietuku.com`（站内信判“海报与截图均无法访问”），同一条内容的 tey 623 带着同样的死图还没审到；麒麟 479362 被判“缺少海报或截图”，实际 7 张图全不可达（豆瓣海报裸请求 418、`img.pterclub.com` TLS 失败）。三条都按同一套流程修：`fetch-descr.py` 取原简介 → 本地备图（海报带 `Referer: https://movie.douban.com/` 取，截图用 cv2 从正片抓）→ `imgbox-upload.py` 传图 → `swap-descr-images.py` 按顺序换链接 → `edit-seed.py` 演练再提交 → 详情页数 imgbox 张数、旧图站点应为 0。
+2026-11-24 又碰上三次：ubits 379266 的 9 张图全在已失效的 `i13.tietuku.com`（站内信判“海报与截图均无法访问”），同一条内容的 tey 623 带着同样的死图还没审到；麒麟 479362 被判“缺少海报或截图”，实际 7 张图全不可达（豆瓣海报裸请求 418、`img.pterclub.com` TLS 失败）。三条都按同一套流程修：`fetch-descr.py` 取原简介 → 本地备图（海报带 `Referer: https://movie.douban.com/` 取，截图用 `seed-images.py` 从正片抓）→ `imgbox-upload.py` 传图 → `swap-descr-images.py` 按顺序换链接 → `edit-seed.py` 演练再提交 → 详情页数 imgbox 张数、旧图站点应为 0。
 
 同一内容的其余四站（crabpt 240242、hdfans 287791、qingwa 208575、luckpt 61102）也在 2026-11-24 晚用同一套脚本把 9 张 `i13.tietuku.com` 死图换成了 imgbox，复查四站都是 0 张旧图、9 张新图；sbpt 21684 那份简介本来就没有图片，不需要换。
 

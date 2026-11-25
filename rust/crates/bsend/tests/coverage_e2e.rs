@@ -1904,6 +1904,9 @@ fn e2e_same_hash_skips_without_touching_existing_torrent() {
     let tgt = reseed_site_server(t.clone());
     let mut cfg = test_config(qb.port, src.port, tgt.port, &dir);
     cfg.coverage.reseed_publish_enabled = true;
+    // 这条用例要覆盖“同 hash 但原种挂的是别站 tracker”的缺口：mock qB 只回
+    // localhost，而 hdsky 正常认 localhost；把目标站 host 换掉，避免误判成已做种。
+    cfg.sites[1].announce_hosts = vec!["hdsky.example".into()];
 
     let key = "m:samehash000000000000";
     let src_url = format!("http://127.0.0.1:{}/details.php?id=1002", src.port);

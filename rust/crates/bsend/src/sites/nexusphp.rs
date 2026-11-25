@@ -225,6 +225,18 @@ impl NexusPhp {
         Ok(html)
     }
 
+    /// 搜索页抓取：audiences 走 Kimi 真浏览器；其他站仍用带 cookie 的 HTTP。
+    /// 搜 IMDb 区的判重也走这里，避免 `target_has_imdb` 单独发无头请求被 Turnstile
+    /// 静默返回挑战页，把“验证未通过”误当成“站内没有”。
+    pub fn fetch_search_html(&self, url: &str) -> Result<String> {
+        if self.uses_kimi_search() {
+            let kimi = crate::kimi::KimiBrowser::new("bsend-audiences")?;
+            kimi.prepare_search_page(self.base.as_str())?;
+            return kimi.fetch_search_html(url);
+        }
+        self.fetch_html(url, self.base.as_str())
+    }
+
     /// 上传表单 multipart 提交。`file_field` 是种子文件框的 name（NexusPHP 默认 file）。
     /// 返回状态码、响应体、最终 URL（跟跳后）。
     pub fn post_upload(
@@ -379,6 +391,48 @@ impl NexusPhp {
         expected_size: Option<i64>,
         gate: &mut dyn FnMut() -> bool,
     ) -> Result<SearchOutcome> {
+        if self.uses_kimi_search() {
+            return self.search_sized_browser(name, subtitle, relaxed, imdb, expected_size, gate);
+        }
+        self.search_sized_with(name, subtitle, relaxed, imdb, expected_size, gate, |url| {
+            let resp = self.get(url, self.base.as_str())?;
+            Ok((resp.status().as_u16(), resp.text().unwrap_or_default()))
+        })
+    }
+
+    /// audiences 的搜索页挂了 Cloudflare Turnstile，HTTP 脚本请求会被判“搜索人机验证
+    /// 未通过”。改走 Kimi WebBridge 的真实 Chrome：先打开种子列表页，等 token；
+    /// 再在同源页面里 `fetch` 搜索 URL。人机验证仍需用户在浏览器里点一次。
+    fn search_sized_browser(
+        &self,
+        name: &str,
+        subtitle: &str,
+        relaxed: bool,
+        imdb: &str,
+        expected_size: Option<i64>,
+        gate: &mut dyn FnMut() -> bool,
+    ) -> Result<SearchOutcome> {
+        let kimi = crate::kimi::KimiBrowser::new("bsend-audiences")?;
+        kimi.prepare_search_page(self.base.as_str())?;
+        self.search_sized_with(name, subtitle, relaxed, imdb, expected_size, gate, |url| {
+            let html = kimi.fetch_search_html(url)?;
+            Ok((200, html))
+        })
+    }
+
+    /// 检索查询词阶梯的公共部分：调用方只负责把 URL 变成 `(HTTP 状态, HTML)`。
+    /// 这样 HTTP 与 Kimi 浏览器两条通道共用同一套名称匹配和大小初筛，不会漂移。
+    #[allow(clippy::too_many_arguments)]
+    fn search_sized_with(
+        &self,
+        name: &str,
+        subtitle: &str,
+        relaxed: bool,
+        imdb: &str,
+        expected_size: Option<i64>,
+        gate: &mut dyn FnMut() -> bool,
+        mut fetch: impl FnMut(&str) -> Result<(u16, String)>,
+    ) -> Result<SearchOutcome> {
         // 未配 searchURL 时退回 torrents.php?search=（NexusPHP 家族都有这个通用端点）
         let tmpl = self
             .search_url_tmpl
@@ -393,9 +447,7 @@ impl NexusPhp {
                 return Ok(SearchOutcome::BudgetExhausted);
             }
             let url = self.build_search_url(&tmpl, &q, imdb);
-            let resp = self.get(&url, self.base.as_str())?;
-            let status = resp.status().as_u16();
-            let html = resp.text().unwrap_or_default();
+            let (status, html) = fetch(&url)?;
             if status != 200 {
                 let head: String = html.chars().take(120).collect();
                 return Err(anyhow!("HTTP {status} 检索 {url}：{head}"));
@@ -416,6 +468,12 @@ impl NexusPhp {
             }
         }
         Ok(SearchOutcome::Miss)
+    }
+
+    /// 这个站点是否必须走 Kimi WebBridge 的真实浏览器检索。
+    /// 目前只有 audiences 在搜索页挂了 Turnstile；其他站直接 HTTP 更快。
+    pub fn uses_kimi_search(&self) -> bool {
+        self.site_id == "audiences"
     }
 
     fn build_search_url(&self, tmpl: &str, name: &str, imdb: &str) -> String {
@@ -2094,6 +2152,21 @@ fn origin_of(url: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn audiences_uses_kimi_search() {
+        let a = NexusPhp::new(
+            "audiences",
+            "Audiences",
+            "https://audiences.me/",
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(a.uses_kimi_search());
+        let b = NexusPhp::new("luckpt", "LuckPT", "https://pt.luckpt.de/", None, None).unwrap();
+        assert!(!b.uses_kimi_search());
+    }
 
     #[test]
     fn entities_decode_single_pass() {
