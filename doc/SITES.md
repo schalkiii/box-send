@@ -153,7 +153,7 @@ xingyunge
 - `descrOrder`：简介必须按指定段落顺序。当前只有熊猫。
 - `requiredFields`：核心必填字段没有值就拦。当前是 hdvideo 的 `region_sel` / `style_sel`。
 - `selectPicks` / `multiPicks`：把有歧义的下拉或复选框定死。当前有 luckpt 的 BDRip、ptfans 的同名 Encode、hdvideo 的地区/剧情。
-- 日限额：默认 2 条；luckpt、sbpt 各 20 条。限额只算真正上传成功的条目，重复/失败/待跟进不占额度。
+- 日限额：默认 2 条；luckpt、sbpt 各 20 条。`posted` 和 `posted_verifying` 都算一次上传；重复/失败/待跟进不占额度。
 - `posterField` / `screenshotField`：上传页把海报、截图放在独立字段时，从简介图片里抽出来填进去；不靠简介图冒充独立字段。ptlgs 的 `cover` / `screenshots` 就是这种站。
 
 **站点侧限制（程序不绕过，也不该硬填）**

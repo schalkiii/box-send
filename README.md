@@ -15,7 +15,7 @@ PT 站自动发种和跨站辅种工具，适合有盒子或长期做种的用�
 - 一个种子只挂一个站点，禁止把多个站的 tracker 合并；上传时写入目标站专属来源标记，让新种子有独立的 hash。
 - 发布后从目标站下载种子，作为独立种子加回 qB，不和源种子混在一起。
 - 按白名单、每日限额、失败冷却（默认关闭）运行，所有发布动作写审计日志。
-- 支持 CookieCloud、PT-depiler Gist 同步 Cookie，多主题桌面界面，上传限速默认 10 MB/s。
+- 支持 CookieCloud、PT-depiler Gist 同步 Cookie，多主题桌面界面；上传限速默认跟随 qB 全局（`defaultUpLimit=0`，不单独限速）。
 - 只发影视、剧集、纪录片；教育、成人等类型由标题关键词黑名单拦掉。
 
 ## 快速开始
@@ -29,8 +29,10 @@ cargo build --release -p bsend-cli
 .\target\release\bsend.exe --config "$env:LOCALAPPDATA\BoxSend\boxsend.json" autopost --dry-run --limit 5
 
 # 自动循环：每 30 分钟一轮
-.\target\release\bsend.exe --config "$env:LOCALAPPDATA\BoxSend\boxsend.json" autopost --loop --interval-secs 1800
+.\target\release\bsend.exe --config "$env:LOCALAPPDATA\BoxSend\boxsend.json" autopost --loop-mode --interval-secs 1800
 ```
+
+`cargo test -p bsend` 只测核心库；要跑全部 Rust 测试用 `cargo test --workspace`。Windows 上需要 Visual Studio 的 C++ 链接器；没有时用 `cargo test --workspace --exclude bsend-gui`，GUI 那部分由远端 Windows CI 覆盖。
 
 第一次使用按这个顺序：
 
@@ -49,7 +51,8 @@ cargo build --release -p bsend-cli
 | `AGENTS.md` | 开发命令、目录约定、不能违反的规则 |
 | `doc/ARCHITECTURE.md` | 为什么以 qB 为准、一条种子怎么发、辅种怎么判 |
 | `doc/OPERATIONS.md` | 数据文件、命令、巡检、排障顺序 |
-| `doc/SITES.md` | 147 个站的清单、42 站白名单、卡住的站 |
+| `doc/TESTING.md` | 测试分层、跑法、假服务端和新用例放哪里 |
+| `doc/SITES.md` | 147 个站的清单、40 站白名单、卡住的站 |
 | `doc/SITE-DEBUG.md` | 新站怎么接、上传被拒怎么查、单站结论 |
 | `doc/ROADMAP.md` | 已经做完什么、还在做什么、有什么风险 |
 | `CHANGELOG.md` | 用户能感觉到的变化 |

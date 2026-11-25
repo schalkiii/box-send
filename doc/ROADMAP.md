@@ -98,7 +98,7 @@
 
 原问题：旧口径下“站上已有”“重复”“失败”也可能消耗当轮上传次数，热门站查 10 次全是重复，一条也发不出去。
 
-现在 `autopost` 只在 `ReseedOutcome::Posted` 时 `posted_today += 1`；`blocked`、`duplicate`、`failed` 不计入 `posted`。`parse_audit` 也按 `posted` 天数统计，日限额只算真正上传成功。文档之前写成“还在修”，已按代码实际行为改正。
+现在 `autopost` 在 `posted` 和 `posted_verifying` 两种结果上都会 `posted_today += 1`；`blocked`、`duplicate`、`failed`、`pending_offers` 等不计入 `posted`。`parse_audit` 也按这两种结果统计，日限额只算真正发出上传请求的条目。
 
 注意：这里的“额度”是**发布额度**，不是上传请求总预算；全局 `roundBudget/uploadBudget` 仍会拦截所有真正的上传动作，两者不冲突。
 
@@ -132,7 +132,7 @@
 
 ### 4.5 拆分 `reseed.rs`
 
-`reseed.rs` 超过 5,000 行，改一处容易碰坏别处。计划拆成：
+`reseed.rs` 已超过 9,000 行，改一处容易碰坏别处。计划拆成：
 
 ```
 reseed/mod.rs          共享类型和入口

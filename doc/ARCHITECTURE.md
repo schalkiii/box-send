@@ -20,7 +20,7 @@ BoxSend 做两件事：
 - qB 里某段内容带着目标站的 tracker，就认为目标站已经有这段内容。
 - qB 里没有目标站的 tracker，就认为目标站大概率没有。
 - 平时不再为了“有没有”去逐个站点搜索。搜索很慢、容易被限流，站点改版后结果也不稳定。
-- 只有真要发某一条之前，才对目标站再确认一次。这个“再确认”目前还没有完全接到新流程里，见 `ROADMAP.md`。
+- 只有真要发某一条之前，才对目标站再确认一次；这一步已经接进发种前检查，不额外逐站搜索。
 
 tracker 是种子文件里记录的站点服务器地址。判断时会把域名大小写、端口、路径、`user:pass@` 前缀、域名末尾的点这些差异归一化，也会认站点配置里的别名和子域名；页面带 `www.` 与裸域按同一站处理。否则同一个站换个写法就会被误判成“没有”。
 
@@ -45,17 +45,22 @@ qB 没有 tracker，也不等于站上一定没发过。可能是站上已经有
 | `seeding` | 这个站在 qB 里已经有种子在做种 |
 | `assisted` | 旧辅种流程挂上的种子；新流程不再产生带多个站点 tracker 的记录 |
 | `reseeded` | 已经发布，并从目标站下载种子挂回 qB，校验完成 |
-| `verifying` | 已挂回 qB，还在校验文件 |
+| `verifying` | 已挂回 qB，还在校验文件；不能算已做种 |
 | `failed` | 这次失败，过一段时间才能重试 |
-| `review_pending` | 站上看起来已有，但 qB 没有对应 tracker，等人核对 |
+| `review_pending` | 站内检索命中，但清单或 hash 对不上，等人核对；其中 note 以 `posted_unresolved` 或 `existed_unresolved` 开头的，是“站上已发、qB 没挂回”，应去补挂而不是重发 |
 | `wait_source` | 本地没有可用的源种子，导不出文件 |
 | `reseed_draft` | 临时的待发队列；一轮结束后应该变成成功、失败或跳过 |
 | `skipped` | 终态，不再自动发。只用于命中内容类型黑名单（`assist.skipKeywords`） |
-| `pending_offers` | 站点明确要求改走候选入口（例如青蛙的 `torrent_too_large` 只肯走 `offers.php`）。不入队重试，但也不算完事：`status` 单列“待跟进”，等人去候选页提交，`bsend audit` 单独数 `pending_offers` |
+| `pending_offers` | 站点明确要求改走候选入口（例如青蛙的 `torrent_too_large` 只肯走 `offers.php`）。不入队重试，但也不算完事：`status` 单列“待跟进”，等人去候选页提交 |
+| `pending_review` | 站上已经发布，但站点还没审完或还没放行下载；种子在站上，只是暂时拿不到，等回访收尾，不算失败 |
+| `review_rejected` | 站点明写审核不通过（附原因）；种子可能仍在 qB 做种，要人改简介或种子后在站上处理，程序不重发 |
+| `gone_from_site` | 回访时详情页报“没有该 ID 的种子”或 404；站上已经没有这条，qB 里那条删不删由人决定 |
 | `other_version` | 站上已有同片的其他版本，分片不一样 |
 | `same_hash_skip` | 目标种子和 qB 已有种子完全同一个 `info hash`，qB 不允许重复添加；查原种 tracker 和 progress，只挂目标站且 progress=1 时记 `seeding`（已做种），挂别站、没有 tracker 或还没下完才记本状态 |
+| `rejected` | 人工否决，确认不是同一内容 |
+| `miss` | 站内没有，作为负缓存保留一段时间，到期后会重新搜索 |
 
-从 2026-11-23 起，`autopost` 不再要求覆盖记录里先有 `reseed_draft` 条目。它每一轮直接读 qB 的实时种子列表，找出“白名单站点没有 tracker、源种子已定位、内容还在 qB”的组合，现场生成待发清单。`reseed_draft` 只作为过渡期的旧记录保留。
+`autopost` 不再要求覆盖记录里先有 `reseed_draft` 条目。它每一轮直接读 qB 的实时种子列表，找出“白名单站点没有 tracker、源种子已定位、内容还在 qB”的组合，现场生成待发清单。`reseed_draft` 只作为过渡期的旧记录保留。
 
 ## 4. 覆盖率看哪个数字
 
@@ -253,11 +258,11 @@ qB 加多文件种子时，默认会放到 `<保存目录>/<种子根目录>/`�
 
 自动发种默认不做冷却：被拦或失败后，下一轮直接重试，由人看审计（`auto-audit.jsonl`）决定要不要再跑。`assist.backoffHours` 不填或填 0 是默认；只有显式配了小时数才按“同一条内容 + 同一个站”在窗口内跳过，拦截和失败共用一个窗口，试运行同样受限。`pending_offers`（等候选入口）不算失败，不进冷却。
 
-日限额按北京时间切日，只统计真正发布成功的条数。被拦截、重复、失败不占发布额度；旧代码里重复结果也会消耗额度的问题还要继续修。
+日限额按北京时间切日，`posted` 和 `posted_verifying` 都算一次上传；被拦截、重复、失败、待跟进不占发布额度。
 
 ## 9. 自动运行
 
-`bsend autopost --loop --interval-secs 1800` 会串行循环：
+`bsend autopost --loop-mode --interval-secs 1800` 会串行循环：
 
 ```
 找缺口 → 生成待发清单 → 源种子审阅 → 发布检查 → 上传 → 下载挂回 → 记审计
@@ -288,15 +293,29 @@ Windows 计划任务只给命令示例，不自动创建。需要常驻时用任
 | --- | --- |
 | `reseed.rs` | 单条内容的审阅、上传、发后挂回，主流程，文件很大 |
 | `qbittorrent.rs` | qB 登录、种子列表、导出、添加、校验 |
-| `coverage.rs` | 内容索引、tracker 归一化、覆盖记录 |
+| `coverage.rs` | 内容索引、tracker 归一化、覆盖记录、一轮扫描编排 |
+| `index.rs` / `models.rs` | 覆盖记录的数据结构、内容条目、哈希/文件清单模型 |
 | `report.rs` | 报表、从 qB 缺口生成待发清单、对账、审计汇总 |
 | `autopost.rs` | 自动发种编排、限额、失败冷却、审计 |
+| `review.rs` | 审核回访：等站点审核、审核没过、站上已找不到之后的收尾 |
 | `matcher.rs` | `info hash`、pieces 指纹、名称判重 |
-| `sites/nexusphp.rs` | NexusPHP 站点的表单解析与上传 |
-| `config.rs` / `gates.rs` | 配置结构、发布检查规则 |
+| `bencode.rs` | 读取 `.torrent` 顶层结构，取 hash、文件清单和发布名 |
+| `torrent_rewrite.rs` | 单 tracker 种子改写，保留源种分片字节 |
+| `layout.rs` / `manifest.rs` | 推送种子的落盘布局、逐文件清单指纹 |
+| `resolver.rs` | 源种定位：按已做种源站和源站名单找可用源种 |
+| `sites/nexusphp.rs` | NexusPHP 站点的搜索、表单解析、上传与审核标记 |
+| `sites/mod.rs` | 站点目录、host 匹配和站点框架选择 |
+| `gates.rs` / `config.rs` | 发布检查规则、配置结构与默认值 |
+| `kimi.rs` | audiences 等站点的 Kimi WebBridge 检索通道 |
+| `cookiecloud.rs` | CookieCloud 加密备份的拉取与解密 |
+| `throttle.rs` | 每站请求间隔、限流退避和轮次预算 |
+| `lock.rs` | 同一数据目录只允许一个长写任务 |
+| `piecesapi.rs` | 站点 pieces-hash 批量查询通道 |
+| `mediainfo.rs` | 本地 MediaInfo 提取（Windows DLL 接口） |
 | `bsend-cli/src/main.rs` | `status`、`report`、`autopost`、`audit` 等命令 |
+| `bsend-gui/src/*` | 桌面界面、后台任务、配置与诊断视图 |
 
-`reseed.rs` 已经超过 5,000 行，计划按“共享入口、主流程、判重、上传、记录读写”拆开。拆分只移动代码，不改行为，每拆一批都要能编译和跑测试。
+`reseed.rs` 已超过 9,000 行，计划按“共享入口、主流程、判重、上传、记录读写”拆开。拆分只移动代码，不改行为，每拆一批都要能编译和跑测试。
 
 ## 12. 已经踩过的坑
 
@@ -314,5 +333,6 @@ Windows 计划任务只给命令示例，不自动创建。需要常驻时用任
 ## 13. 相关文档
 
 - 运行数据、命令、巡检、排障：`OPERATIONS.md`
+- 测试分层、假服务端和新增用例：`TESTING.md`
 - 站点清单、白名单、受阻原因：`SITES.md`、`SITE-DEBUG.md`
 - 还没做完的事：`ROADMAP.md`

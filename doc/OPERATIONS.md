@@ -82,7 +82,7 @@ status / at / url / note / verifyHash
 | `review_pending` | 站上命中了，但清单或 hash 对不上，等人核对 |
 | `pending_offers` | 站点要求改走候选入口（`offers.php`），程序不自动重试；等人工去候选页提交，`status` 里单列“待跟进” |
 
-`bsend status` 把两类“等站点侧动作”的记录单列成“待跟进（等站点侧动作，程序不自动重试）”：等走候选入口（`pending_offers`）和站上已发、qB 未挂回（note 以 `posted_unresolved` / `existed_unresolved` 开头）。等候选的条目会点名列出（最多 10 条，附站点当时给的原因），超过 10 条提示去 `bsend audit --days 1` 看明细。这两类都不能拿普通 `review_pending` 的处置方式去重发。
+`bsend status` 把“等站点侧动作”的记录单列成“待跟进（等站点侧动作，程序不自动重试）”，共五类：待走候选入口（`pending_offers`）、等站点审核（`pending_review`）、站点审核没过（`review_rejected`）、站上已找不到（`gone_from_site`）、站上已发但 qB 未挂回（note 以 `posted_unresolved` 或 `existed_unresolved` 开头）。等候选的条目会点名列出（最多 10 条，附站点当时给的原因），超过 10 条提示去 `bsend audit --days 1` 看明细。这几类都不能拿普通 `review_pending` 的处置方式去重发。
 
 ## 3. 覆盖率怎么读
 
@@ -113,7 +113,7 @@ at / site / key / result / url? / error? / note? / gates?
 
 `result` 常见值：
 
-`posted / posted_verifying / blocked / failed / review_failed / skipped_duplicate / other_version / existed_pending / pending_offers / same_hash_skipped`
+`posted / posted_verifying / blocked / failed / review_failed / skipped_duplicate / other_version / existed_pending / posted_unresolved / pending_offers / pending_review / review_rejected / same_hash_skipped`
 
 用途：
 
@@ -129,7 +129,7 @@ at / started_at / key / name / source_site / source_url
 target_site / result / url / note / cell_status / seeded
 ```
 
-`seeded=false` 表示站上可能已经发布，但本机没挂上种子。优先查目标种下载和添加时的目录布局，不要先怀疑上传。日志写失败只会打印错误，不影响发种结论。
+`seeded=false` 表示当前不能算“已在做种”：可能是站上已发布、但本机没挂上种子；也可能是 `posted_verifying`，种子已经加入 qB，但校验还没跑完。先看同一条记录的 `cell_status` 和 `result` 区分：`verifying` / `posted_verifying` 去等校验，其他情况再查目标种下载和添加时的目录布局，不要先怀疑上传。日志写失败只会打印错误，不影响发种结论。
 
 ## 5. 只读巡检脚本
 
@@ -200,7 +200,7 @@ cargo build --release -p bsend-cli
 .\target\release\bsend.exe --config "$env:LOCALAPPDATA\BoxSend\boxsend.json" report --json out.json
 .\target\release\bsend.exe --config "$env:LOCALAPPDATA\BoxSend\boxsend.json" audit --days 7
 .\target\release\bsend.exe --config "$env:LOCALAPPDATA\BoxSend\boxsend.json" autopost --dry-run --limit 5
-.\target\release\bsend.exe --config "$env:LOCALAPPDATA\BoxSend\boxsend.json" autopost --loop --interval-secs 1800
+.\target\release\bsend.exe --config "$env:LOCALAPPDATA\BoxSend\boxsend.json" autopost --loop-mode --interval-secs 1800
 ```
 
 `--dry-run` 是试运行：会连站点做审阅和发布检查，但不上传、不写覆盖记录。
@@ -218,7 +218,7 @@ cargo build --release -p bsend-cli
 
 这个命令原来叫 `reattach`，2026-11-24 改成 `pull`；旧名还能用，只是不出现在 `--help` 里。
 
-这条命令只从站点详情页下载目标种，不再接受 `--file` 本地构造种；站点下载不到就报错，宁可不挂也不塞废种。只核对 hash/pieces 和挂回 qB，不会调用上传接口；目标种 pieces 与本地内容对不上会直接拒绝。
+这条命令只从站点详情页下载目标种，不再接受 `--file` 本地构造种；站点下载不到就报错，宁可不挂也不塞废种。只按 pieces 和文件清单核对，允许站点改写 `info hash` 或标题；核对一致就挂回 qB，不会调用上传接口。目标种 pieces 或文件清单与本地内容对不上会直接拒绝。
 
 站点还没审完的种子由回访接着管。自动发种每轮开头会自动回访一次（只看记了审核结论的格子），也可以随时手动跑：
 
@@ -244,7 +244,7 @@ cargo build --release -p bsend-cli
 | `assist.reseedPausedSites` | 空 | 只停发种，辅种照常 |
 | `assist.pausedSites` | 空 | 整站暂停 |
 | `assist.roundBudget` | 200 | 每轮每站最多处理多少条 |
-| `assist.uploadBudget` | 10 | 每轮最多尝试上传多少次；重复结果是否占额度还在修 |
+| `assist.uploadBudget` | 10 | 每轮最多真正发出多少次上传请求；发出请求就算一次，站点回“重复/已存在”也一样。日限额只管 `posted` 和 `posted_verifying`，两者分开算 |
 | `assist.allowOtherVersion` | `true` | 站上有同名其他版本时照样发 |
 | `assist.skipKeywords` | 16 个词 | 标题黑名单，命中不占额度 |
 | `assist.reseedRules` | 36 条 | 站点级字段映射和下拉选项覆盖 |

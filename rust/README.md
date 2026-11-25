@@ -33,7 +33,7 @@ bsend reseed --draft 1 --yes # 真发
 # 自动发种：试运行 / 真发 / 循环
 bsend autopost --dry-run --limit 5
 bsend autopost --sites sbpt --limit 1
-bsend autopost --loop --interval-secs 1800
+bsend autopost --loop-mode --interval-secs 1800
 
 # 站点表单检查（只读，新站首次接入才跑）
 bsend formcheck --sites <site>
@@ -65,7 +65,7 @@ cargo test -p bsend --lib reseed::tests::exist_marker
 cargo check -p bsend -p bsend-cli
 ```
 
-发布前至少跑一次完整 `cargo test -p bsend`。单测和端到端测试的数量会随功能变化，以命令输出为准。
+发布前至少跑一次完整 `cargo test -p bsend`。Windows 上跑全 workspace 需要 MSVC C++ 链接器；没有时用 `cargo test --workspace --exclude bsend-gui`，GUI 由远端 Windows CI 覆盖。单测和端到端测试的数量会随功能变化，以命令输出为准。
 
 ## 不能违反的规则
 
@@ -82,6 +82,7 @@ cargo check -p bsend -p bsend-cli
 - `../README.md`：产品简介和快速开始
 - `../doc/ARCHITECTURE.md`：判断规则、发种流程、辅种规则
 - `../doc/OPERATIONS.md`：数据文件、命令、巡检、排障
+- `../doc/TESTING.md`：测试分层、跑法和新增用例
 - `../doc/SITES.md`：站点清单和白名单
 - `../doc/SITE-DEBUG.md`：新站接入和上传失败排查
 - `../doc/ROADMAP.md`：进度和未完成项
