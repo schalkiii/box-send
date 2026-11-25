@@ -463,6 +463,13 @@ fn print_report(r: &RoundReport) {
     }
 }
 
+/// 站上已发布、但下载/挂回 qB 失败的 note 前缀：`posted_unresolved` 是新发定位失败，
+/// `existed_unresolved` 是判重命中后挂回失败。两者都要进“站上已发、qB 未挂回”待跟进，
+/// 不能只认新发那一个前缀。
+fn is_qb_mount_unresolved(note: Option<&str>) -> bool {
+    note.is_some_and(|n| n.starts_with("posted_unresolved") || n.starts_with("existed_unresolved"))
+}
+
 /// 待跟进清单的一行：「内容名」→ 站点：站点当时说的话（截掉操作提示和原始回包，最多 90 个字）
 fn follow_up_item(name: &str, site: &str, note: Option<&str>) -> String {
     let why: String = note
@@ -524,10 +531,7 @@ fn cmd_status(cfg: &Config) -> Result<()> {
         for (site, cell) in &e.coverage {
             *by_status.entry(cell.status).or_insert(0) += 1;
             if cell.status == CoverageStatus::ReviewPending
-                && cell
-                    .note
-                    .as_deref()
-                    .is_some_and(|n| n.starts_with("posted_unresolved"))
+                && is_qb_mount_unresolved(cell.note.as_deref())
             {
                 posted_unresolved += 1;
                 posted_unresolved_items.push(follow_up_item(&e.name, site, cell.note.as_deref()));
@@ -1346,9 +1350,10 @@ fn cmd_audit(cfg: &Config, days: usize, site: Option<String>, as_json: bool) -> 
         println!("{}", day.date);
         println!("  {}", header.join(" "));
         let mut sub = (0usize, 0usize, 0usize, 0usize, 0usize, 0usize);
-        let mut pend = 0usize;
+        let mut pending = 0usize;
         let mut waiting = 0usize;
         let mut refused = 0usize;
+        let mut unresolved = 0usize;
         for (sid, c) in &day.by_site {
             let row = [
                 pad_right(sid, 14),
@@ -1366,9 +1371,10 @@ fn cmd_audit(cfg: &Config, days: usize, site: Option<String>, as_json: bool) -> 
             sub.3 += c.duplicate;
             sub.4 += c.other_version;
             sub.5 += c.other;
-            pend += c.pending_offers;
+            pending += c.pending_offers;
             waiting += c.pending_review;
             refused += c.review_rejected;
+            unresolved += c.posted_unresolved;
         }
         let sub_row = [
             pad_right("当日小计", 14),
@@ -1380,9 +1386,9 @@ fn cmd_audit(cfg: &Config, days: usize, site: Option<String>, as_json: bool) -> 
             pad_left(&commas(sub.5 as i64), 8),
         ];
         println!("  {}", sub_row.join(" "));
-        if pend + waiting + refused > 0 {
+        if pending + waiting + refused + unresolved > 0 {
             println!(
-                "  其中待跟进（不是失败）：待走候选入口 {pend}｜等站点审核 {waiting}｜站点审核没过 {refused}"
+                "  其中待跟进（不是失败）：待走候选入口 {pending}｜等站点审核 {waiting}｜站点审核没过 {refused}｜站上已发未挂回 {unresolved}"
             );
         }
         println!();
@@ -1394,8 +1400,8 @@ fn cmd_audit(cfg: &Config, days: usize, site: Option<String>, as_json: bool) -> 
         t.posted, t.blocked, t.failed, t.duplicate, t.other_version, t.other
     );
     println!(
-        "待跟进：待走候选入口 {}｜等站点审核 {}｜站点审核没过 {}（等回访或人工处理，不算失败、不重试）",
-        t.pending_offers, t.pending_review, t.review_rejected
+        "待跟进：待走候选入口 {}｜等站点审核 {}｜站点审核没过 {}｜站上已发未挂回 {}（等回访或人工处理，不算失败、不重试）",
+        t.pending_offers, t.pending_review, t.review_rejected, t.posted_unresolved
     );
     println!(
         "计入记录 {} 条；畸形行 {} 条（跳过未计入）。",
@@ -1442,7 +1448,8 @@ fn pad_right(s: &str, width: usize) -> String {
 /// 千分位（表格里 4 万和 4 千一眼要能分清）
 fn commas(n: i64) -> String {
     let neg = n < 0;
-    let digits = n.abs().to_string();
+    // `abs()` 在 i64::MIN 上会溢出；`unsigned_abs()` 保留完整绝对值。
+    let digits = n.unsigned_abs().to_string();
     let mut out = String::new();
     for (i, c) in digits.chars().enumerate() {
         // 从右往左每 3 位插逗号。等价写法 `(len-i) % 3 == 0` 会被 clippy 要求用
@@ -2238,6 +2245,7 @@ mod tests {
         assert_eq!(commas(1_234_567), "1,234,567");
         assert_eq!(commas(-1_234), "-1,234");
         assert_eq!(commas(i64::MAX), "9,223,372,036,854,775,807");
+        assert_eq!(commas(i64::MIN), "-9,223,372,036,854,775,808");
     }
 
     #[test]
@@ -2258,6 +2266,18 @@ mod tests {
         assert_eq!(pad_left("中", 4), "  中");
         // 宽度不够时只补空格，不截断内容
         assert_eq!(pad_right("abcdef", 3), "abcdef");
+    }
+
+    #[test]
+    fn unresolved_notes_cover_posted_and_existed() {
+        assert!(is_qb_mount_unresolved(Some(
+            "posted_unresolved：回包没给详情页"
+        )));
+        assert!(is_qb_mount_unresolved(Some(
+            "existed_unresolved：目标种下载失败"
+        )));
+        assert!(!is_qb_mount_unresolved(Some("review_pending：清单对不上")));
+        assert!(!is_qb_mount_unresolved(None));
     }
 
     #[test]

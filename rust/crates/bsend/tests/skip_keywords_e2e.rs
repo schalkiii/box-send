@@ -333,6 +333,7 @@ fn non_matching_keyword_reaches_reviewer() {
                       _: Option<ReviewReport>| {
         r_ran.fetch_add(1, Ordering::SeqCst);
         Ok(ReseedOutcome::Duplicate(DuplicateOutcome {
+            mounted: false,
             status: CoverageStatus::Assisted,
             url: None,
             note: "stub".into(),

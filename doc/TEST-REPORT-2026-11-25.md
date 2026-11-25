@@ -18,16 +18,16 @@
 
 | 指标 | 增补前 | 增补后 | 变化 |
 | --- | ---: | ---: | ---: |
-| 源码单测（`bsend` lib） | 356 | 366 | +10 |
+| 源码单测（`bsend` lib） | 356 | 367 | +11 |
 | `coverage_e2e` | 27 | 28 | +1 |
 | `other_version_e2e` | 2 | 2 | 0 |
 | `skip_keywords_e2e` | 2 | 2 | 0 |
-| `bsend-cli` 单测 | 6 | 15 | +9 |
+| `bsend-cli` 单测 | 6 | 16 | +10 |
 | `bsend-gui` 单测 | 3 | 3 | 0 |
-| **workspace 合计** | **396** | **416** | **+20** |
+| **workspace 合计** | **396** | **418** | **+22** |
 
-本机实际执行 `cargo test --workspace --exclude bsend-gui`：**413 个通过，0 失败**（不含 GUI 3 个）。  
-`cargo test --workspace` 在本机不绿，原因是 GUI 链接工具链缺失，不是测试断言失败：GNU 缺 `-lktmw32`，MSVC 缺 `link.exe`。因此本报告的“413 通过”是核心库 + CLI + 集成测试的口径，不能冒充完整 workspace。
+本机实际执行 `cargo test --workspace --exclude bsend-gui`：**415 个通过，0 失败**（不含 GUI 3 个）。  
+`cargo test --workspace` 在本机不绿，原因是 GUI 链接工具链缺失，不是测试断言失败：GNU 缺 `-lktmw32`，MSVC 缺 `link.exe`。因此本报告的“415 通过”是核心库 + CLI + 集成测试的口径，不能冒充完整 workspace。
 
 ## 3. 新增用例：目标、输入、检查点
 
@@ -84,7 +84,7 @@
 ```powershell
 # 核心库 + CLI + 集成测试
 cargo test --workspace --exclude bsend-gui
-# 结果：413 passed; 0 failed
+# 结果：415 passed; 0 failed
 
 # 静态检查
 cargo clippy --workspace --all-targets --exclude bsend-gui -- -D warnings
@@ -99,13 +99,13 @@ cargo fmt --all -- --check
 
 | 测试目标 | 通过 |
 | --- | ---: |
-| `bsend` lib | 366 |
+| `bsend` lib | 367 |
 | `coverage_e2e` | 28 |
 | `other_version_e2e` | 2 |
 | `skip_keywords_e2e` | 2 |
-| `bsend-cli` | 15 |
+| `bsend-cli` | 16 |
 | doc-tests | 0 |
-| **合计（不含 GUI）** | **413** |
+| **合计（不含 GUI）** | **415** |
 
 ### 4.2 本机未通过 / 未测
 
@@ -131,9 +131,9 @@ cargo fmt --all -- --check
 
 | 模块 | 行数 | 之前测试 | 之后测试 | 仍缺什么 |
 | --- | ---: | ---: | ---: | --- |
-| `qbittorrent.rs` | 1,421 | 6 | 15 | `all_tracker_urls`、`torrent_names`、`torrent_content_path`、`set_download_limit`、`remove_torrent`、`torrent_files_many` 的并发/部分失败 |
-| `bsend-cli/src/main.rs` | 2,277 | 6 | 15 | `cmd_status`、`cmd_report`、`cmd_audit`、`cmd_autopost`、`cmd_pull`、`cmd_followup` 的命令处理本身；空索引/坏配置/错误退出码 |
-| `autopost.rs` | 1,549 | 19 | 20 | `posted_unresolved` 的日限额/审计周报桶；多站点并发限额 |
+| `qbittorrent.rs` | 1,421 | 6 | 16 | `all_tracker_urls`、`torrent_names`、`torrent_content_path`、`set_download_limit`、`remove_torrent`、`torrent_files_many` 的并发/部分失败 |
+| `bsend-cli/src/main.rs` | 2,277 | 6 | 16 | `cmd_status`、`cmd_report`、`cmd_audit`、`cmd_autopost`、`cmd_pull`、`cmd_followup` 的命令处理本身；空索引/坏配置/错误退出码 |
+| `autopost.rs` | 1,549 | 19 | 20 | `posted_unresolved` 的日限额/审计周报桶已补上；多站点并发限额 |
 | `coverage_e2e.rs` | — | 27 | 28 | `pending_review`、`review_rejected`、`gone_from_site`、`pending_offers` 的完整链路 |
 | `bsend-gui/src/` | 3,282 | 3 | 3 | 12 个文件仍 0 测试；`jobs.rs`、`views/*`、`widgets.rs`、`theme.rs`、`types.rs` 基本没有行为断言 |
 | `kimi.rs` | 203 | 1 | 1 | 桥接协议错误、超时、后台标签页 `visibilityState=hidden` |
@@ -145,17 +145,19 @@ cargo fmt --all -- --check
 - 409、0 成功、空正文、非 torrent 回包这些用例都检查了“没有副作用”：没有删除原种、没有把非种子内容写盘、没有重复请求。
 - `posted_verifying` e2e 检查了四个独立输出：返回枚举、覆盖格状态、动作日志字段、`seeded` 布尔值。这样即使其中一个输出被改错，测试也会失败。
 - `parse_audit_counts_posted_verifying_but_not_pending_review` 检查的是日限额计数，不是只检查解析函数不 panic。
-- 已知弱项：`outcome_seeded` 的测试仍与“已挂回 qB”这句文案耦合；这是审计问题 C1/R1，本轮按测试分支纪律没有改实现，只记录。
+- 已知弱项：`outcome_seeded` 一度与“已挂回 qB”这句文案耦合；代码质量分支已改成 `DuplicateOutcome.mounted` 显式标记，测试按标记断言，不再跟文案走。
 
-## 7. 本轮发现、但没有静默修改的问题
+## 7. 后续修复（代码质量分支）
 
-1. **文档 `--loop` 与 CLI `--loop-mode` 不一致**：已用 `bsend.exe autopost --help` 确认真实参数是 `--loop-mode`。测试只把真实参数钉住，没有给 CLI 加别名，也没有改文档；建议按审计 R1 决定是加别名还是改文档。
-2. **`outcome_seeded` 用文案判断做种**：测试继续沿用现有 note，未改生产逻辑；建议按 R3 改成显式布尔/状态。
-3. **`run_reseed` 的 `Ok(other) => Posted`**：现有用例没有触发这个兜底；这是潜在误报风险，未改。
-4. **`report::audit_bucket` 的 `posted_unresolved` 落在 `other`**：本轮没有改报告桶，只记录；建议按 R3/R4 单列“待人工补挂”。
-5. **本机无法跑 GUI/全量 workspace**：不是代码 bug，但会让本地验证口径和 CI 不一致；建议修本机 MSVC 链接器或在 README/`ci-check.sh` 明确 `--exclude bsend-gui`。
+1. **`outcome_seeded` 依赖文案**：已改成 `DuplicateOutcome.mounted` 显式标记；`PendingReview` / `ReviewRejected` 在“已挂回 qB”时为 true，测试按标记断言。
+2. **`run_reseed` 的 `Ok(other) => Posted`**：已拆成显式 `Seeding` 分支；其他 `Ok` 状态落 `posted_unresolved`，不再静默当发布成功。
+3. **审计映射兜底**：`audit_result` 已穷举 `CoverageStatus`，新增状态会编译报错；`report::audit_bucket` 已单列 `posted_unresolved`。
+4. **`bsend audit` 看不到待补挂**：日/总计都加了 `posted_unresolved`，`status` 同时认 `posted_unresolved` 和 `existed_unresolved` 前缀。
+5. **`commas(i64::MIN)`**：改用 `unsigned_abs()`，并补 `i64::MIN` 断言。
+6. **qB add 缺 `success_count`**：现在要求 200 回包是 `Ok.` 或带 `success_count` 的 JSON；空正文/HTML/缺字段都报错，并补了两个契约用例。
+7. **`autopost --loop`**：文档已统一成 `--loop-mode`；是否再加 `--loop` 别名仍是产品决定，没有擅自改 CLI。
 
 ## 8. 结论
 
-本轮把“上传成功但校验没完”“同 hash 不碰原种”“旧版 qB 参数回退”“409/0 成功/空回包/非 torrent 回包”这些真实踩过的坑补成了回归测试；核心库 + CLI + 集成测试 413 个全绿，静态检查和格式检查通过。GUI 3 个测试和完整 workspace 仍依赖远端 Windows MSVC CI；行覆盖率仍没有数字，下一轮应先解决覆盖率工具链，再谈覆盖率门禁。
+本轮把“上传成功但校验没完”“同 hash 不碰原种”“旧版 qB 参数回退”“409/0 成功/空回包/非 torrent 回包”这些真实踩过的坑补成了回归测试；核心库 + CLI + 集成测试 415 个全绿，静态检查和格式检查通过。GUI 3 个测试和完整 workspace 仍依赖远端 Windows MSVC CI；行覆盖率仍没有数字，下一轮应先解决覆盖率工具链，再谈覆盖率门禁。
 </content>

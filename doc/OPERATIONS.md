@@ -119,8 +119,8 @@ at / site / key / result / url? / error? / note? / gates?
 
 - **日限额**：按北京时间切日，`posted` 和 `posted_verifying` 都算一次上传；后者只是做种还没确认；
 - **失败冷却**：默认关闭（`assist.backoffHours` 不填或填 0）。同一内容 + 同一站点被拦或失败后，下一轮直接重试，由人看审计再决定要不要再跑；只有显式配了小时数（例如 6）才会在窗口内跳过，且拦截和失败共用这一个窗口。`pending_offers` 不进冷却，因为它不是失败；
-- **聚合查看**：`bsend audit --days N [--site X] [--json]`，按六类汇总：
-  `posted / blocked / failed / duplicate / other_version / other`，另外报告格式坏掉的行数。
+- **聚合查看**：`bsend audit --days N [--site X] [--json]`，主表按六类汇总：
+  `posted / blocked / failed / duplicate / other_version / other`，另外报告格式坏掉的行数。待跟进单列，不混进六类：`pending_offers`、`pending_review`、`review_rejected`、`posted_unresolved`。
 
 `reseed-log.jsonl` 每行记录一次动作：
 

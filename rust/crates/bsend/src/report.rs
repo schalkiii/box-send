@@ -557,6 +557,8 @@ pub struct SiteAuditCounts {
     pub pending_review: usize,
     /// 站点明写审核不通过（`review_rejected`）：要人改种子/简介，不是失败
     pub review_rejected: usize,
+    /// 站上已发布、但下载/挂回 qB 失败（`posted_unresolved`）：待人工补挂，不是失败
+    pub posted_unresolved: usize,
     /// Latest record timestamp (Unix sec) for this site/day; 0 when empty.
     pub last_at: i64,
 }
@@ -586,6 +588,8 @@ pub struct AuditTotals {
     pub pending_review: usize,
     /// 站点审核不通过（`review_rejected`）
     pub review_rejected: usize,
+    /// 站上已发布、但 qB 没挂回（`posted_unresolved`）
+    pub posted_unresolved: usize,
     /// Records parsed and counted into the buckets above.
     pub records: usize,
     /// Lines that failed to parse or missed required fields.
@@ -610,6 +614,7 @@ pub struct AuditReport {
 /// - `other_version` → 其他版本（单列，不计入重复）
 /// - `pending_offers` → 待走候选入口（等人工提交候选）
 /// - `pending_review` / `review_rejected` → 等站点审核 / 审核不通过（等回访或人工处理）
+/// - `posted_unresolved` → 站上已发、qB 没挂回（等人工补挂）
 /// - anything else → `other`
 fn audit_bucket(result: &str) -> &'static str {
     match result {
@@ -621,6 +626,7 @@ fn audit_bucket(result: &str) -> &'static str {
         "pending_offers" => "pending_offers",
         "pending_review" => "pending_review",
         "review_rejected" => "review_rejected",
+        "posted_unresolved" => "posted_unresolved",
         _ => "other",
     }
 }
@@ -705,6 +711,7 @@ pub fn audit_daily(text: &str, now: i64, days: usize, site: Option<&str>) -> Aud
             "pending_offers" => counts.pending_offers += 1,
             "pending_review" => counts.pending_review += 1,
             "review_rejected" => counts.review_rejected += 1,
+            "posted_unresolved" => counts.posted_unresolved += 1,
             _ => counts.other += 1,
         }
         if at > counts.last_at {
@@ -719,6 +726,7 @@ pub fn audit_daily(text: &str, now: i64, days: usize, site: Option<&str>) -> Aud
             "pending_offers" => totals.pending_offers += 1,
             "pending_review" => totals.pending_review += 1,
             "review_rejected" => totals.review_rejected += 1,
+            "posted_unresolved" => totals.posted_unresolved += 1,
             _ => totals.other += 1,
         }
         totals.records += 1;
@@ -1144,6 +1152,11 @@ mod tests {
             audit_line(now, "a", "blocked"),
             audit_line(now, "a", "posted"),
             audit_line(now, "a", "posted_verifying"),
+            audit_line(now, "a", "pending_offers"),
+            audit_line(now, "a", "pending_review"),
+            audit_line(now, "a", "review_rejected"),
+            audit_line(now, "a", "posted_unresolved"),
+            audit_line(now, "a", "gone_from_site"),
         ]
         .join("\n");
         let r = audit_daily(&text, now, 7, None);
@@ -1153,7 +1166,13 @@ mod tests {
         assert_eq!(c.other_version, 1);
         assert_eq!(c.blocked, 1);
         assert_eq!(c.posted, 2, "posted_verifying 校验没跑完也要算发布");
-        assert_eq!(r.totals.records, 9);
+        assert_eq!(c.pending_offers, 1);
+        assert_eq!(c.pending_review, 1);
+        assert_eq!(c.review_rejected, 1);
+        assert_eq!(c.posted_unresolved, 1, "待人工补挂要单列");
+        assert_eq!(c.other, 1, "gone_from_site 暂不在日审计桶里，不能丢");
+        assert_eq!(r.totals.records, 14);
+        assert_eq!(r.totals.posted_unresolved, 1);
     }
 
     #[test]

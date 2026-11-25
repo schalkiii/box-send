@@ -4219,6 +4219,7 @@ fn review_hold_outcome(
     write_cell(index, key, site, status, url.clone(), &note);
     index.save()?;
     Ok(ReseedOutcome::Duplicate(DuplicateOutcome {
+        mounted: false,
         status,
         url,
         note,
@@ -4260,6 +4261,7 @@ fn review_seeding_outcome(
     );
     index.save()?;
     Ok(ReseedOutcome::Duplicate(DuplicateOutcome {
+        mounted: true,
         status,
         url: Some(detail_url.to_string()),
         note,
@@ -5189,6 +5191,10 @@ pub struct DuplicateOutcome {
     pub status: CoverageStatus,
     pub url: Option<String>,
     pub note: String,
+    /// 种子是否已挂回 qB。`PendingReview` / `ReviewRejected` 也可能为 true
+    /// （站上已发布、种子已挂回做种，只是审核结论未定）；`reseed-log` 的 `seeded`
+    /// 据此判断，不再靠 note 里有没有“已挂回 qB”这几个字。
+    pub mounted: bool,
 }
 
 /// 一次转种的结果：发布成功带详情页，或判重命中带明确分类。
@@ -5223,6 +5229,7 @@ impl ReseedOutcome {
                 CoverageStatus::PendingReview => "pending_review",
                 // 站点明写审核不通过：要人改种子/简介，程序不重发
                 CoverageStatus::ReviewRejected => "review_rejected",
+                CoverageStatus::GoneFromSite => "gone_from_site",
                 CoverageStatus::ReviewPending => {
                     if d.note.starts_with("posted_unresolved") {
                         // 定位不到 ≠ 发种失败：不进 blocked/failed/review_failed 失败冷却表
@@ -5231,7 +5238,16 @@ impl ReseedOutcome {
                         "existed_pending"
                     }
                 }
-                _ => "failed",
+                // 这些状态不该出现在 Duplicate 里；显式列出而不是用 `_` 兜底，
+                // 以后新增 CoverageStatus 时编译器会提醒补映射。
+                CoverageStatus::Rejected
+                | CoverageStatus::Miss
+                | CoverageStatus::WaitSource
+                | CoverageStatus::Failed
+                | CoverageStatus::ReseedDraft
+                | CoverageStatus::Skipped
+                | CoverageStatus::Reseeded
+                | CoverageStatus::Verifying => "failed",
             },
         }
     }
@@ -5253,6 +5269,7 @@ impl ReseedOutcome {
 /// `same_hash_skipped`，不要包成 `posted`。
 fn same_hash_skip_after_push(url: String) -> ReseedOutcome {
     ReseedOutcome::Duplicate(DuplicateOutcome {
+        mounted: false,
         status: CoverageStatus::SameHashSkip,
         url: Some(url),
         note: "站上已发布，但下载器里同 info hash 的种子没有只挂目标站 tracker；qB 不允许同 hash 存两条，按策略不改原种，当前没做种，待人工处理".to_string(),
@@ -5748,6 +5765,7 @@ fn run_reseed_inner(
                         };
                         log(&format!("目标站判重命中：{title} → {detail_url}；{note}"));
                         return Ok(ReseedOutcome::Duplicate(DuplicateOutcome {
+                            mounted: false,
                             status,
                             url: Some(detail_url),
                             note,
@@ -5788,6 +5806,7 @@ fn run_reseed_inner(
                     );
                     index.save()?;
                     return Ok(ReseedOutcome::Duplicate(DuplicateOutcome {
+                        mounted: false,
                         status: CoverageStatus::OtherVersion,
                         url: Some(detail_url),
                         note: why,
@@ -5809,6 +5828,7 @@ fn run_reseed_inner(
                 );
                 index.save()?;
                 return Ok(ReseedOutcome::Duplicate(DuplicateOutcome {
+                    mounted: false,
                     status: CoverageStatus::Failed,
                     url: Some(detail_url),
                     note: why,
@@ -5953,6 +5973,7 @@ fn run_reseed_inner(
             index.save()?;
             log(&note);
             return Ok(ReseedOutcome::Duplicate(DuplicateOutcome {
+                mounted: false,
                 status: CoverageStatus::PendingOffers,
                 url: None,
                 note,
@@ -5990,6 +6011,7 @@ fn run_reseed_inner(
             );
             index.save()?;
             return Ok(ReseedOutcome::Duplicate(DuplicateOutcome {
+                mounted: false,
                 status: CoverageStatus::ReviewPending,
                 url: None,
                 note,
@@ -6051,6 +6073,7 @@ fn run_reseed_inner(
                         };
                         log(&note);
                         Ok(ReseedOutcome::Duplicate(DuplicateOutcome {
+                            mounted: false,
                             status,
                             url: Some(detail_url),
                             note,
@@ -6084,6 +6107,7 @@ fn run_reseed_inner(
                 );
                 index.save()?;
                 Ok(ReseedOutcome::Duplicate(DuplicateOutcome {
+                    mounted: false,
                     status: CoverageStatus::OtherVersion,
                     url: Some(detail_url),
                     note: why.to_string(),
@@ -6102,6 +6126,7 @@ fn run_reseed_inner(
                 );
                 index.save()?;
                 Ok(ReseedOutcome::Duplicate(DuplicateOutcome {
+                    mounted: false,
                     status: CoverageStatus::Failed,
                     url: Some(detail_url),
                     note: why,
@@ -6257,6 +6282,7 @@ fn run_reseed_inner(
         );
         index.save()?;
         return Ok(ReseedOutcome::Duplicate(DuplicateOutcome {
+            mounted: false,
             status: CoverageStatus::ReviewPending,
             url: unresolved_url,
             note: reason,
@@ -6341,15 +6367,29 @@ fn run_reseed_inner(
             log("发后挂回·校验未完成：站上已发布，种子已加入 qB，当前还没到 100%，下一轮接着收尾");
             Ok(ReseedOutcome::PostedVerifying(reported_url))
         }
-        Ok(other) => {
+        Ok(CoverageStatus::Seeding) => {
             if let Some((mark, why)) = &page_mark {
                 log(&format!(
                     "站点页面标着审核结论（{}：{why}）；本轮格子是 {}，等回访时再记",
                     mark.label(),
-                    other.label()
+                    CoverageStatus::Seeding.label()
                 ));
             }
             Ok(ReseedOutcome::Posted(reported_url))
+        }
+        // 当前只有 Seeding 会走到这里。以后新增挂回状态必须在这里显式处理，
+        // 不能再用 `Ok(other) => Posted` 把未知结果包成发布成功。
+        Ok(other) => {
+            let why = format!("挂回 qB 返回未预期状态：{}", other.label());
+            log(&format!("发后挂回·{why}"));
+            unresolved_after_site(
+                index,
+                &req.content_key,
+                &req.target_site,
+                "posted_unresolved",
+                Some(reported_url),
+                &why,
+            )
         }
         Err(e) => unresolved_after_site(
             index,
@@ -6362,13 +6402,19 @@ fn run_reseed_inner(
     }
 }
 
-/// 转种动作日志里的 `seeded`：格子的状态是“在做种”之一，或 note 明确写了
-/// 种子已挂回 qB（审核待定/审核不通过但已挂回时，格子状态不是 Reseeded）。
-fn outcome_seeded(status: Option<CoverageStatus>, note: Option<&str>) -> bool {
-    matches!(
-        status,
-        Some(CoverageStatus::Reseeded | CoverageStatus::Assisted | CoverageStatus::Seeding)
-    ) || note.is_some_and(|n| n.contains("已挂回 qB"))
+/// 转种动作日志里的 `seeded`：发布完成，或判重结果明确记了种子已挂回 qB。
+/// 不再看 note 里有没有“已挂回 qB”这类人写的字：`DuplicateOutcome.mounted` 才是事实源。
+fn outcome_seeded(result: &Result<ReseedOutcome>) -> bool {
+    match result {
+        // `Posted` 只在挂回成功后产生（上传后站点种子已加入 qB 并只挂目标站 tracker）。
+        Ok(ReseedOutcome::Posted(_)) => true,
+        // 校验没跑完：种子在 qB 里，但还不能算在做种。
+        Ok(ReseedOutcome::PostedVerifying(_)) => false,
+        Ok(ReseedOutcome::Duplicate(d)) => {
+            d.mounted || matches!(d.status, CoverageStatus::Assisted | CoverageStatus::Seeding)
+        }
+        Err(_) => false,
+    }
 }
 
 /// 转种动作日志（JSONL，fail-open）：GUI/CLI/autopost 每次转种都写一行。
@@ -6409,7 +6455,7 @@ fn append_reseed_log(
         .and_then(|c| serde_json::to_value(c.status).ok())
         .and_then(|v| v.as_str().map(str::to_string))
         .unwrap_or_default();
-    let seeded = outcome_seeded(cell.map(|c| c.status), note.as_deref());
+    let seeded = outcome_seeded(result);
     let line = serde_json::json!({
         "at": now_unix(),
         "started_at": started,
@@ -6483,6 +6529,7 @@ fn unresolved_after_site(
     );
     index.save()?;
     Ok(ReseedOutcome::Duplicate(DuplicateOutcome {
+        mounted: false,
         status: CoverageStatus::ReviewPending,
         url,
         note,
@@ -7108,6 +7155,7 @@ Frame rate : 25</pre>
 
         // 这类结果不是“已跳过”，要留成待跟进：审计词单独一个，周报能数出来
         let outcome = ReseedOutcome::Duplicate(DuplicateOutcome {
+            mounted: false,
             status: CoverageStatus::PendingOffers,
             url: None,
             note: msg,
@@ -9053,20 +9101,43 @@ Language : Chinese"));
     }
 
     #[test]
-    fn seeded_summary_trusts_explicit_mount_note() {
-        assert!(outcome_seeded(Some(CoverageStatus::Reseeded), None));
-        assert!(!outcome_seeded(
-            Some(CoverageStatus::PendingReview),
-            Some("站上已发布，等站点审核；审完前拿不到站点种子，没挂回 qB")
-        ));
-        assert!(outcome_seeded(
-            Some(CoverageStatus::PendingReview),
-            Some("站上已发布，种子已挂回 qB 做种；站点页面还标着“待审核”，等审核结果")
-        ));
-        assert!(outcome_seeded(
-            Some(CoverageStatus::ReviewRejected),
-            Some("站点审核没过：缺少海报；种子已挂回 qB，仍在做种")
-        ));
+    fn seeded_summary_uses_mounted_flag_not_note_text() {
+        fn dup(status: CoverageStatus, note: &str, mounted: bool) -> Result<ReseedOutcome> {
+            Ok(ReseedOutcome::Duplicate(DuplicateOutcome {
+                mounted,
+                status,
+                url: None,
+                note: note.to_string(),
+            }))
+        }
+
+        assert!(outcome_seeded(&Ok(ReseedOutcome::Posted(
+            "https://example.test/details.php?id=1".into()
+        ))));
+        assert!(!outcome_seeded(&Ok(ReseedOutcome::PostedVerifying(
+            "https://example.test/details.php?id=1".into()
+        ))));
+        assert!(!outcome_seeded(&dup(
+            CoverageStatus::PendingReview,
+            "站上已发布，等站点审核；审完前拿不到站点种子，没挂回 qB",
+            false
+        )));
+        assert!(outcome_seeded(&dup(
+            CoverageStatus::PendingReview,
+            "站上已发布，种子已挂回 qB 做种；站点页面还标着“待审核”，等审核结果",
+            true
+        )));
+        assert!(outcome_seeded(&dup(
+            CoverageStatus::ReviewRejected,
+            "站点审核没过：缺少海报；种子已挂回 qB，仍在做种",
+            true
+        )));
+        // note 里写“已挂回 qB”但结构化标记是 false：以标记为准。
+        assert!(!outcome_seeded(&dup(
+            CoverageStatus::PendingReview,
+            "这句话里写了已挂回 qB，但实际没挂回",
+            false
+        )));
     }
 
     #[test]

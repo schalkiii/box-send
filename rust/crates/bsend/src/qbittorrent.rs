@@ -722,20 +722,22 @@ impl QBittorrent {
             let head: String = body.chars().take(200).collect();
             return Err(anyhow!("HTTP {status} POST torrents/add: {head}"));
         }
-        // 5.2+ 成功时返回 JSON（success_count 等），旧版返回 "Ok."
+        // 5.2+ 成功时返回 JSON（success_count 等），旧版返回 "Ok."。
+        // 200 但不是这两种之一（例如隧道返回 HTML 登录页）不能当成功。
         if body.trim() != "Ok." {
-            if let Ok(obj) = serde_json::from_str::<Value>(&body) {
-                let sc = obj
-                    .get("success_count")
-                    .and_then(|v| v.as_i64())
-                    .unwrap_or(1);
-                let fc = obj
-                    .get("failure_count")
-                    .and_then(|v| v.as_i64())
-                    .unwrap_or(0);
-                if sc == 0 && fc > 0 {
-                    return Err(anyhow!("HTTP 200 POST torrents/add: {body}"));
-                }
+            let obj = serde_json::from_str::<Value>(&body).map_err(|e| {
+                let head: String = body.chars().take(200).collect();
+                anyhow!("HTTP 200 POST torrents/add: 回包既不是 Ok. 也不是 JSON（{e}）：{head}")
+            })?;
+            let sc = obj
+                .get("success_count")
+                .and_then(|v| v.as_i64())
+                .ok_or_else(|| {
+                    let head: String = body.chars().take(200).collect();
+                    anyhow!("HTTP 200 POST torrents/add: JSON 里没有 success_count：{head}")
+                })?;
+            if sc == 0 {
+                return Err(anyhow!("HTTP 200 POST torrents/add: {body}"));
             }
         }
         Ok(self.verify(&hash, up_limit, false))
@@ -1253,6 +1255,40 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("success_count"), "{err}");
+    }
+
+    #[test]
+    fn add_missing_count_or_non_json_body_is_an_error() {
+        for (body, expected) in [
+            (r#"{"failure_count":0}"#, "success_count"),
+            ("<html>login</html>", "JSON"),
+        ] {
+            let seen = Arc::new(Mutex::new(Vec::new()));
+            let body = body.to_string();
+            let base = mock_qb(seen, move |_, path| {
+                if path.starts_with("/api/v2/auth/login") {
+                    return (200, "Ok.".into());
+                }
+                if path.starts_with("/api/v2/torrents/add") {
+                    return (200, body.clone());
+                }
+                (404, String::new())
+            });
+            let err = test_client(&base)
+                .add_torrent_new_only(
+                    b"not-a-torrent",
+                    "x.torrent",
+                    "I:/Download",
+                    None,
+                    true,
+                    0,
+                    true,
+                    None,
+                )
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains(expected), "{err}");
+        }
     }
 
     #[test]

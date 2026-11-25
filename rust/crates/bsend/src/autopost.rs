@@ -981,6 +981,7 @@ mod tests {
                           _: Option<reseed::ReviewReport>| {
             called += 1;
             Ok(reseed::ReseedOutcome::Duplicate(reseed::DuplicateOutcome {
+                mounted: false,
                 status: crate::index::CoverageStatus::Assisted,
                 url: None,
                 note: "已覆盖".into(),
@@ -1031,6 +1032,7 @@ mod tests {
                           _: Option<reseed::ReviewReport>| {
             called += 1;
             Ok(reseed::ReseedOutcome::Duplicate(reseed::DuplicateOutcome {
+                mounted: false,
                 status: crate::index::CoverageStatus::Assisted,
                 url: None,
                 note: "已覆盖".into(),
@@ -1068,6 +1070,7 @@ mod tests {
                           _: Option<reseed::ReviewReport>| {
             called += 1;
             Ok(reseed::ReseedOutcome::Duplicate(reseed::DuplicateOutcome {
+                mounted: false,
                 status: crate::index::CoverageStatus::Assisted,
                 url: None,
                 note: "已覆盖".into(),
@@ -1137,6 +1140,7 @@ mod tests {
         use crate::index::CoverageStatus as S;
         let outcome = |st| {
             reseed::ReseedOutcome::Duplicate(reseed::DuplicateOutcome {
+                mounted: false,
                 status: st,
                 url: None,
                 note: "x".into(),
@@ -1149,9 +1153,11 @@ mod tests {
         assert_eq!(outcome(S::PendingOffers).audit_result(), "pending_offers");
         assert_eq!(outcome(S::PendingReview).audit_result(), "pending_review");
         assert_eq!(outcome(S::ReviewRejected).audit_result(), "review_rejected");
+        assert_eq!(outcome(S::GoneFromSite).audit_result(), "gone_from_site");
         assert_eq!(outcome(S::ReviewPending).audit_result(), "existed_pending");
         assert_eq!(outcome(S::Failed).audit_result(), "failed");
         let unresolved = reseed::ReseedOutcome::Duplicate(reseed::DuplicateOutcome {
+            mounted: false,
             status: S::ReviewPending,
             url: None,
             note: "posted_unresolved：回包没给详情页".into(),
@@ -1328,6 +1334,7 @@ mod tests {
                           _: Option<reseed::ReviewReport>| {
             runner_calls += 1;
             Ok(reseed::ReseedOutcome::Duplicate(reseed::DuplicateOutcome {
+                mounted: false,
                 status: CoverageStatus::ReviewPending,
                 url: None,
                 note: "posted_unresolved：站上已发布但没定位到详情".into(),

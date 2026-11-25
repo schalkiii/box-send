@@ -1384,6 +1384,14 @@ fn qb_server_qb5(torrent_hash: String) -> MockServer {
         {
             return (404, "text/plain", Vec::new());
         }
+        // qB 5.2+ 的 add 回包必须是 JSON；空 200 现在会被当成失败（隧道登录页也可能空）。
+        if path.starts_with("/api/v2/torrents/add") {
+            return (
+                200,
+                "application/json",
+                br#"{"success_count":1,"failure_count":0}"#.to_vec(),
+            );
+        }
         (200, "text/plain", Vec::new())
     }))
 }
