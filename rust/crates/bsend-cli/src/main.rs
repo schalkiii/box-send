@@ -2160,4 +2160,118 @@ mod tests {
             serde_json::json!(["404", "剧集"])
         );
     }
+
+    #[test]
+    fn status_defaults_to_boxsend_json_and_no_cookiecloud() {
+        let cli = Cli::try_parse_from(["bsend", "status"]).expect("status 可解析");
+        assert_eq!(cli.config, PathBuf::from("boxsend.json"));
+        assert!(!cli.cookiecloud);
+        assert!(matches!(cli.cmd, Cmd::Status));
+    }
+
+    #[test]
+    fn global_cookiecloud_is_accepted_after_subcommand() {
+        // 文档里的写法是 `bsend status --cookiecloud`；global 参数必须允许放在子命令后面。
+        let cli = Cli::try_parse_from(["bsend", "status", "--cookiecloud"]).expect("global 参数");
+        assert!(cli.cookiecloud);
+        assert!(matches!(cli.cmd, Cmd::Status));
+    }
+
+    #[test]
+    fn report_parses_site_list_and_top() {
+        let cli = Cli::try_parse_from(["bsend", "report", "--top", "3", "--sites", "hdsky,pter"])
+            .expect("report 可解析");
+        match cli.cmd {
+            Cmd::Report { top, sites, json } => {
+                assert_eq!(top, 3);
+                assert_eq!(sites, Some(vec!["hdsky".into(), "pter".into()]));
+                assert!(json.is_none());
+            }
+            _ => panic!("expected report"),
+        }
+    }
+
+    #[test]
+    fn audit_defaults_to_seven_days_and_text_output() {
+        let cli = Cli::try_parse_from(["bsend", "audit"]).expect("audit 可解析");
+        match cli.cmd {
+            Cmd::Audit { days, site, json } => {
+                assert_eq!(days, 7);
+                assert!(site.is_none());
+                assert!(!json);
+            }
+            _ => panic!("expected audit"),
+        }
+    }
+
+    #[test]
+    fn autopost_loop_mode_flag_is_parsed() {
+        let cli = Cli::try_parse_from([
+            "bsend",
+            "autopost",
+            "--loop-mode",
+            "--interval-secs",
+            "5",
+            "--no-reconcile",
+        ])
+        .expect("autopost 可解析");
+        match cli.cmd {
+            Cmd::Autopost {
+                loop_mode,
+                interval_secs,
+                no_reconcile,
+                ..
+            } => {
+                assert!(loop_mode);
+                assert_eq!(interval_secs, 5);
+                assert!(no_reconcile);
+            }
+            _ => panic!("expected autopost"),
+        }
+    }
+
+    #[test]
+    fn commas_handles_zero_negatives_and_max() {
+        assert_eq!(commas(0), "0");
+        assert_eq!(commas(999), "999");
+        assert_eq!(commas(1_000), "1,000");
+        assert_eq!(commas(1_234_567), "1,234,567");
+        assert_eq!(commas(-1_234), "-1,234");
+        assert_eq!(commas(i64::MAX), "9,223,372,036,854,775,807");
+    }
+
+    #[test]
+    fn size_text_switches_units_at_expected_boundaries() {
+        assert_eq!(size_text(0), "0 MB");
+        assert_eq!(size_text(1_048_576), "1 MB");
+        assert_eq!(size_text(1_073_741_824), "1.0 GB");
+        assert_eq!(size_text(1_610_612_736), "1.5 GB");
+    }
+
+    #[test]
+    fn display_width_and_padding_handle_cjk_and_emoji() {
+        assert_eq!(disp_width("abc"), 3);
+        assert_eq!(disp_width("中"), 2);
+        assert_eq!(disp_width("a中b"), 4);
+        assert_eq!(disp_width("😀"), 2);
+        assert_eq!(pad_right("中", 4), "中  ");
+        assert_eq!(pad_left("中", 4), "  中");
+        // 宽度不够时只补空格，不截断内容
+        assert_eq!(pad_right("abcdef", 3), "abcdef");
+    }
+
+    #[test]
+    fn follow_up_item_strips_raw_reply_and_truncates() {
+        let long_name = "A".repeat(60);
+        let item = follow_up_item(
+            &long_name,
+            "hdsky",
+            Some("站点说不行（原始回包：HTTP 500 很长很长的正文）"),
+        );
+        assert!(item.contains("站点说不行"), "{item}");
+        assert!(!item.contains("原始回包"), "{item}");
+        assert!(item.contains('…'), "{item}");
+        assert_eq!(item.chars().filter(|c| *c == 'A').count(), 48);
+        assert_eq!(follow_up_item("短名", "pter", None), "「短名」→ pter");
+    }
 }

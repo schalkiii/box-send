@@ -1672,13 +1672,15 @@ Height : 1080 pixels</pre>
     }))
 }
 
-/// qB mock：本地成员 hash 已完成、可导出源种；目标种 add 后单查直接 100%。
+/// qB mock：本地成员 hash 已完成、可导出源种；目标种 add 后可指定校验进度/状态。
 /// `target_present` 控制目标种是否已在下载器（同 hash 策略用例置 true）。
-fn qb_server_for_reseed(
+fn qb_server_for_reseed_with_progress(
     local_hash: String,
     local_torrent: Vec<u8>,
     target_hash: String,
     target_present: bool,
+    added_progress: f64,
+    added_state: &'static str,
     captured: CapturedRequests,
 ) -> MockServer {
     let local_hash = Arc::new(local_hash);
@@ -1702,7 +1704,7 @@ fn qb_server_for_reseed(
                 if let Some(ref nh) = new_hash {
                     if path.contains(nh.as_str()) {
                         let json = format!(
-                            r#"[{{"hash":"{nh}","progress":1.0,"state":"pausedUP","up_limit":-1,"name":"Pack","save_path":"/data/"}}]"#
+                            r#"[{{"hash":"{nh}","progress":{added_progress},"state":"{added_state}","up_limit":-1,"name":"Pack","save_path":"/data/"}}]"#
                         );
                         return (200, "application/json", json.into_bytes());
                     }
@@ -1761,6 +1763,25 @@ fn qb_server_for_reseed(
         }
         (200, "text/plain", Vec::new())
     }))
+}
+
+/// 默认行为：目标种 add 后单查直接 100%，保持既有用例不变。
+fn qb_server_for_reseed(
+    local_hash: String,
+    local_torrent: Vec<u8>,
+    target_hash: String,
+    target_present: bool,
+    captured: CapturedRequests,
+) -> MockServer {
+    qb_server_for_reseed_with_progress(
+        local_hash,
+        local_torrent,
+        target_hash,
+        target_present,
+        1.0,
+        "pausedUP",
+        captured,
+    )
 }
 
 /// 目标站判重命中（同分片）时，必须下载目标种并推进下载器：
@@ -2174,6 +2195,129 @@ fn e2e_posted_root_rename_is_mounted() {
             .any(|(p, _)| p.contains("torrents/add")),
         "应把目标种推进下载器"
     );
+}
+
+/// 上传成功、种子已加进 qB，但校验没跑完：必须落 `posted_verifying` / `Verifying`，
+/// 不能写“转种完成”，也不能算已做种；下一轮还要能凭 `verify_hash` 收尾。
+#[test]
+fn e2e_unfinished_verification_is_posted_verifying() {
+    let dir = temp_dir("posted-verifying");
+    let t_src = Arc::new(torrent_bytes("Pack", FILES));
+    let t_tgt = Arc::new(torrent_bytes("Pack2", FILES));
+    let local_hash = bencode::info_hash_v1(&t_src).unwrap();
+    let target_hash = bencode::info_hash_v1(&t_tgt).unwrap();
+    let captured: CapturedRequests = Arc::new(Mutex::new(Vec::new()));
+    let uploads: CapturedRequests = Arc::new(Mutex::new(Vec::new()));
+    let qb = qb_server_for_reseed_with_progress(
+        local_hash.clone(),
+        t_src.as_ref().clone(),
+        target_hash.clone(),
+        false,
+        0.42,
+        "checkingUP",
+        captured.clone(),
+    );
+    let src = reseed_site_server(t_src.clone());
+    let tgt = reseed_site_server_upload_result(t_tgt.clone(), uploads.clone(), false, false);
+    let mut cfg = test_config(qb.port, src.port, tgt.port, &dir);
+    cfg.coverage.reseed_publish_enabled = true;
+    cfg.coverage.verify_wait_sec = 0;
+
+    let key = "m:postedverifying000";
+    let src_url = format!("http://127.0.0.1:{}/details.php?id=1002", src.port);
+    let mut index = ContentIndex::load(&cfg.coverage_state_path());
+    index.contents.insert(
+        key.to_string(),
+        ContentEntry {
+            name: NAME.into(),
+            total_size: 105,
+            file_count: FILES.len(),
+            manifest_digest: "0".repeat(16),
+            torrents: std::collections::BTreeMap::from([(
+                local_hash.clone(),
+                TorrentMeta {
+                    save_path: "/data".into(),
+                    category: None,
+                    last_seen: 0,
+                    tracker_hosts: Vec::new(),
+                    hash_v2: None,
+                    added_on: 0,
+                },
+            )]),
+            tracker_hosts: Vec::new(),
+            first_seen: 0,
+            gone_since: None,
+            coverage: std::collections::BTreeMap::from([(
+                "hdsky".to_string(),
+                SiteCoverage {
+                    status: CoverageStatus::ReseedDraft,
+                    at: 0,
+                    url: None,
+                    note: None,
+                    verify_hash: None,
+                },
+            )]),
+            source: Some(SourceRecord {
+                site_id: "pter".into(),
+                detail_url: src_url.clone(),
+                resolved_at: 0,
+                miss_at: None,
+            }),
+            forbid_reseed: false,
+        },
+    );
+    index.save().unwrap();
+
+    let qb_client = QBittorrent::new(&cfg.downloader.url, "admin", "pass").unwrap();
+    let req = ReseedRequest {
+        content_key: key.into(),
+        source_site: "pter".into(),
+        source_url: src_url,
+        target_site: "hdsky".into(),
+        name: NAME.into(),
+    };
+    let mut logs = Vec::new();
+    let outcome = run_reseed(
+        &cfg,
+        &qb_client,
+        &req,
+        &mut index,
+        &mut |l| logs.push(l.to_string()),
+        None,
+    )
+    .unwrap();
+
+    match outcome {
+        ReseedOutcome::PostedVerifying(url) => {
+            assert!(url.contains("details.php?id=1002"), "{url}")
+        }
+        other => panic!("校验没跑完不能报 posted，实际 {other:?}"),
+    }
+    let cell = &index.contents[key].coverage["hdsky"];
+    assert_eq!(cell.status, CoverageStatus::Verifying, "{cell:?}");
+    assert!(cell.verify_hash.as_deref().is_some_and(|h| !h.is_empty()));
+    assert!(
+        logs.iter().any(|l| l.contains("校验还没跑完")),
+        "日志要写清是校验中：{logs:?}"
+    );
+    assert!(
+        captured
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(p, _)| p.contains("torrents/add")),
+        "上传后仍应把目标种推进下载器"
+    );
+
+    let action_log = std::fs::read_to_string(dir.join("reseed-log.jsonl")).unwrap();
+    let line = action_log
+        .lines()
+        .find(|l| l.contains(key))
+        .expect("应有本次动作日志");
+    let v: serde_json::Value = serde_json::from_str(line).unwrap();
+    assert_eq!(v["result"], "posted_verifying");
+    assert_eq!(v["cell_status"], "verifying");
+    assert_eq!(v["seeded"], false, "校验没完不算已做种");
 }
 
 /// 目标站 mock：上传表单 → takeupload 成功并给详情页；详情页可下载目标种。

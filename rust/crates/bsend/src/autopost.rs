@@ -745,6 +745,28 @@ mod tests {
     }
 
     #[test]
+    fn parse_audit_counts_posted_verifying_but_not_pending_review() {
+        let now = 1_800_000_000i64;
+        let text = format!(
+            concat!(
+                "{{\"at\":{},\"site\":\"sbpt\",\"key\":\"m:a\",\"result\":\"posted_verifying\"}}\n",
+                "{{\"at\":{},\"site\":\"sbpt\",\"key\":\"m:b\",\"result\":\"pending_review\"}}\n",
+                "{{\"at\":{},\"site\":\"sbpt\",\"key\":\"m:c\",\"result\":\"posted\"}}\n"
+            ),
+            now - 10,
+            now - 10,
+            now - 10,
+        );
+        let (posted, bad) = parse_audit(&text, now);
+        assert_eq!(
+            posted.get("sbpt").copied().unwrap_or(0),
+            2,
+            "posted_verifying 是真实上传，必须占日限额；pending_review 不占"
+        );
+        assert!(bad.is_empty(), "等审核不能被当成失败冷却");
+    }
+
+    #[test]
     fn parse_audit_day_boundary_is_beijing_midnight() {
         // (t+28800) % 86400 == 0 即北京 00:00（t % 86400 必须是 57600）
         let midnight = 1_800_028_800i64;
@@ -1121,12 +1143,23 @@ mod tests {
             })
         };
         assert_eq!(outcome(S::Assisted).audit_result(), "skipped_duplicate");
+        assert_eq!(outcome(S::Seeding).audit_result(), "skipped_duplicate");
         assert_eq!(outcome(S::OtherVersion).audit_result(), "other_version");
+        assert_eq!(outcome(S::SameHashSkip).audit_result(), "same_hash_skipped");
+        assert_eq!(outcome(S::PendingOffers).audit_result(), "pending_offers");
+        assert_eq!(outcome(S::PendingReview).audit_result(), "pending_review");
+        assert_eq!(outcome(S::ReviewRejected).audit_result(), "review_rejected");
         assert_eq!(outcome(S::ReviewPending).audit_result(), "existed_pending");
+        assert_eq!(outcome(S::Failed).audit_result(), "failed");
+        let unresolved = reseed::ReseedOutcome::Duplicate(reseed::DuplicateOutcome {
+            status: S::ReviewPending,
+            url: None,
+            note: "posted_unresolved：回包没给详情页".into(),
+        });
         assert_eq!(
-            outcome(S::Failed).audit_result(),
-            "failed",
-            "复核失败必须走失败语义（失败冷却 6h），不能记成重复"
+            unresolved.audit_result(),
+            "posted_unresolved",
+            "定位不到新种是待人工，不是发种失败"
         );
         assert_eq!(
             reseed::ReseedOutcome::Posted("u".into()).audit_result(),

@@ -921,6 +921,400 @@ pub fn announce_host_matches(tracker_host: &str, hosts: &[String]) -> bool {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::sync::{Arc, Mutex};
+
+    /// 极简 qB Web API 假服务器：一次只处理一条连接，够这些串行 API 用例用。
+    /// 返回 `(HTTP 状态, 响应正文)`；请求记录放在 `seen` 里供断言。
+    fn mock_qb<F>(seen: Arc<Mutex<Vec<String>>>, handler: F) -> String
+    where
+        F: Fn(&str, &str) -> (u16, String) + Send + Sync + 'static,
+    {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock qb");
+        let addr = listener.local_addr().expect("mock qb addr");
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let Ok(stream) = stream.try_clone() else {
+                    continue;
+                };
+                let _ = handle_mock_connection(stream, &seen, &handler);
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    fn handle_mock_connection<F>(
+        stream: TcpStream,
+        seen: &Arc<Mutex<Vec<String>>>,
+        handler: &F,
+    ) -> std::io::Result<()>
+    where
+        F: Fn(&str, &str) -> (u16, String),
+    {
+        let mut reader = BufReader::new(stream.try_clone()?);
+        let mut request_line = String::new();
+        reader.read_line(&mut request_line)?;
+        let mut method = String::new();
+        let mut path = String::new();
+        let mut parts = request_line.split_whitespace();
+        if let (Some(m), Some(p)) = (parts.next(), parts.next()) {
+            method = m.to_string();
+            path = p.to_string();
+        }
+        let mut content_length = 0usize;
+        loop {
+            let mut line = String::new();
+            reader.read_line(&mut line)?;
+            if line == "\r\n" || line.is_empty() {
+                break;
+            }
+            if let Some((name, value)) = line.split_once(':') {
+                if name.eq_ignore_ascii_case("content-length") {
+                    content_length = value.trim().parse().unwrap_or(0);
+                }
+            }
+        }
+        if content_length > 0 {
+            let mut body = vec![0u8; content_length];
+            reader.read_exact(&mut body)?;
+        }
+        seen.lock().unwrap().push(format!("{method} {path}"));
+        let (status, body) = handler(&method, &path);
+        let reason = match status {
+            200 => "OK",
+            204 => "No Content",
+            400 => "Bad Request",
+            404 => "Not Found",
+            409 => "Conflict",
+            _ => "Internal Server Error",
+        };
+        let mut response = format!(
+            "HTTP/1.1 {status} {reason}\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
+        response.push_str(&body);
+        let mut writer = stream;
+        writer.write_all(response.as_bytes())?;
+        writer.flush()
+    }
+
+    fn test_client(base: &str) -> QBittorrent {
+        QBittorrent::new(base, "admin", "pass").expect("client")
+    }
+
+    fn minimal_torrent() -> Vec<u8> {
+        // 只为拿到非空 info hash；分片内容不参与 add 的 409 判定。
+        b"d4:infod6:lengthi1e4:name4:test12:piece lengthi16384e6:pieces20:aaaaaaaaaaaaaaaaaaaaee"
+            .to_vec()
+    }
+
+    #[test]
+    fn login_accepts_204_and_rejects_wrong_password() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let base = mock_qb(seen.clone(), |_, path| {
+            if path.starts_with("/api/v2/auth/login") {
+                // qB 5.2+：已有会话时回 204，不要求正文是 Ok.
+                (204, String::new())
+            } else {
+                (200, "v5.3.0".into())
+            }
+        });
+        let qb = test_client(&base);
+        let version = qb.test_connection().expect("204 也算登录成功");
+        assert!(version.contains("v5.3.0"), "{version}");
+        assert_eq!(
+            seen.lock()
+                .unwrap()
+                .iter()
+                .filter(|p| p.contains("auth/login"))
+                .count(),
+            1,
+            "登录成功后不应重复登录"
+        );
+
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let base = mock_qb(seen, |_, path| {
+            if path.starts_with("/api/v2/auth/login") {
+                (200, "Fails.".into())
+            } else {
+                (200, "v5.3.0".into())
+            }
+        });
+        let err = test_client(&base)
+            .test_connection()
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("登录失败"), "{err}");
+        assert!(err.contains("HTTP 200"), "{err}");
+    }
+
+    #[test]
+    fn version_accepts_json_and_rejects_empty_body() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let base = mock_qb(seen, |_, path| {
+            if path.starts_with("/api/v2/auth/login") {
+                (200, "Ok.".into())
+            } else if path.starts_with("/api/v2/app/version") {
+                (200, r#"{"version":"v4.6.2"}"#.into())
+            } else {
+                (404, String::new())
+            }
+        });
+        let version = test_client(&base)
+            .test_connection()
+            .expect("JSON 版本可解析");
+        assert!(version.contains("v4.6.2"), "{version}");
+
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let base = mock_qb(seen, |_, path| {
+            if path.starts_with("/api/v2/auth/login") {
+                (200, "Ok.".into())
+            } else {
+                (200, String::new())
+            }
+        });
+        let err = test_client(&base)
+            .test_connection()
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("回包是空的"), "{err}");
+    }
+
+    #[test]
+    fn list_torrents_skips_records_without_hash_and_keeps_rich_fields() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let base = mock_qb(seen, |_, path| {
+            if path.starts_with("/api/v2/auth/login") {
+                return (200, "Ok.".into());
+            }
+            if path.starts_with("/api/v2/torrents/info") {
+                return (
+                    200,
+                    json!([
+                        {
+                            "hash": "ABCDEF",
+                            "name": "Show.S01.1080p",
+                            "save_path": "I:/Download",
+                            "category": "tv",
+                            "tags": "keep, boxsend",
+                            "size": 123456,
+                            "progress": 0.75,
+                            "tracker": "https://tracker.hdsky.me/announce.php?passkey=x",
+                            "added_on": 1700000000
+                        },
+                        {"name": "no-hash-must-be-skipped"},
+                        {"hash": "", "name": "empty-hash-must-be-skipped"}
+                    ])
+                    .to_string(),
+                );
+            }
+            (404, String::new())
+        });
+        let list = test_client(&base).list_torrents().expect("解析清单");
+        assert_eq!(list.len(), 1);
+        let t = &list[0];
+        assert_eq!(t.hash, "abcdef");
+        assert_eq!(t.name, "Show.S01.1080p");
+        assert_eq!(t.total_size, 123456);
+        assert_eq!(t.progress, 0.75);
+        assert_eq!(t.tags, vec!["keep", "boxsend"]);
+        assert_eq!(t.tracker_hosts, vec!["tracker.hdsky.me"]);
+        assert_eq!(t.added_on, 1_700_000_000);
+    }
+
+    #[test]
+    fn files_falls_back_to_hash_and_remembers_the_working_param() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let base = mock_qb(seen.clone(), |_, path| {
+            if path.starts_with("/api/v2/auth/login") {
+                return (200, "Ok.".into());
+            }
+            if path.contains("hashes=") {
+                return (400, String::new());
+            }
+            if path.contains("hash=") {
+                return (
+                    200,
+                    json!([{"name": "Pack/a.mkv", "size": 100}]).to_string(),
+                );
+            }
+            (404, String::new())
+        });
+        let qb = test_client(&base);
+        let first = qb.torrent_files("abc").expect("hash 参数回退");
+        assert_eq!(first, vec![("Pack/a.mkv".to_string(), 100)]);
+        // 第一次先撞 hashes 再试 hash；第二次因为记住了参数，只发一次 hash。
+        let before = seen.lock().unwrap().len();
+        let second = qb.torrent_files("def").expect("复用记住的参数");
+        assert_eq!(second, first);
+        let after = seen.lock().unwrap().len();
+        assert_eq!(after - before, 1, "第二次不应再撞 hashes");
+        assert!(seen.lock().unwrap().last().unwrap().contains("hash=def"));
+    }
+
+    #[test]
+    fn trackers_falls_back_to_infohash_and_filters_non_http_entries() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let base = mock_qb(seen.clone(), |_, path| {
+            if path.starts_with("/api/v2/auth/login") {
+                return (200, "Ok.".into());
+            }
+            if path.contains("/torrents/trackers?hash=") {
+                return (400, String::new());
+            }
+            if path.contains("/torrents/trackers?infohash=") {
+                return (
+                    200,
+                    json!([
+                        {"url": "https://tracker.hdsky.me/announce.php?passkey=x"},
+                        {"url": "http://tracker2.example/announce"},
+                        {"url": "** [DHT] **"},
+                        {"url": "udp://tracker.example:80/announce"}
+                    ])
+                    .to_string(),
+                );
+            }
+            (404, String::new())
+        });
+        let urls = test_client(&base).trackers("abc").expect("infohash 回退");
+        assert_eq!(
+            urls,
+            vec![
+                "https://tracker.hdsky.me/announce.php?passkey=x",
+                "http://tracker2.example/announce"
+            ]
+        );
+        assert!(seen
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|p| p.contains("/torrents/trackers?hash=abc")));
+        assert!(seen
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|p| p.contains("/torrents/trackers?infohash=abc")));
+    }
+
+    #[test]
+    fn add_conflict_marks_already_without_touching_existing_torrent() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let base = mock_qb(seen.clone(), |_, path| {
+            if path.starts_with("/api/v2/auth/login") {
+                return (200, "Ok.".into());
+            }
+            if path.starts_with("/api/v2/torrents/add") {
+                return (409, String::new());
+            }
+            (404, String::new())
+        });
+        let res = test_client(&base)
+            .add_torrent_new_only(
+                &minimal_torrent(),
+                "x.torrent",
+                "I:/Download",
+                None,
+                true,
+                0,
+                true,
+                None,
+            )
+            .expect("409 是已存在，不是失败");
+        assert!(res.already);
+        assert!(!res.id.is_empty());
+        assert!(res.note.contains("同 hash"), "{}", res.note);
+        assert_non_mutating_calls(&seen.lock().unwrap(), "/api/v2/torrents/");
+    }
+
+    #[test]
+    fn add_zero_success_count_is_an_error_not_a_silent_accept() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let base = mock_qb(seen, |_, path| {
+            if path.starts_with("/api/v2/auth/login") {
+                return (200, "Ok.".into());
+            }
+            if path.starts_with("/api/v2/torrents/add") {
+                return (200, r#"{"success_count":0,"failure_count":1}"#.into());
+            }
+            (404, String::new())
+        });
+        let err = test_client(&base)
+            .add_torrent_new_only(
+                b"not-a-torrent",
+                "x.torrent",
+                "I:/Download",
+                None,
+                true,
+                0,
+                true,
+                None,
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("success_count"), "{err}");
+    }
+
+    #[test]
+    fn export_rejects_non_bittorrent_body() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let base = mock_qb(seen, |_, path| {
+            if path.starts_with("/api/v2/auth/login") {
+                return (200, "Ok.".into());
+            }
+            if path.starts_with("/api/v2/torrents/export") {
+                return (200, "this is not a torrent".into());
+            }
+            (404, String::new())
+        });
+        let err = test_client(&base)
+            .export_torrent("abc")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("不是有效 .torrent"), "{err}");
+    }
+
+    #[test]
+    fn stop_falls_back_to_legacy_pause_on_404() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let base = mock_qb(seen.clone(), |_, path| {
+            if path.starts_with("/api/v2/auth/login") {
+                return (200, "Ok.".into());
+            }
+            if path.ends_with("/torrents/stop") {
+                return (404, String::new());
+            }
+            if path.ends_with("/torrents/pause") {
+                return (200, String::new());
+            }
+            (404, String::new())
+        });
+        test_client(&base)
+            .set_paused(&["abc"], true)
+            .expect("旧版 pause 兜底");
+        let log = seen.lock().unwrap();
+        assert!(log.iter().any(|p| p.ends_with("/torrents/stop")));
+        assert!(log.iter().any(|p| p.ends_with("/torrents/pause")));
+    }
+
+    fn assert_non_mutating_calls(log: &[String], prefix: &str) {
+        // 同 hash 已存在时只允许一次 add 探测和读接口；任何删除/改 tracker/改限速都不能出现。
+        let mut add_calls = 0;
+        for call in log {
+            if !call.contains(prefix) {
+                continue;
+            }
+            if call.contains("/add") {
+                add_calls += 1;
+                continue;
+            }
+            assert!(
+                call.contains("/info") || call.contains("/files") || call.contains("/trackers"),
+                "不该出现写接口：{call}"
+            );
+        }
+        assert_eq!(add_calls, 1, "409 只该探测一次 add");
+    }
 
     #[test]
     fn announce_host_matching_ignores_www_and_accepts_site_subdomains() {
