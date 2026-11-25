@@ -18,16 +18,17 @@
 
 | 指标 | 增补前 | 增补后 | 变化 |
 | --- | ---: | ---: | ---: |
-| 源码单测（`bsend` lib） | 356 | 367 | +11 |
-| `coverage_e2e` | 27 | 28 | +1 |
+| 源码单测（`bsend` lib） | 356 | 377 | +21 |
+| `coverage_e2e` | 27 | 29 | +2 |
 | `other_version_e2e` | 2 | 2 | 0 |
 | `skip_keywords_e2e` | 2 | 2 | 0 |
 | `bsend-cli` 单测 | 6 | 16 | +10 |
+| `bsend-cli` 集成冒烟 | 0 | 3 | +3 |
 | `bsend-gui` 单测 | 3 | 3 | 0 |
-| **workspace 合计** | **396** | **418** | **+22** |
+| **workspace 合计** | **396** | **432** | **+36** |
 
-本机实际执行 `cargo test --workspace --exclude bsend-gui`：**415 个通过，0 失败**（不含 GUI 3 个）。  
-`cargo test --workspace` 在本机不绿，原因是 GUI 链接工具链缺失，不是测试断言失败：GNU 缺 `-lktmw32`，MSVC 缺 `link.exe`。因此本报告的“415 通过”是核心库 + CLI + 集成测试的口径，不能冒充完整 workspace。
+本机实际执行 `cargo test --workspace --exclude bsend-gui`：**429 个通过，0 失败**（不含 GUI 3 个）。  
+`cargo test --workspace` 在本机不绿，原因是 GUI 链接工具链缺失，不是测试断言失败：GNU 缺 `-lktmw32`，MSVC 缺 `link.exe`。因此本报告的“429 通过”是核心库 + CLI + 集成测试的口径，不能冒充完整 workspace。
 
 ## 3. 新增用例：目标、输入、检查点
 
@@ -84,7 +85,7 @@
 ```powershell
 # 核心库 + CLI + 集成测试
 cargo test --workspace --exclude bsend-gui
-# 结果：415 passed; 0 failed
+# 结果：429 passed; 0 failed
 
 # 静态检查
 cargo clippy --workspace --all-targets --exclude bsend-gui -- -D warnings
@@ -99,13 +100,14 @@ cargo fmt --all -- --check
 
 | 测试目标 | 通过 |
 | --- | ---: |
-| `bsend` lib | 367 |
-| `coverage_e2e` | 28 |
+| `bsend` lib | 377 |
+| `coverage_e2e` | 29 |
 | `other_version_e2e` | 2 |
 | `skip_keywords_e2e` | 2 |
 | `bsend-cli` | 16 |
+| `bsend-cli` 集成冒烟 | 3 |
 | doc-tests | 0 |
-| **合计（不含 GUI）** | **415** |
+| **合计（不含 GUI）** | **429** |
 
 ### 4.2 本机未通过 / 未测
 
@@ -131,12 +133,13 @@ cargo fmt --all -- --check
 
 | 模块 | 行数 | 之前测试 | 之后测试 | 仍缺什么 |
 | --- | ---: | ---: | ---: | --- |
-| `qbittorrent.rs` | 1,421 | 6 | 16 | `all_tracker_urls`、`torrent_names`、`torrent_content_path`、`set_download_limit`、`remove_torrent`、`torrent_files_many` 的并发/部分失败 |
-| `bsend-cli/src/main.rs` | 2,277 | 6 | 16 | `cmd_status`、`cmd_report`、`cmd_audit`、`cmd_autopost`、`cmd_pull`、`cmd_followup` 的命令处理本身；空索引/坏配置/错误退出码 |
+| `qbittorrent.rs` | 1,421 | 6 | 21 | `torrent_files_many` 的部分失败已覆盖；`all_tracker_urls` 的 50000 条上限告警仍只靠日志目测 |
+| `bsend-cli/src/main.rs` | 2,277 | 6 | 16 | `cmd_status`、`cmd_report`、`cmd_audit`、`cmd_autopost`、`cmd_pull`、`cmd_followup` 的命令处理本身仍缺；集成冒烟只覆盖版本号、缺配置、坏配置三条退出路径 |
+| `bsend-cli` 集成 | — | 0 | 3 | 成功路径（空索引/空审计）还没有稳定配置夹具 |
 | `autopost.rs` | 1,549 | 19 | 20 | `posted_unresolved` 的日限额/审计周报桶已补上；多站点并发限额 |
-| `coverage_e2e.rs` | — | 27 | 28 | `pending_review`、`review_rejected`、`gone_from_site`、`pending_offers` 的完整链路 |
+| `coverage_e2e.rs` | — | 27 | 29 | `review_rejected` 已补；`pending_review` / `gone_from_site` / `pending_offers` 的完整链路仍缺 |
 | `bsend-gui/src/` | 3,282 | 3 | 3 | 12 个文件仍 0 测试；`jobs.rs`、`views/*`、`widgets.rs`、`theme.rs`、`types.rs` 基本没有行为断言 |
-| `kimi.rs` | 203 | 1 | 1 | 桥接协议错误、超时、后台标签页 `visibilityState=hidden` |
+| `kimi.rs` | 203 | 1 | 6 | 桥接错误、非 JSON、返回类型、HTTP 500、人机验证文案、标签复用已覆盖；`prepare_search_page` 的 40 轮等待和后台标签分支仍缺 |
 | `scripts/` | 13 个脚本 | 0 | 0 | 参数解析、坏输入、原子写、dry-run |
 
 ## 6. 测试严谨性说明
@@ -157,7 +160,26 @@ cargo fmt --all -- --check
 6. **qB add 缺 `success_count`**：现在要求 200 回包是 `Ok.` 或带 `success_count` 的 JSON；空正文/HTML/缺字段都报错，并补了两个契约用例。
 7. **`autopost --loop`**：文档已统一成 `--loop-mode`；是否再加 `--loop` 别名仍是产品决定，没有擅自改 CLI。
 
-## 8. 结论
+## 8. 第二批回归（14 个，2026-11-25 后续）
 
-本轮把“上传成功但校验没完”“同 hash 不碰原种”“旧版 qB 参数回退”“409/0 成功/空回包/非 torrent 回包”这些真实踩过的坑补成了回归测试；核心库 + CLI + 集成测试 415 个全绿，静态检查和格式检查通过。GUI 3 个测试和完整 workspace 仍依赖远端 Windows MSVC CI；行覆盖率仍没有数字，下一轮应先解决覆盖率工具链，再谈覆盖率门禁。
+| 模块 | 用例 | 检查点 |
+| --- | --- | --- |
+| qB | `all_tracker_urls_collects_non_empty_trackers` | 过滤空 tracker，路径带 `limit=50000` |
+| qB | `torrent_names_handles_empty_bad_json_and_missing_size` | 空输入不发请求；坏 JSON 返回空；缺 size 记 0 |
+| qB | `torrent_content_path_filters_empty_values` | 正常路径返回；空串返回 None |
+| qB | `set_download_limit_and_remove_torrent_use_expected_endpoints` | 两个写接口路径正确，不碰 add |
+| qB | `torrent_files_many_skips_failures_and_reports_progress` | 失败 hash 不进结果；每条都回调；进度收尾 |
+| Kimi | `command_rejects_bridge_error_and_non_json` | `ok:false` 和坏 JSON 都报明确错误 |
+| Kimi | `evaluate_string_rejects_non_string_value` | 返回类型不是字符串时报错 |
+| Kimi | `fetch_search_html_rejects_non_200_and_captcha_text` | HTTP 500 和人机验证未通过都报错 |
+| Kimi | `fetch_search_html_returns_body_on_success` | 200 时原样返回正文 |
+| Kimi | `active_tab_prefers_same_site_active_tab` | 只复用同站且 active 的标签页 |
+| e2e | `e2e_review_rejected_keeps_mounted_and_records_review` | 审核不通过仍 `seeded=true`，格子 `review_rejected` |
+| CLI 集成 | `version_prints_and_exits_zero` | 版本号输出、退出码 0 |
+| CLI 集成 | `status_with_missing_config_exits_nonzero` | 缺配置非零退出，错误可读 |
+| CLI 集成 | `status_with_bad_config_json_exits_nonzero` | 坏配置非零退出，错误可读 |
+
+## 9. 结论
+
+本轮把“上传成功但校验没完”“同 hash 不碰原种”“旧版 qB 参数回退”“409/0 成功/空回包/非 torrent 回包”这些真实踩过的坑补成了回归测试；陆续补到核心库 + CLI + 集成测试 429 个全绿，静态检查和格式检查通过。GUI 3 个测试和完整 workspace 仍依赖远端 Windows MSVC CI；行覆盖率仍没有数字，下一轮应先解决覆盖率工具链，再谈覆盖率门禁。
 </content>

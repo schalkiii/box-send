@@ -46,7 +46,9 @@ cargo fmt --all -- --check
 ## 3. 现有假服务端
 
 - `coverage_e2e.rs`：假站点提供搜索页、详情页、上传页、`takeupload.php`、下载页；假 qB 提供登录、种子列表、文件清单、tracker、导出和添加。需要指定校验进度时用 `qb_server_for_reseed_with_progress`，默认包装器保持 100%。
-- `qbittorrent.rs` 的 `mock_qb`：只处理单条 HTTP 连接，记录请求方法、路径和表单；用于登录、版本、清单、文件参数回退、trackers 回退、409、空回包、导出和启停。
+- `qbittorrent.rs` 的 `mock_qb`：只处理单条 HTTP 连接，记录请求方法、路径和表单；用于登录、版本、清单、文件参数回退、trackers 回退、409、空回包、导出、启停、tracker 汇总、批量文件清单。
+- `kimi.rs` 的 `mock_bridge`：本地假 WebBridge，按请求体返回 `ok/data` 或坏 JSON；用于桥接错误、返回类型、HTTP 500、人机验证文案和标签复用。
+- `bsend-cli/tests/cli_smoke.rs`：直接启动 `bsend` 二进制，检查版本号、缺配置和坏配置的退出码/错误提示。
 - `other_version_e2e.rs` / `skip_keywords_e2e.rs`：分别验证“同名其他版本照发”和“内容类型黑名单在站点请求前拦掉”。
 
 假服务只监听 `127.0.0.1`，测试结束由进程退出回收；不需要外部端口或账号。
@@ -77,12 +79,11 @@ cargo fmt --all -- --check
 
 ## 6. 当前缺口
 
-- `qbittorrent.rs`：`all_tracker_urls`、`torrent_names`、`torrent_content_path`、`set_download_limit`、`remove_torrent`、`torrent_files_many` 的并发/部分失败。
-- `bsend-cli`：`cmd_status`、`cmd_report`、`cmd_audit`、`cmd_autopost`、`cmd_pull`、`cmd_followup` 的命令处理本身；空索引、坏配置、错误退出码。
+- `qbittorrent.rs`：`all_tracker_urls` 的 50000 条上限告警只靠日志目测；`torrent_files_many` 只测了部分失败，没测并发回调乱序。
+- `bsend-cli`：`cmd_status`、`cmd_report`、`cmd_audit`、`cmd_autopost`、`cmd_pull`、`cmd_followup` 的命令处理本身仍缺；集成冒烟只覆盖版本号、缺配置、坏配置三条退出路径。
 - `bsend-gui`：`jobs.rs`、`views/*`、`widgets.rs`、`theme.rs`、`types.rs` 基本没有行为断言。
-- `kimi.rs`：桥接协议错误、超时、后台标签页 `visibilityState=hidden`。
-- `coverage_e2e.rs`：`pending_review`、`review_rejected`、`gone_from_site`、`pending_offers` 的完整链路。
-- `scripts/`：参数解析、坏输入、原子写、dry-run。
+- `kimi.rs`：`prepare_search_page` 的 40 轮等待、后台标签 `visibilityState=hidden` 分支仍缺。
+- `coverage_e2e.rs`：`pending_review`、`gone_from_site`、`pending_offers` 的完整链路仍缺；`review_rejected` 已补。
+- `scripts/`：参数解析、坏输入、原子写、dry-run；现在只有 `scripts.yml` 的语法门禁。
 
 详细缺口和新增用例记录见 `TEST-REPORT-2026-11-25.md`，审计结论见 `AUDIT-REPORT-2026-11-25.md`。
-</content>

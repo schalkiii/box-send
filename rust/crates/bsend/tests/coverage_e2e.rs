@@ -2121,7 +2121,7 @@ fn e2e_posted_root_rename_is_mounted() {
         captured.clone(),
     );
     let src = reseed_site_server(t_src.clone());
-    let tgt = reseed_site_server_upload_result(t_tgt.clone(), uploads.clone(), false, false);
+    let tgt = reseed_site_server_upload_result(t_tgt.clone(), uploads.clone(), false, false, None);
     let mut cfg = test_config(qb.port, src.port, tgt.port, &dir);
     cfg.coverage.reseed_publish_enabled = true;
 
@@ -2205,6 +2205,140 @@ fn e2e_posted_root_rename_is_mounted() {
     );
 }
 
+/// 上传成功、目标种也挂回 qB 了，但详情页明写“审核不通过”：格子落 `review_rejected`，
+/// 动作日志仍记 `seeded=true`；这条种子还在做种，不能因为审核没过就当没挂回。
+#[test]
+fn e2e_review_rejected_keeps_mounted_and_records_review() {
+    let dir = temp_dir("review-rejected");
+    let t_src = Arc::new(torrent_bytes("Pack", FILES));
+    let t_tgt = Arc::new(torrent_bytes("Pack2", FILES));
+    let local_hash = bencode::info_hash_v1(&t_src).unwrap();
+    let target_hash = bencode::info_hash_v1(&t_tgt).unwrap();
+    let captured: CapturedRequests = Arc::new(Mutex::new(Vec::new()));
+    let uploads: CapturedRequests = Arc::new(Mutex::new(Vec::new()));
+    let qb = qb_server_for_reseed(
+        local_hash.clone(),
+        t_src.as_ref().clone(),
+        target_hash.clone(),
+        false,
+        captured.clone(),
+    );
+    let src = reseed_site_server(t_src.clone());
+    let tgt = reseed_site_server_upload_result(
+        t_tgt.clone(),
+        uploads.clone(),
+        false,
+        true,
+        Some(r#"<span title="审核不通过，原因：缺少海报">审核不通过，原因：缺少海报</span>"#),
+    );
+    let mut cfg = test_config(qb.port, src.port, tgt.port, &dir);
+    cfg.coverage.reseed_publish_enabled = true;
+
+    let key = "m:reviewrejected0000";
+    let src_url = format!("http://127.0.0.1:{}/details.php?id=1002", src.port);
+    let mut index = ContentIndex::load(&cfg.coverage_state_path());
+    index.contents.insert(
+        key.to_string(),
+        ContentEntry {
+            name: NAME.into(),
+            total_size: 105,
+            file_count: FILES.len(),
+            manifest_digest: "0".repeat(16),
+            torrents: std::collections::BTreeMap::from([(
+                local_hash.clone(),
+                TorrentMeta {
+                    save_path: "/data".into(),
+                    category: None,
+                    last_seen: 0,
+                    tracker_hosts: Vec::new(),
+                    hash_v2: None,
+                    added_on: 0,
+                },
+            )]),
+            tracker_hosts: Vec::new(),
+            first_seen: 0,
+            gone_since: None,
+            coverage: std::collections::BTreeMap::from([(
+                "hdsky".to_string(),
+                SiteCoverage {
+                    status: CoverageStatus::ReseedDraft,
+                    at: 0,
+                    url: None,
+                    note: None,
+                    verify_hash: None,
+                },
+            )]),
+            source: Some(SourceRecord {
+                site_id: "pter".into(),
+                detail_url: src_url.clone(),
+                resolved_at: 0,
+                miss_at: None,
+            }),
+            forbid_reseed: false,
+        },
+    );
+    index.save().unwrap();
+
+    let qb_client = QBittorrent::new(&cfg.downloader.url, "admin", "pass").unwrap();
+    let req = ReseedRequest {
+        content_key: key.into(),
+        source_site: "pter".into(),
+        source_url: src_url,
+        target_site: "hdsky".into(),
+        name: NAME.into(),
+    };
+    let mut logs = Vec::new();
+    let outcome = run_reseed(
+        &cfg,
+        &qb_client,
+        &req,
+        &mut index,
+        &mut |l| logs.push(l.to_string()),
+        None,
+    )
+    .unwrap();
+
+    let ReseedOutcome::Duplicate(d) = &outcome else {
+        panic!("审核不通过应返回 Duplicate，实际 {outcome:?}");
+    };
+    assert_eq!(d.status, CoverageStatus::ReviewRejected);
+    assert!(d.mounted, "种子已挂回 qB，mounted 必须为 true");
+    assert_eq!(outcome.audit_result(), "review_rejected");
+    assert!(d.note.contains("缺少海报"), "{}", d.note);
+    let cell = &index.contents[key].coverage["hdsky"];
+    assert_eq!(cell.status, CoverageStatus::ReviewRejected);
+    assert!(
+        cell.note
+            .as_deref()
+            .is_some_and(|n| n.contains("种子已挂回 qB")),
+        "{}",
+        cell.note.clone().unwrap_or_default()
+    );
+
+    let action_log = std::fs::read_to_string(dir.join("reseed-log.jsonl")).unwrap();
+    assert!(
+        action_log.contains("\"result\":\"review_rejected\""),
+        "{action_log}"
+    );
+    assert!(
+        action_log.contains("\"seeded\":true"),
+        "审核不通过但已挂回 qB，seeded 不能写 false：{action_log}"
+    );
+    assert!(
+        logs.iter()
+            .any(|l| l.contains("种子已挂回 qB") || l.contains("审核没过")),
+        "{logs:?}"
+    );
+    assert!(
+        captured
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(p, _)| p.contains("torrents/add")),
+        "目标种应已推进下载器"
+    );
+}
+
 /// 上传成功、种子已加进 qB，但校验没跑完：必须落 `posted_verifying` / `Verifying`，
 /// 不能写“转种完成”，也不能算已做种；下一轮还要能凭 `verify_hash` 收尾。
 #[test]
@@ -2226,7 +2360,7 @@ fn e2e_unfinished_verification_is_posted_verifying() {
         captured.clone(),
     );
     let src = reseed_site_server(t_src.clone());
-    let tgt = reseed_site_server_upload_result(t_tgt.clone(), uploads.clone(), false, false);
+    let tgt = reseed_site_server_upload_result(t_tgt.clone(), uploads.clone(), false, false, None);
     let mut cfg = test_config(qb.port, src.port, tgt.port, &dir);
     cfg.coverage.reseed_publish_enabled = true;
     cfg.coverage.verify_wait_sec = 0;
@@ -2336,6 +2470,7 @@ fn reseed_site_server_upload_result(
     uploads: CapturedRequests,
     reject: bool,
     serve_uploaded: bool,
+    review: Option<&'static str>,
 ) -> MockServer {
     let uploaded: Arc<std::sync::Mutex<Option<Vec<u8>>>> = Arc::new(std::sync::Mutex::new(None));
     let uploaded_for_upload = uploaded.clone();
@@ -2384,8 +2519,10 @@ fn reseed_site_server_upload_result(
             return (200, "application/x-bittorrent", picked);
         }
         if path.starts_with("/details.php") {
+            let review = review.unwrap_or("");
             let html = format!(
                 r#"<html><body><h1 id="top">{NAME}</h1>
+{review}
 <div id="kdescr">简介 https://www.imdb.com/title/tt1234567/</div>
 <a href="download.php?id=1002">下载种子</a></body></html>"#
             );
@@ -2412,7 +2549,7 @@ fn e2e_posted_inner_file_mismatch_marks_unresolved_not_failed() {
         captured.clone(),
     );
     let src = reseed_site_server(t_src.clone());
-    let tgt = reseed_site_server_upload_result(t_tgt.clone(), uploads.clone(), false, false);
+    let tgt = reseed_site_server_upload_result(t_tgt.clone(), uploads.clone(), false, false, None);
     let mut cfg = test_config(qb.port, src.port, tgt.port, &dir);
     cfg.coverage.reseed_publish_enabled = true;
 
@@ -2513,7 +2650,7 @@ fn e2e_reviewed_release_reuses_fields_without_refetching() {
         adds.clone(),
     );
     let src = reseed_site_server(t_src.clone());
-    let tgt = reseed_site_server_upload_result(t_tgt.clone(), uploads.clone(), false, true);
+    let tgt = reseed_site_server_upload_result(t_tgt.clone(), uploads.clone(), false, true, None);
     let mut cfg = test_config(qb.port, src.port, tgt.port, &dir);
     cfg.coverage.reseed_publish_enabled = true;
 
@@ -2655,7 +2792,7 @@ fn e2e_site_rejected_upload_marks_failed_and_skips_downloader() {
         adds.clone(),
     );
     let src = reseed_site_server(t_src.clone());
-    let tgt = reseed_site_server_upload_result(t_tgt.clone(), uploads.clone(), true, true);
+    let tgt = reseed_site_server_upload_result(t_tgt.clone(), uploads.clone(), true, true, None);
     let mut cfg = test_config(qb.port, src.port, tgt.port, &dir);
     cfg.coverage.reseed_publish_enabled = true;
 

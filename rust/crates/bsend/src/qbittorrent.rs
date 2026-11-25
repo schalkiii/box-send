@@ -1333,6 +1333,155 @@ mod tests {
         assert!(log.iter().any(|p| p.ends_with("/torrents/pause")));
     }
 
+    #[test]
+    fn all_tracker_urls_collects_non_empty_trackers() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let base = mock_qb(seen.clone(), |_, path| {
+            if path.starts_with("/api/v2/auth/login") {
+                return (200, "Ok.".into());
+            }
+            if path.starts_with("/api/v2/torrents/info") {
+                return (
+                    200,
+                    json!([
+                        {"hash": "a", "tracker": "https://a.example/announce"},
+                        {"hash": "b", "tracker": ""},
+                        {"hash": "c"},
+                        {"hash": "d", "tracker": "https://d.example/announce"}
+                    ])
+                    .to_string(),
+                );
+            }
+            (404, String::new())
+        });
+        let urls = test_client(&base).all_tracker_urls().expect("读 tracker");
+        assert_eq!(
+            urls,
+            vec![
+                "https://a.example/announce".to_string(),
+                "https://d.example/announce".to_string()
+            ]
+        );
+        assert!(seen
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|p| p.contains("/torrents/info?limit=50000")));
+    }
+
+    #[test]
+    fn torrent_names_handles_empty_bad_json_and_missing_size() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let base = mock_qb(seen.clone(), |_, path| {
+            if path.starts_with("/api/v2/auth/login") {
+                return (200, "Ok.".into());
+            }
+            if path.starts_with("/api/v2/torrents/info") {
+                return (
+                    200,
+                    json!([
+                        {"hash": "a", "name": "Pack", "size": 100},
+                        {"hash": "b", "name": "NoSize"},
+                        {"hash": "c", "size": 50}
+                    ])
+                    .to_string(),
+                );
+            }
+            (404, String::new())
+        });
+        let qb = test_client(&base);
+        assert!(qb.torrent_names(&[]).is_empty(), "空输入不该发请求");
+        assert!(seen.lock().unwrap().is_empty(), "空输入却发了请求");
+        let names = qb.torrent_names(&["a".into(), "b".into()]);
+        assert_eq!(names.len(), 2);
+        assert_eq!(names[0], ("Pack".into(), 100));
+        assert_eq!(names[1], ("NoSize".into(), 0));
+
+        let bad = mock_qb(Arc::new(Mutex::new(Vec::new())), |_, path| {
+            if path.starts_with("/api/v2/auth/login") {
+                return (200, "Ok.".into());
+            }
+            (200, "not-json".into())
+        });
+        assert!(
+            test_client(&bad).torrent_names(&["a".into()]).is_empty(),
+            "坏 JSON 只返回空表，不 panic"
+        );
+    }
+
+    #[test]
+    fn torrent_content_path_filters_empty_values() {
+        let good = mock_qb(Arc::new(Mutex::new(Vec::new())), |_, path| {
+            if path.starts_with("/api/v2/auth/login") {
+                return (200, "Ok.".into());
+            }
+            (
+                200,
+                json!([{"hash":"a","content_path":"/downloads/Pack"}]).to_string(),
+            )
+        });
+        assert_eq!(
+            test_client(&good).torrent_content_path("a").as_deref(),
+            Some("/downloads/Pack")
+        );
+
+        let empty = mock_qb(Arc::new(Mutex::new(Vec::new())), |_, path| {
+            if path.starts_with("/api/v2/auth/login") {
+                return (200, "Ok.".into());
+            }
+            (200, json!([{"hash":"a","content_path":""}]).to_string())
+        });
+        assert_eq!(test_client(&empty).torrent_content_path("a"), None);
+    }
+
+    #[test]
+    fn set_download_limit_and_remove_torrent_use_expected_endpoints() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let base = mock_qb(seen.clone(), |_, path| {
+            if path.starts_with("/api/v2/auth/login") {
+                return (200, "Ok.".into());
+            }
+            (200, "Ok.".into())
+        });
+        let qb = test_client(&base);
+        qb.set_download_limit("abc", 1024).expect("限速接口");
+        qb.remove_torrent("abc", true).expect("删除接口");
+        let log = seen.lock().unwrap();
+        assert!(log
+            .iter()
+            .any(|p| p.ends_with("/torrents/setDownloadLimit")));
+        assert!(log.iter().any(|p| p.ends_with("/torrents/delete")));
+        assert!(!log.iter().any(|p| p.contains("/torrents/add")));
+    }
+
+    #[test]
+    fn torrent_files_many_skips_failures_and_reports_progress() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let base = mock_qb(seen, |_, path| {
+            if path.starts_with("/api/v2/auth/login") {
+                return (200, "Ok.".into());
+            }
+            if path.starts_with("/api/v2/torrents/files") {
+                if path.contains("h1") || path.contains("h3") {
+                    return (200, r#"[{"name":"Pack/a.mkv","size":10}]"#.into());
+                }
+                return (400, String::new());
+            }
+            (404, String::new())
+        });
+        let hashes = vec!["h1".to_string(), "h2".to_string(), "h3".to_string()];
+        let mut progress = Vec::new();
+        let files = test_client(&base).torrent_files_many(&hashes, 2, |done, total, ok| {
+            progress.push((done, total, ok))
+        });
+        assert_eq!(files.len(), 2, "失败的 h2 不能进结果");
+        assert_eq!(files["h1"], vec![("Pack/a.mkv".into(), 10)]);
+        assert_eq!(files["h3"], vec![("Pack/a.mkv".into(), 10)]);
+        assert_eq!(progress.len(), 3, "每条都要回调一次");
+        assert_eq!(progress.iter().filter(|p| !p.2).count(), 1);
+        assert_eq!(progress.last().map(|p| (p.0, p.1)), Some((3, 3)));
+    }
+
     fn assert_non_mutating_calls(log: &[String], prefix: &str) {
         // 同 hash 已存在时只允许一次 add 探测和读接口；任何删除/改 tracker/改限速都不能出现。
         let mut add_calls = 0;

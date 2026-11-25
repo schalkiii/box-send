@@ -193,11 +193,167 @@ impl KimiBrowser {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::net::TcpListener;
+
+    /// 极简 Kimi WebBridge 假服务：读一次请求体，按 handler 返回 JSON 正文。
+    fn mock_bridge<F>(handler: F) -> String
+    where
+        F: Fn(&str) -> String + Send + 'static,
+    {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock bridge");
+        let addr = listener.local_addr().expect("mock bridge addr");
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+                let mut request_line = String::new();
+                if reader.read_line(&mut request_line).is_err() {
+                    continue;
+                }
+                let mut content_length = 0usize;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).is_err() {
+                        break;
+                    }
+                    if line == "\r\n" || line.is_empty() {
+                        break;
+                    }
+                    if let Some((name, value)) = line.split_once(':') {
+                        if name.eq_ignore_ascii_case("content-length") {
+                            content_length = value.trim().parse().unwrap_or(0);
+                        }
+                    }
+                }
+                let mut body = vec![0u8; content_length];
+                let _ = reader.read_exact(&mut body);
+                let request = String::from_utf8_lossy(&body).to_string();
+                let response = handler(&request);
+                let out = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{}",
+                    response.len(),
+                    response
+                );
+                let mut stream = stream;
+                let _ = stream.write_all(out.as_bytes());
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    fn browser_at(endpoint: &str) -> KimiBrowser {
+        let mut b = KimiBrowser::new("bsend-test").unwrap();
+        b.endpoint = endpoint.to_string();
+        b
+    }
 
     #[test]
     fn browser_session_name_is_stable() {
         let b = KimiBrowser::new("bsend-audiences").unwrap();
         assert_eq!(b.session, "bsend-audiences");
         assert!(b.endpoint.starts_with("http://127.0.0.1:"));
+    }
+
+    #[test]
+    fn command_rejects_bridge_error_and_non_json() {
+        let fail = mock_bridge(|_| r#"{"ok":false,"error":"bridge says no"}"#.into());
+        let err = browser_at(&fail)
+            .evaluate_string("x")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("bridge says no"), "{err}");
+
+        let bad = mock_bridge(|_| "not-json".into());
+        let err = browser_at(&bad)
+            .evaluate_string("x")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("不是 JSON"), "{err}");
+    }
+
+    #[test]
+    fn evaluate_string_rejects_non_string_value() {
+        let endpoint = mock_bridge(|_| json!({"ok": true, "data": {"value": 123}}).to_string());
+        let err = browser_at(&endpoint)
+            .evaluate_string("x")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("类型异常"), "{err}");
+    }
+
+    #[test]
+    fn fetch_search_html_rejects_non_200_and_captcha_text() {
+        let status = mock_bridge(|_| {
+            json!({
+                "ok": true,
+                "data": {"value": json!({
+                    "status": 500,
+                    "url": "https://audiences.example/search",
+                    "html": "<p>bad</p>"
+                }).to_string()}
+            })
+            .to_string()
+        });
+        let err = browser_at(&status)
+            .fetch_search_html("https://audiences.example/search")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("HTTP 500"), "{err}");
+
+        let captcha = mock_bridge(|_| {
+            json!({
+                "ok": true,
+                "data": {"value": json!({
+                    "status": 200,
+                    "url": "https://audiences.example/search",
+                    "html": "搜索人机验证未通过"
+                }).to_string()}
+            })
+            .to_string()
+        });
+        let err = browser_at(&captcha)
+            .fetch_search_html("https://audiences.example/search")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("人机验证仍未通过"), "{err}");
+    }
+
+    #[test]
+    fn active_tab_prefers_same_site_active_tab() {
+        let endpoint = mock_bridge(|_| {
+            json!({
+                "ok": true,
+                "data": {"tabs": [
+                    {"active": false, "url": "https://audiences.example/torrents.php"},
+                    {"active": true, "url": "https://other.example/x"},
+                    {"active": true, "url": "https://audiences.example/torrents.php"}
+                ]}
+            })
+            .to_string()
+        });
+        assert_eq!(
+            browser_at(&endpoint).active_tab_for("https://audiences.example"),
+            Some("https://audiences.example/torrents.php".into())
+        );
+    }
+
+    #[test]
+    fn fetch_search_html_returns_body_on_success() {
+        let endpoint = mock_bridge(|_| {
+            json!({
+                "ok": true,
+                "data": {"value": json!({
+                    "status": 200,
+                    "url": "https://audiences.example/search",
+                    "html": "<table>hit</table>"
+                }).to_string()}
+            })
+            .to_string()
+        });
+        let html = browser_at(&endpoint)
+            .fetch_search_html("https://audiences.example/search")
+            .expect("200 要返回正文");
+        assert_eq!(html, "<table>hit</table>");
     }
 }
