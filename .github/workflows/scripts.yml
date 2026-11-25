@@ -1,0 +1,24 @@
+name: scripts
+
+# 维护脚本的语法门禁：不跑真实站点/qB，只保证 shell 和 Python 至少能解析。
+# 行为测试仍缺（审计 E8），这里先把“改坏成语法错误”挡住。
+on:
+  push:
+    paths: ["scripts/**", ".github/workflows/scripts.yml"]
+  pull_request:
+    paths: ["scripts/**", ".github/workflows/scripts.yml"]
+
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: shell 语法（bash -n）
+        run: |
+          for f in scripts/*.sh; do
+            echo "检查 $f"
+            bash -n "$f"
+          done
+      - name: Python 语法（py_compile）
+        run: |
+          python3 -m py_compile scripts/*.py

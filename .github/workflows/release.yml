@@ -1,20 +1,16 @@
 # 出包流水线：macOS 的 dmg 与 Windows 的 Setup.exe，同一套版本号（只改 Version.swift）
 # 包名都带软件名与版本号：BoxSend-<版本>-macos.dmg / BoxSend-<版本>-Setup.exe
 #
-#   推 tag（仓库现在的 tag 形如 1.1）→ 两个平台的包直接挂到 GitHub Release
-#   Actions 页面手动运行              → 只构建并留 artifact，不发版
-#   提 PR                            → 测试 + 打包
-#   推 main/master                   → Windows 出包；macOS 跳过（arm64 runner 排队不可控）
-#
-# Windows 那侧需要 Swift 工具链：runner 没预装，只能直连下载官方安装器
-# （地址格式取自 swift.org/install/windows，目录名是 windows10、Windows 只有 .exe，没有 zip）。
-# 换版本改下面 env 里的 SWIFT_WINDOWS；直连地址不对就把它填进 SWIFT_WINDOWS_URL。
+#   推旧版 tag（形如 1.1，不带 v）→ 两个平台的包直接挂到 GitHub Release
+#   Rust 版 tag（v*）             → 交给 rust-release.yml，这里不重复出包
+#   Actions 页面手动运行          → 只构建并留 artifact，不发版
+#   提 PR                        → 测试 + 打包
+#   推 main/master               → 不再自动打包（Swift/.NET 是遗留产物，避免每次提交都跑）
 name: 打包
 
 on:
   push:
-    branches: [main, master]
-    tags: ['*']
+    tags: ['*', '!v*']
   pull_request:
   workflow_dispatch:
     inputs:
