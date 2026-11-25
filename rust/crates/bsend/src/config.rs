@@ -36,6 +36,12 @@ pub struct SiteConf {
     /// 该站完整 tracker 地址（含个人 passkey）。第一次在该站发种前必须配置：
     /// 此时 qB 里还没有任何该站种子，无法从现有 tracker 里采集 passkey。
     pub announce_url: Option<String>,
+    /// 上传页把海报放在独立字段时，字段名（如 ptlgs 的 `cover`）。
+    /// 不是所有站都把图片放进简介，独立字段要从简介图片里抽一张填过去。
+    pub poster_field: Option<String>,
+    /// 上传页把截图放在独立字段时，字段名（如 ptlgs 的 `screenshots`）。
+    /// 提交值一行一个 URL，不能只靠简介里的图。
+    pub screenshot_field: Option<String>,
 }
 
 impl SiteConf {
@@ -183,7 +189,7 @@ impl Default for CoverageSettings {
 
 impl CoverageSettings {
     /// 取某站生效的发种规则。图数门槛不读配置：要图的站按 `gates::image_floor`
-    /// 硬编码（至少 3 张，熊猫 4 张），别处配了 `requireImages` 也以这里为准。
+    /// 硬编码（至少 3 张；熊猫、ptlgs 4 张），别处配了 `requireImages` 也以这里为准。
     pub fn rules_for(&self, site: &str) -> crate::gates::SiteRules {
         let mut rules = self.reseed_rules.get(site).cloned().unwrap_or_default();
         rules.require_images = crate::gates::image_floor(site);
@@ -495,9 +501,19 @@ impl Config {
                 .get("overrides")
                 .and_then(|o| v_str(o, "announceURL"))
                 .filter(|u| !u.is_empty());
+            let poster_field = s
+                .get("overrides")
+                .and_then(|o| v_str(o, "posterField"))
+                .filter(|v| !v.is_empty());
+            let screenshot_field = s
+                .get("overrides")
+                .and_then(|o| v_str(o, "screenshotField"))
+                .filter(|v| !v.is_empty());
             sites.push(SiteConf {
                 announce_hosts,
                 announce_url,
+                poster_field,
+                screenshot_field,
                 id,
                 name: v_str(s, "name").unwrap_or_default(),
                 url,
@@ -666,7 +682,8 @@ mod tests {
       "dataDir": "/tmp/bsend-data",
       "sourceSites": [
         {"id": "hdsky", "name": "天空", "url": "https://hdsky.me/", "framework": "NexusPHP", "enabled": true,
-         "overrides": {"searchURL": "torrents.php?search={name}&search_area=0"}},
+         "overrides": {"searchURL": "torrents.php?search={name}&search_area=0",
+                       "posterField": "url_poster", "screenshotField": "url_vimages"}},
         {"id": "pter", "name": "猫", "url": "https://pterclub.net/", "framework": "NexusPHP", "enabled": true},
         {"id": "mteam", "name": "馒头", "url": "https://kp.m-team.cc/", "framework": "Unit3D", "enabled": true},
         {"id": "hdfans", "name": "红豆饭", "url": "http://hdfans.org/", "framework": "NexusPHP", "enabled": false}
@@ -718,6 +735,11 @@ mod tests {
         assert_eq!(
             cfg.sites[0].search_url.as_deref(),
             Some("torrents.php?search={name}&search_area=0")
+        );
+        assert_eq!(cfg.sites[0].poster_field.as_deref(), Some("url_poster"));
+        assert_eq!(
+            cfg.sites[0].screenshot_field.as_deref(),
+            Some("url_vimages")
         );
         // 下载器解析到 assistDownloaderID 指的那台
         assert_eq!(cfg.downloader.url, "http://vps:8080");
@@ -975,7 +997,7 @@ mod tests {
 
     #[test]
     fn image_floor_is_hardcoded_and_config_cannot_override() {
-        // 2026-11-24：要图的站至少 3 张，改成代码硬规则；配置里写多少都不算。
+        // 2026-11-24：要图的站至少 3 张，改成代码硬规则；配置里写多少都不算。2026-11-25 加 ptlgs 4 张。
         let mut settings = crate::config::CoverageSettings::default();
         assert_eq!(settings.rules_for("qilin").require_images, Some(3));
         assert_eq!(settings.rules_for("ubits").require_images, Some(3));
@@ -983,6 +1005,8 @@ mod tests {
         assert_eq!(settings.rules_for("cangbao").require_images, Some(3));
         // 熊猫站规明说 4 张，保留更严的门槛
         assert_eq!(settings.rules_for("panda").require_images, Some(4));
+        // ptlgs 要求 1 张海报 + 至少 3 张截图，总图数按 4 张
+        assert_eq!(settings.rules_for("ptlgs").require_images, Some(4));
         // 不要求图的站没有这道门禁
         assert_eq!(settings.rules_for("sbpt").require_images, None);
 

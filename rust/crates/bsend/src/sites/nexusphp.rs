@@ -43,6 +43,10 @@ pub struct NexusPhp {
     pub announce_hosts: Vec<String>,
     /// 该站完整 announce 地址（含 passkey）。第一次发种时使用；为空则从 qB 现有 tracker 取。
     pub announce_url: Option<String>,
+    /// 上传页的海报字段名（如 `cover`）；为空表示简介里的图就是全部。
+    pub poster_field: Option<String>,
+    /// 上传页的截图字段名（如 `screenshots`）；提交时一行一个 URL。
+    pub screenshot_field: Option<String>,
     pub user_agent: String,
     client: Client,
 }
@@ -156,6 +160,8 @@ impl NexusPhp {
             base,
             announce_hosts,
             announce_url: None,
+            poster_field: None,
+            screenshot_field: None,
             search_url_tmpl: search_url_tmpl
                 .filter(|s| !s.is_empty())
                 .map(|s| s.to_string()),
@@ -169,6 +175,18 @@ impl NexusPhp {
     /// 否则无法构造只带目标站 tracker 的上传种子。
     pub fn with_announce_url(mut self, url: Option<String>) -> Self {
         self.announce_url = url.filter(|u| !u.trim().is_empty());
+        self
+    }
+
+    /// 设置上传页的独立图片字段。只在页面确实有该字段时提交，避免把配置里的旧字段名
+    /// 强行塞进新版表单。
+    pub fn with_image_fields(
+        mut self,
+        poster_field: Option<String>,
+        screenshot_field: Option<String>,
+    ) -> Self {
+        self.poster_field = poster_field.filter(|v| !v.trim().is_empty());
+        self.screenshot_field = screenshot_field.filter(|v| !v.trim().is_empty());
         self
     }
 

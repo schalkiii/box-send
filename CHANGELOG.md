@@ -7,6 +7,7 @@
 
 ### Changed
 
+- 挂回校验不再要求 `info hash` 或标题与上传构造一致：只核对 pieces 指纹和文件清单（比较时忽略首段根目录名），对得上就挂回；站点改写 hash/标题时白名单只用于日志标注“已实测改写”，不再参与放行或拦截。pieces 或文件清单对不上仍拒绝挂回。
 - 发布标题按站点规范重排：完结剧集去掉 `Complete`，技术参数固定“分辨率 → 帧率/HDR → 片源 → 地区 → 视频编码 → 位深 → 音频 → 音频细节 → 压制组”；带 `USA`、`MA`、`5.1` 的标题不再被塞到音频后面。站点改写标题时也按同一顺序生成。
 - 4K 60fps 选档不再留空：`standard_sel` 同时有 `2160p/4K` 和 `2160p/4K 60Fps` 时，标题写 60fps 就选 60Fps 档，没写就选普通档（NovaHD 实测）。
 - 新增覆盖状态 `pending_offers`（待走候选入口）与审计词 `pending_offers`：站点要求改走候选页（`offers.php`）时不再落 `skipped`，也不当失败反复重试；`bsend status` 单列“待跟进（等站点侧动作，程序不自动重试）”，`bsend audit` 合计带“待走候选”。
@@ -18,12 +19,14 @@
 - GUI 覆盖概览的状态图例补齐：“等走候选”“等站点审核”“审核没过”“站上已没有”各用自己的颜色和名字，不再落进“已跳过”的兜底；图例改为穷举全部状态，以后新增状态编译会报错。
 - **audiences 判重改走 Kimi WebBridge**：`NexusPhp` 对 audiences 不再用无头 HTTP 检索，改在用户已登录的真实浏览器里先打开种子列表页、等 Cloudflare Turnstile token，再同源 `fetch` 搜索 URL；token 未就绪时明确报“需要人工完成一次人机验证”，不把验证页当“站内没有”。2026-11-25 实测补上后台标签页诊断：`visibilityState=hidden` 时 Turnstile 不生成 iframe，程序单独报“标签页在后台”，提示切到前台后重试。
 - **源站简介没有图时自动补图**：新增 `scripts/seed-images.py`，用本机 ffmpeg 从视频抽帧，也可按豆瓣条目自动取海报（`--douban`）或传海报 URL，上传到 pixhost/imgbox，写入 `screenshot-overrides.json`；发布时程序自动把这些图追加到简介。波洛候选 carpt 532 已补 3 张，tey 预检从“0 图”变为“3 张 ≥ 3”；tey 仍未上传，是站点 `medium_sel` 没有 Bluray 选项，不是图床。
-- **图片门禁改成代码硬规则**：剪死图不再读配置，所有站点上传前无条件逐图探测、剪掉死图；要图的站至少 3 张（`gates::image_floor`：藏宝阁/优堡/太乙/麒麟 3 张、熊猫 4 张），配置里的 `pruneDeadImages` / `requireImages` 已删除、写了也会被覆盖。
+- **图片门禁改成代码硬规则**：剪死图不再读配置，所有站点上传前无条件逐图探测、剪掉死图；要图的站有硬性最低图数（`gates::image_floor`：藏宝阁/优堡/太乙/麒麟 3 张，熊猫 4 张，ptlgs 4 张 = 1 张海报 + 3 张截图），配置里的 `pruneDeadImages` / `requireImages` 已删除、写了也会被覆盖。
 - **上传成功就立刻挂回 qB 改成硬步骤**：上传后立即下载站点 `.torrent`、核对分片并加入 qB；站点刚建种时的 `torrent not registered` 固定重试 4 轮、每轮 15 秒，仍拿不到才落待人工。所有站点、所有发种入口都走这条，没有配置开关。
 - **熊猫暂停发种**：`panda` 从 `assist.autoReseedSites` 摘掉并列入 `assist.reseedPausedSites`；站上 141276 是候选种子 24 小时没做种被系统删的，重发需先“上传→立刻挂回 qB 做种”。
 - 2026-11-24 晚把《伪装者》同一内容的另外四站简介死图换掉：crabpt 240242、hdfans 287791、qingwa 208575、luckpt 61102 的 9 张 `i13.tietuku.com` 全部换成 imgbox，复查 0 张旧图 / 9 张新图；sbpt 21684 本来没有图片，不需要换。
 
 ### Added
+
+- 上传页独立海报/截图字段：`sourceSites[].overrides.posterField` / `screenshotField` 指定字段名后，程序从最终简介（剪死图、转 BBCode 之后）按出现顺序抽图，第一张填海报，其余一行一个填截图；表单没有该字段不硬塞，简介没图时清空，避免提交死链。ptlgs 的 `cover` / `screenshots` 是首个实测站，总图数按 4 张进 `image_floor`；2026-11-25 真发《苦月亮》`115350`，详情页海报和截图区块都有图，qB 校验 100%。
 
 - `scripts/edit-seed.py --clear-technical-info`：清空 `technical_info` 字段，配合 `--descr-file` 处理不收 MediaInfo 的站点（财神 260049/260050 实测）。
 - `scripts/seed-images.py`：源站简介没有图时，按内容键从本地视频抽帧（默认 3 张，可多条视频各取一帧），可选 `--douban` 自动取豆瓣条目海报或 `--poster-url` 传图，上传 pixhost/imgbox 后写 `screenshot-overrides.json`；发布时自动追加进简介。

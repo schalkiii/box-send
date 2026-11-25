@@ -388,6 +388,8 @@ fn test_config(
                 api_key: None,
                 announce_hosts: vec!["127.0.0.1".into()],
                 announce_url: Some(format!("http://127.0.0.1:{src_port}/announce?passkey=test")),
+                poster_field: None,
+                screenshot_field: None,
             },
             SiteConf {
                 id: "hdsky".into(),
@@ -398,6 +400,8 @@ fn test_config(
                 api_key: None,
                 announce_hosts: vec!["localhost".into()],
                 announce_url: Some(format!("http://localhost:{tgt_port}/announce?passkey=test")),
+                poster_field: None,
+                screenshot_field: None,
             },
         ],
         coverage: CoverageSettings {

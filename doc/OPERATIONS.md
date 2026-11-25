@@ -291,9 +291,10 @@ NexusPHP 的简介框是 BBCode 编辑器。源站简介里的 `<fieldset>`、`<
 站点审核会逐张打开简介图片。图片 418/HTML、TLS 失败、域名失效都算死图；只在浏览器里能看不算通过。发种前按下面执行：
 
 - **剪死图：所有站点无条件执行**（2026-11-24 起，代码硬规则，不再读 `assist.pruneDeadImages`）。带目标站上传页 Referer 逐张 GET，非 2xx 或非图片类型剪掉；豆瓣图床裸请求 418，带 Referer 才出图，所以 Referer 必须带。
-- **要图的站至少 3 张**：`gates::image_floor` 按站点硬编码——藏宝阁、优堡、太乙、麒麟 3 张；熊猫高清 4 张（站规更严）。配置里写 `requireImages` 会被覆盖，不用再配。
+- **要图的站有硬性最低图数**：`gates::image_floor` 按站点硬编码——藏宝阁、优堡、太乙、麒麟 3 张；熊猫高清 4 张（站规更严）；ptlgs 4 张（1 张海报 + 3 张截图）。配置里写 `requireImages` 会被覆盖，不用再配。
 - `descrOrder`：按标记检查段落顺序，缺段或倒置都拦；只对配置了的站点生效。
 - `titleNoCjk`：主标题含汉字直接拦，中文名放副标题。
+- **独立海报/截图字段**：上传页把海报、截图单列时，在 `sourceSites[].overrides` 写 `posterField` / `screenshotField`（ptlgs 是 `cover` / `screenshots`）。程序从最终简介按顺序抽图：第一张填海报，其余一行一个填截图；字段不存在不硬塞，简介没图时清空。
 
 藏宝阁 43994 的两张图（豆瓣海报、`imgs.loukky.com` 截图）都不可达；用 `scripts/imgbox-upload.py` 重传后换成 `images4.imgbox.com` 直链，带 Referer 实测 200。熊猫 141276 原来没有海报/截图，重写简介时补了 1 张海报 + 3 张截图，顺序按站点要求。死图不要靠关门禁绕过；先重传，再改简介。
 

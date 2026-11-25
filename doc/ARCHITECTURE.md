@@ -105,7 +105,7 @@ qB 没有 tracker，也不等于站上一定没发过。可能是站上已经有
 
 `info.source` 是种子信息块里的来源标记，PT 站通常用它区分不同站的同内容种子。写入目标站的值以后，新种子的 info hash 会和源种子不同，qB 才能把两份种子同时挂住。
 
-少数站点在 `takeupload.php` 阶段会自己改写种子元信息（1ptba 已逐字节确认是把 `info.source` 写成 `[1ptba.com] 1PTBA.COM`；cspt、dubhe、ptsbao、crabpt、hdbao、tey、oshen、ptfans、itzmx、railgun、lemonhd 实测也出现 hash 差异，pieces 和 `info.name` 未变，但具体改写字段没有逐字节核对），此时站上返回的 hash 和本地构造的 hash 必然不同。程序默认仍要求 hash 相等；只有实测确认的站点白名单、且 pieces 与 `info.name` 都一致时才放行，并在日志里写明原因。
+少数站点在 `takeupload.php` 阶段会自己改写种子元信息（1ptba 已逐字节确认是把 `info.source` 写成 `[1ptba.com] 1PTBA.COM`；cspt、dubhe、ptsbao、crabpt、hdbao、tey、oshen、ptfans、itzmx、railgun、lemonhd 实测也出现 hash 差异，pieces 和 `info.name` 未变，但具体改写字段没有逐字节核对），此时站上返回的 hash 和本地构造的 hash 必然不同。挂回时不要求 hash 相等，只核对两件事：pieces 指纹一致、文件清单一致（比较时忽略首段根目录名）；标题不一致也放行，因为站点会按自己的规范改 `info.name`。`allows_target_hash_rewrite` 白名单只用于日志标注“该站已实测改写”，不是放行条件；pieces 或文件清单对不上就拒绝挂回，宁可落人工。
 
 个别站另有上传文件本身的大小上限。`itzmx` 的 `takeupload.php` 只收不超过 `266,240 bytes` 的 `.torrent`，大合集/大剧包会在上传后被业务错误框拒绝；给这类站选种时先看源种导出的 `.torrent` 大小，不要只看内容体积。
 
@@ -145,11 +145,13 @@ qB 没有 tracker，也不等于站上一定没发过。可能是站上已经有
 | 规则 | 作用 |
 | --- | --- |
 | 剪死图（无条件） | 每个站、每次提交前逐张 GET 简介图片，非 2xx/非图片类型就剪掉（带目标站上传页 Referer） |
-| 要图站至少 3 张 | `gates::image_floor` 按站点硬编码：藏宝阁/优堡/太乙/麒麟 3 张，熊猫 4 张；死图被剪掉后数量不够就拦 |
+| 要图站最低图数 | `gates::image_floor` 按站点硬编码：藏宝阁/优堡/太乙/麒麟 3 张，熊猫 4 张，ptlgs 4 张（1 张海报 + 3 张截图）；死图被剪掉后数量不够就拦 |
 
 站点规范里仍按站配 `titleNoCjk`（主标题出现汉字即拦）、`descrOrder`（按给定标题标记检查顺序）、`requireLinks` / `requireMediainfo`。熊猫高清配 `titleNoCjk=true`，图数由硬规则给 4 张，并要求 `【转载出处】→【制作说明】→【海报】→【简介】→【info】→【截图】`；配置文件里的 `requireImages` 一律被覆盖。图片全部失效时不要绕过门禁，先把原图/海报/截图重传到可用图床，再改简介。
 
 图床选择：`imgbox.com` 匿名可用、无需 API key、单图 10MB，实测带藏宝阁/熊猫 Referer 都是 `200 image/jpeg`。仓库脚本 `scripts/imgbox-upload.py` 负责批量上传并输出原图直链；`scripts/edit-seed.py` 负责只改已发布种子的标题/简介，不动种子文件。imgbox 不承诺永久，重要图仍应自建或另存。
+
+**独立海报/截图字段（2026-11-25 起）**：有些站的上传页把海报、截图放在独立字段（例如 ptlgs 的 `cover` / `screenshots`；其它站按上传页真实字段名配置）。配置写在 `sourceSites[].overrides.posterField` / `screenshotField`，`reseed::fill_image_fields` 从**最终简介**（剪死图、转 BBCode 之后）按出现顺序抽图：第一张填海报，其余一行一个填截图；页面没有这个字段就不硬塞，简介没图时把字段清掉，避免提交死链。独立字段不替代简介本身，简介仍要保留完整图文。ptlgs 站规是“海报 + 至少 3 张截图”，所以总图数按 4 张计入 `gates::image_floor`。
 
 `scripts/edit-seed.py` 默认只读演练，`--apply` 才 POST；除指定字段外其余表单原样回填，避免误改分类/媒介/标签。编辑已发布种子后，站点会重新进审核队列，是否通过以站点状态为准。
 

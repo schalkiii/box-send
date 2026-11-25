@@ -747,6 +747,8 @@ mod tests {
             api_key: None,
             announce_hosts: vec![format!("{id}.example")],
             announce_url: None,
+            poster_field: None,
+            screenshot_field: None,
         }
     }
 

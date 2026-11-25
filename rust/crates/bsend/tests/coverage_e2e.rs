@@ -410,6 +410,8 @@ fn test_config(qb_port: u16, pter_port: u16, hdsky_port: u16, dir: &std::path::P
                 announce_url: Some(format!(
                     "http://127.0.0.1:{pter_port}/announce?passkey=test"
                 )),
+                poster_field: None,
+                screenshot_field: None,
             },
             SiteConf {
                 id: "hdsky".into(),
@@ -422,6 +424,8 @@ fn test_config(qb_port: u16, pter_port: u16, hdsky_port: u16, dir: &std::path::P
                 announce_url: Some(format!(
                     "http://localhost:{hdsky_port}/announce?passkey=test"
                 )),
+                poster_field: None,
+                screenshot_field: None,
             },
         ],
         coverage: CoverageSettings {

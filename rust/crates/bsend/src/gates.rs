@@ -96,9 +96,10 @@ impl SiteRules {
 /// 要图的站点最低图数：硬规则，不读配置。
 /// 这些站的审核会逐张看图，少于门槛必被退回；`At least 3` 是 2026-11-24 定下的底线。
 /// 熊猫高清站规另外明说“4 张图 + 段序”，比底线更严，保留 4，免得按 3 张发又被退。
+/// ptlgs 上传页要求独立 `cover` 海报 + 至少 3 张 `screenshots`，所以按 4 张算总图数。
 pub fn image_floor(site_id: &str) -> Option<usize> {
     match site_id {
-        "panda" => Some(4),
+        "panda" | "ptlgs" => Some(4),
         "cangbao" | "ubits" | "tey" | "qilin" => Some(3),
         _ => None,
     }

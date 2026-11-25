@@ -73,7 +73,7 @@
 - 站点审核的结论已由回访落进覆盖记录（2026-11-24 晚，`bsend followup --all` 限定五站实跑，14 条详情页全部打开、0 条打不开）：藏宝阁 43994 详情页审核图标已标“通过”，审核已过，格子仍是 `reseeded`，不用动；tey 623 仍标 `title="未审"` → `pending_review`；麒麟 479362 横幅仍写“审核不通过，原因：缺少海报或截图（图片少于 2 张）” → `review_rejected`；熊猫 141276 详情页报“没有该ID的种子” → `gone_from_site`，重提的那版没留在站上，qB 里那条还挂着 tracker。之后不用人工盯：自动发种每轮开头会回访（已用 `autopost --limit 0` 实跑验证，看了 3 条、没发任何东西），审完自动挂回。
 - **图片类的审核退回已处理（2026-11-24 深夜）**：ubits 379266 站内信判“海报与截图均无法访问”，简介 9 张图全是已失效的 `i13.tietuku.com`；同一条内容的 tey 623 带着同样的死图、只是还在“未审”；麒麟 479362 判“缺少海报或截图”，实际 7 张图全不可达（豆瓣海报防盗链 418 + `img.pterclub.com` TLS 失败）。三条都已换成 imgbox 新图并提交（ubits 1 海报 + 8 截图、tey 同一条 9 张、麒麟 1 海报 + 6 截图），详情页复查旧图站点 0 处、imgbox 张数对上；ubits/麒麟页面仍挂着“不通过”，站点没有用户侧重提入口，等管理复审，程序不重发、不私信。覆盖记录对应用 `scripts/set-cell-note.py` 写明了“已换图、等复审、别重发”，回访继续盯。
 - 死图重传现在是半自动流水：`scripts/fetch-descr.py`（取原简介）→ 本地备图（海报带豆瓣 Referer、截图用 cv2 从正片抓）→ `scripts/imgbox-upload.py`（传图拿直链）→ `scripts/swap-descr-images.py`（按出现顺序 1:1 换链接，BBCode/HTML 都支持）→ `scripts/edit-seed.py`（演练后提交）；发布前门禁会先剪死图/拦残图。尚未接成发布前自动重传（要能自动找海报才行）。
-- **图门禁改成代码硬规则（2026-11-24 晚）**：剪死图不再读配置，所有站点上传前无条件逐图探测、剪掉死图；要图的站至少 3 张（`gates::image_floor`：藏宝阁/优堡/太乙/麒麟 3 张、熊猫 4 张），配置里写 `requireImages` 也会被覆盖。真实配置里的 `pruneDeadImages` / `requireImages` 键已删。单测改成验证硬编码与配置不可覆盖。
+- **图门禁改成代码硬规则（2026-11-24 晚）**：剪死图不再读配置，所有站点上传前无条件逐图探测、剪掉死图；要图的站有硬性最低图数（`gates::image_floor`：藏宝阁/优堡/太乙/麒麟 3 张，熊猫 4 张，2026-11-25 新增 ptlgs 4 张 = 1 张海报 + 3 张截图），配置里写 `requireImages` 也会被覆盖。真实配置里的 `pruneDeadImages` / `requireImages` 键已删。单测改成验证硬编码与配置不可覆盖。
 - **熊猫 141276 查清（2026-11-24）**：《星球大战9：天行者崛起》UHD BluRay 1080p 单文件 11.56G（https://pandapt.net/details.php?id=141276 ）。站内信两条：第一次被 NoCaps 判主标题含中文、简介顺序不合规；重提的那版被系统当“候选种子”，24 小时内没做种自动删除——不是审核不过被删。qB 里那条还挂着（tracker 报 `torrent not registered`）。**2026-11-24 晚已暂停熊猫发种**：从 `autoReseedSites` 摘掉、列入 `reseedPausedSites`，避免频繁提交引起管理员反感；以后要重发必须先做到“上传 → 立刻挂回 qB 做种”。
 - **上传后立刻挂回改成硬步骤（2026-11-24 晚）**：上传成功后立即下载站点 `.torrent` / 核对分片 / 挂进 qB，站点刚建种时常见的 `torrent not registered` 固定重试 4 轮、每轮 15 秒，仍失败才落待人工；这条没有配置开关，适用于所有站点。
 
@@ -83,7 +83,7 @@
 
 ## 4. 还没做的
 
-### 4.1 发布前再确认一次（代码已接，e2e 已覆盖，真实命中样本待跑）
+### 4.1 发布前再确认一次（已完成 2026-11-25）
 
 真要发某一条之前，程序的 `reseed.rs` 第 2.5 步会先查一次目标站：
 
@@ -92,7 +92,7 @@
 - 查到站上已有，不重复上传，改为下载目标种子挂回 qB；
 - 搜索本身失败（网络、登录、限流）就中止这条，按失败冷却设置决定要不要下一轮再试，不盲发。
 
-`e2e_duplicate_hit_pushes_target_torrent_to_downloader` 已经覆盖“命中后下载目标种、pieces 比对、挂回 qB”这条路径。真实站点这边还没碰到一次完全相同的命中样本：本轮 ptba/cspt/dubhe 都是“站上已有其他版本”或“没有同条目”，走的是继续上传分支。下一步找一个目标站已有同条目的种子，跑一次只读判重确认，不再重复上传。
+`e2e_duplicate_hit_pushes_target_torrent_to_downloader` 已经覆盖“命中后下载目标种、pieces 比对、挂回 qB”这条路径。2026-11-25 真实命中已出现：sbpt 七条经 `existed` 路径处理，其中 21764 先被旧同 hash 判断误记、后按 qB progress/tracker 复核为做种，其余下载目标种并校验 pieces 后挂回；详情页作者都是本站账号 `Schalkiiii`，不是别人发的可辅种（见 `SITES.md` 2.5.1）。这条“真实命中样本待跑”可以勾掉。
 
 ### 4.2 上传额度按结果分开算（已完成 2026-11-23）
 
@@ -107,7 +107,7 @@
 - 上传回包里的详情页 id 不可信，已经出过“站上已发、本地判失败”。
 - 发后定位缺陷已修（2026-11-23）：`extract_posted_links` 不再取第一条链接，而是按 id 配对详情/下载；最终跳转是详情页时优先用它；多个链接对不上时两个都不用，转 `posted_unresolved`；`userdetails.php` 不再被当成种子详情。无链接时再按名称 + 总大小检索，避免同名不同版本抓错。
 - 挂回前校验已补（2026-11-23）：新发种下载回来的 `.torrent` 默认必须与上传构造的新 hash 相同，pieces 必须与本地源种一致，否则拒绝挂回；下载/挂回失败不再记失败，落 `posted_unresolved`，判重路径落 `existed_unresolved`。
-- 站点改写种子元信息的例外（2026-11-23）：ptba、cspt、dubhe、ptsbao、crabpt、hdbao、tey、oshen、ptfans、itzmx、railgun、lemonhd 实机确认站上 hash 与构造 hash 不同，pieces 和 `info.name` 一致；十二站加入白名单后自动放行，其他站仍严格拒绝。ptba 已确认被改写的是 `info.source`，其余站的具体改写字段未逐字节核对。2026-11-24 又加入 pthome、nanyang、ubits（同样是站上 hash ≠ 构造 hash、pieces 一致），现在共十五站；白名单只影响原始上传后的自动挂回，补挂命令不设期望 hash，不受它限制。
+- 站点改写种子元信息的例外（2026-11-23）：ptba、cspt、dubhe、ptsbao、crabpt、hdbao、tey、oshen、ptfans、itzmx、railgun、lemonhd 实机确认站上 hash 与构造 hash 不同，pieces 和 `info.name` 一致；当时按白名单放行。2026-11-24 又加入 pthome、nanyang、ubits。**现行放行条件已改成 pieces + 文件清单一致，不再要求 hash 或标题相等，也不再看白名单**；白名单只用于日志标注“已实测改写”，补挂命令不设期望 hash。
 - announce 别名已补（2026-11-23）：baozi、novahd、xingyunge、ptlgs、pthome、agsvpt、cspt、tey 加了站点别名，`www.` 与裸域也归一化；cspt 的 `tracker.cspt.cc`、tey 的 `tracker.tey.cc` 都是“页面域和 tracker 域后缀不同”的例子，tey 不补别名会被误判成 qB 覆盖 0。2026-11-24 又补了 qingwa 的 `tracker.qingwapt.org`。
 - 详情页大小解析纠偏（2026-11-24）：`4e3a8b1` 为了补 0.01 显示余量，把大小解析放宽成“任意位置的数字都试”，又留着缺单位按 B 算的旧逻辑，结果“上传于 2026.11.23”“做种 12”这类计数被当成字节数；标准 NexusPHP 的大小又和类型、媒介挤在同一格（超过 40 字）根本取不到。两条路都指向同一个后果：发后定位、源站检索把正确候选判成“大小不符”跳过。现在只认“数字 + 显式单位”，优先取以“大小 / Size”开头的单元格，再退回“整格只有一个带单位大小”的短单元格，MediaInfo、文件列表、页眉账户统计都跳过；取不到就不参与大小比对。用 `Tests/BoxSendTests/Fixtures/` 里 7 张真实详情页做了断言。
 - 详情页标题比对前先裁掉站点角标（2026-11-24）：`[免费] 剩余时间：23时59分钟` 这类后缀不是标题正文，不裁会把真重复判成“标题不符”。同日又修了裁的位置：原来按内置角标表的顺序裁，`X [2X] [Free]` 会留下 `X [2X]`；现在裁在标题里最早出现的那个角标上。
@@ -148,6 +148,8 @@ reseed/coverage_io.rs  覆盖记录读写
 
 ### 5.1 站点适配
 
+- **ptlgs**：上传页把海报、截图放在独立字段 `cover` / `screenshots`，页面写明“至少需要 3 张原始截图”。2026-11-25 查看已发布 `115117`、`115313`，详情页 `ktorrentcover` 是 `<img src=''/>`、简介 0 张图，说明旧版 Rust 没填独立字段；已补 `posterField` / `screenshotField`，从最终简介按顺序抽图填字段，并把 ptlgs 最低总图数设为 4 张（1 海报 + 3 截图）。2026-11-25 用《苦月亮》真发一条 `115350`（https://ptlgs.org/details.php?id=115350 ）验证：详情页 `ktorrentcover` 有海报、`ktorrentscreenshots` 有 3 张截图，qB 校验 100%，站点标“未审”；这条是有图源的真实样本，不是只跑单测。
+- **sbpt**：2026-11-25 核实 21764、21767、21768、21780、21782、21783、21784 七条详情页作者都是本站账号 `Schalkiiii`。`existed=1` 只证明同 `info hash` 判重，不能说明是谁先发；21764 曾被旧同 hash 判断误记，后按 qB tracker/progress 复核为做种，其余已下载目标种、校验 pieces 后挂回。Aquarela、The Intern 仍缺“中字”标签，需人工补。
 - **hdvideo**：必填项已补（`region_sel[4]=2`、`style_sel[4][]=6`），站上已发布 78856；发后定位取错旧种 14469（缺陷已修）。2026-11-23 已手工补挂 78856，qB hash `dd7f6097…` 校验 100%。
 - **luckpt**：截图和 BDRip 选档还没完全过。豆瓣图床防盗链补 `Referer` 已解决；`img.pterclub.com` 在本机 TLS 连不上，截图数量仍不足。BDRip 的媒介档已确认是 `Encode(7)`。
 - **qingwa**：未覆盖的是成人合集和多片合集，属于内容黑名单范围，不是适配器故障。

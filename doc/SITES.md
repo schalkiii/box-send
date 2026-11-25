@@ -1,6 +1,6 @@
 # 站点清单与现状
 
-这张表回答四个问题：配置里有哪些站、哪些参与自动发种、哪些站卡住了、卡在什么地方。它不回答“某个站已经覆盖了多少内容”，那要看 `bsend status`。适配方法和单站排查过程见 `SITE-DEBUG.md`，发种规则见 `ARCHITECTURE.md`。
+这张表回答四个问题：配置里有哪些站、哪些参与自动发种、哪些站卡住了、卡在什么地方。它不回答“某个站已经覆盖了多少内容”，那要看 `bsend status`。逐站适配经验和门禁总表见 2.5，单站排查过程见 `SITE-DEBUG.md`，发种流程见 `ARCHITECTURE.md`。
 
 ## 1. 当前范围
 
@@ -24,7 +24,7 @@ xingyunge
 
 ## 2. 2026-11-22 夜间接入的 12 个站
 
-“发布并挂回成功”要同时满足三件事：详情页标题和本地一致、上传者是 `Schalkiii`、qB 里带 `Boxsend` 标签的种子进度到 100%。
+“发布并挂回成功”要同时满足三件事：详情页标题和本地一致、上传者是本站自己的账号（sbpt 实测为 `Schalkiiii`）、qB 里带 `Boxsend` 标签的种子进度到 100%。
 
 | 站点 | 结论 | 实测结果 | 详情页 / 新种 hash | 备注 |
 | --- | --- | --- | --- | --- |
@@ -32,7 +32,7 @@ xingyunge
 | kufei | 可发 | 已发布，五项发布检查全过 | https://kufei.org/details.php?id=141933 ｜ `266fbb06…` | 没有独立的 MediaInfo/IMDb 字段，内容并入简介 |
 | longpt | 可发 | 已发布，五项发布检查全过 | https://longpt.org/details.php?id=51065 ｜ `91882f95…` | 第一次抓到的表单是 `bonusrain.php`，提交地址已修 |
 | tangpt | 可发 | 已发布，五项发布检查全过 | https://www.tangpt.top/details.php?id=72943 ｜ `2c7da189…` | 第一次抓到的是搜索表单；TLS 需要跳过校验 |
-| ptlgs | 可发 | 已发布，五组下拉全填 | https://ptlgs.org/details.php?id=115117 ｜ `aa85a3ad…` | 硬性要求海报、至少 3 张截图、MediaInfo；没有 DDP/E-AC3 |
+| ptlgs | 可发 | 已发布，五组下拉全填 | https://ptlgs.org/details.php?id=115117 ｜ `aa85a3ad…` | 硬性要求海报、至少 3 张截图（总图 ≥4）、MediaInfo；没有 DDP/E-AC3 |
 | dragonhd | 可发 | 已发布并挂回 | https://www.dragonhd.xyz/details.php?id=48745 ｜ `bac2dd51…` | 中字、国语、HDR10 标签要人工补 |
 | hdtime | 可发 | 已发布并挂回 | https://hdtime.org/details.php?id=238600 ｜ `77b02a63…` | 上传表单里没有分辨率下拉 |
 | hdvideo | 已补挂 | 必填项修好后发布成功，新种 78856（11.56 GB） | https://hdvideo.top/details.php?id=78856 ｜ qB hash `dd7f6097…` | 必填的地区 `region_sel[4]=2`、题材 `style_sel[4][]=6` 已补；发后定位取错旧种 id（缺陷已修）。2026-11-23 已从详情页下载目标种补挂，qB 校验 100%、tracker 正常 |
@@ -45,7 +45,7 @@ xingyunge
 
 ### 2.1 2026-11-23 新实发的 10 个站
 
-这十站都是第一次向目标站上传，发布后站上 hash 和本地构造的 hash 不同；ptba 已确认是 `info.source` 被站点改写，cspt/dubhe/ptsbao/crabpt/hdbao/tey/oshen/ptfans/itzmx 的分片和标题未变但具体改写字段没有逐字节核对。程序按“该站白名单 + pieces 一致 + `info.name` 一致”放行，现场补挂成功。
+这十站都是第一次向目标站上传，发布后站上 hash 和本地构造的 hash 不同；ptba 已确认是 `info.source` 被站点改写，cspt/dubhe/ptsbao/crabpt/hdbao/tey/oshen/ptfans/itzmx 的分片和标题未变但具体改写字段没有逐字节核对。当时程序按“该站白名单 + pieces 一致 + `info.name` 一致”放行，现场补挂成功；现行规则已改为只核对 pieces + 文件清单，白名单不再参与放行。
 
 | 站点 | 结论 | 实测结果 | 详情页 / 新种 hash | 备注 |
 | --- | --- | --- | --- | --- |
@@ -99,6 +99,7 @@ xingyunge
 | ptfans | 2 条已发布 | https://ptfans.cc/details.php?id=11125 | 知否、人民的名义 |
 | pthome | 1 条已发布 + 1 条已存在补挂 | https://www.pthome.net/details.php?id=284810 | 金枝欲孽 78566 已补挂 |
 | ptlgs | 2 条，等审核 | https://ptlgs.org/details.php?id=115313 | 伪装者、Coraline |
+| ptlgs（独立图字段复测） | 1 条，等审核 | https://ptlgs.org/details.php?id=115350 | 《苦月亮》Bitter Moon；`cover` / `screenshots` 已填，详情页 `ktorrentcover` 有海报、`ktorrentscreenshots` 有 3 张截图，qB 校验 100%；站点仍标“未审” |
 | ptsbao | 2 条已发布 | https://ptsbao.club/details.php?id=135824 | 广告狂人、伪装者 |
 | shuioudao | 2 条，1 条补图后复审 | https://sewerpt.com/details.php?id=72463 | 波洛补 4 张 imgbox |
 | tangpt | 2 条，等审核 | https://www.tangpt.top/details.php?id=73679 | 波洛、广告狂人 |
@@ -121,7 +122,7 @@ xingyunge
 | cspt | 2 条已发布，补清 MediaInfo | https://cspt.top/details.php?id=260050 | 站点不收 MediaInfo 和图片外 URL 标签，已清 `technical_info` |
 | luckpt | 6 条已做种 | https://pt.luckpt.de/details.php?id=61704 | A Touch of Zen 61704、绿里奇迹 61705、The Intern 61706、Black 61707 已审核结束、qB progress=1、只挂 luckpt tracker；波洛 61665、广告狂人 61666 已做种；伪装者 61102 已补 MediaInfo |
 | hdfans | 已做种 | http://hdfans.org/details.php?id=287874 | 同 `info hash` 原种已挂目标站 tracker；qB progress=1、tracker 只有 `hdfans.org`。`info hash` `d8c48453…`，pieces 指纹 `7fcdb513…`。Liar Game；历史 `same_hash_skip` 只表示当时没 add 第二条，判断是否做种必须查 qB tracker |
-| sbpt | 同 hash / existed 补挂 | https://sbpt.link/details.php?id=21767 | 广告狂人 21767、A Touch of Zen 21768、知否 21764 已做种；绿里奇迹 21780、Aquarela 21782、我们的父辈 21783、The Intern 21784 是 existed 补挂，qB 校验 100%；Aquarela、The Intern 缺“中字”标签需手动补 |
+| sbpt | 七条都是本站账号的条目 | https://sbpt.link/details.php?id=21767 | 广告狂人 21767、A Touch of Zen 21768、知否 21764 已做种；绿里奇迹 21780、Aquarela 21782、我们的父辈 21783、The Intern 21784 已校验 100%。详情页作者均为 `Schalkiiii`，不是别人发的可辅种；七条链接和判断见 2.5.1。Aquarela、The Intern 缺“中字”标签需手动补 |
 | cyanbug | 判重复核超时 | https://cyanbug.net/details.php?id=32829 | 未上传；不盲目重发 |
 | ubits | 上传被图床黑名单拦下 | https://ubits.club/details.php?id=379266 | 简介含 imgbox，站点要求换 pixhost 等图床 |
 | qilin | 审核未过，简介已转 BBCode | https://www.hdkyl.in/details.php?id=479362 | 等站点重审 |
@@ -129,6 +130,101 @@ xingyunge
 | tjupt | 294GB 大合集超时，未重发 | https://www.tjupt.org/details.php?id=236519 | 站点同名旧种不是我们的 |
 | itzmx | 大种 403 / 超 266,240 字节 | https://pt.itzmx.com/details.php?id=13134 | 换小种再试 |
 | audiences | 判重已接 Kimi WebBridge；当前卡在验证框不渲染 | — | 2026-11-25 重试：Kimi 能选中已打开的 audiences 标签页，但浏览器把页面判为 `visibilityState=hidden`（窗口最小化或不在前台），Turnstile 一直不生成 iframe、token 为空；显式 `turnstile.render` 也没有 token。同源 `fetch` 搜索仍返回“搜索人机验证未通过”。需要把该标签页切到前台、让页面可见后再试；程序明确报“标签页在后台”，不把验证页当站内没有，也不盲发 |
+
+### 2.5 逐站适配经验与门禁（40 个自动发种站）
+
+2026-11-25 汇总。先说清三层，不要把“代码能拦”“配置要填”“站点就是不给”混成一件事。
+
+**全站硬规则（代码写死，不读配置）**
+
+- 一份种子只带一个站的 tracker；上传前必须有该站完整 passkey 地址；上传后立刻从站点下载种子、核对分片、挂回 qB。
+- 简介里的图片逐张探测，打不开的当场剪掉；不是“配了才剪”。
+- 要图站有最低图数：藏宝阁、优堡、太乙、麒麟各 3 张，熊猫 4 张，ptlgs 4 张（1 张海报 + 3 张截图）；`gates::image_floor` 是硬编码，配置改不动。
+- 标题按“分辨率 → 帧率/HDR → 片源 → 地区 → 视频编码 → 位深 → 音频 → 音频细节 → 压制组”重排，完结剧集去掉 `Complete`。
+- 判重只认 `info hash` 和 pieces 指纹；同 hash 不等于已在目标站做种，必须查 qB 的 tracker 和 progress。
+- 上传回包里的 `details.php?id=` 不能单独当证据；详情链接和下载链接的 id 必须对得上，拿不到就落待人工核对。
+- `existed=1` 只说明站点上已经有同 `info hash` 的条目，不说明是谁先发的；要看详情页的“由 … 发布”和发布时间。
+
+**按站配置（`assist.reseedRules`，只在配了的站生效）**
+
+- `titleNoCjk`：主标题出现汉字就拦。当前是藏宝阁、熊猫。
+- `requireLinks` / `requireMediainfo`：条目链接、MediaInfo 默认都要求；只有站点规则显式写 `false` 才放宽。
+- `descrFormat`：简介默认转 BBCode；只有站点规则显式写 `html` 才保留原 HTML。
+- `descrOrder`：简介必须按指定段落顺序。当前只有熊猫。
+- `requiredFields`：核心必填字段没有值就拦。当前是 hdvideo 的 `region_sel` / `style_sel`。
+- `selectPicks` / `multiPicks`：把有歧义的下拉或复选框定死。当前有 luckpt 的 BDRip、ptfans 的同名 Encode、hdvideo 的地区/剧情。
+- 日限额：默认 2 条；luckpt、sbpt 各 20 条。限额只算真正上传成功的条目，重复/失败/待跟进不占额度。
+- `posterField` / `screenshotField`：上传页把海报、截图放在独立字段时，从简介图片里抽出来填进去；不靠简介图冒充独立字段。ptlgs 的 `cover` / `screenshots` 就是这种站。
+
+**站点侧限制（程序不绕过，也不该硬填）**
+
+- tey 的媒介下拉只有 WEB-DL / HDTV / DVDR / CD / Track，没有 Blu-ray；蓝光/Remux 不能硬填 HDTV。
+- itzmx 的 `.torrent` 文件上限 266,240 bytes，大合集会被业务错误框拒绝；选种先看种子文件大小。
+- ubits 拒 imgbox，简介图要换 pixhost 等站允许的图床；不是网络故障。
+- audiences 的判重检索必须走 Kimi WebBridge 的真实浏览器；Cloudflare Turnstile 在后台标签页不会渲染，页面 `visibilityState=hidden` 时要先切前台。
+- luckpt 有官方 LuckAudit 预审，预审不过不发；藏宝阁/优堡/太乙/麒麟/熊猫的图会被逐张审。
+- 有些站会把 `info.source` 或标题改写，导致站上 hash 与上传构造的 hash 不同；挂回前只核对 pieces 指纹和文件清单（忽略首段根目录名），对得上就放行，不看 hash、也不要求标题一字不差。`allows_target_hash_rewrite` 白名单只用于日志标注“已实测改写”，不是放行条件。
+
+**逐站表**。表里的“默认”指上面的全站硬规则 + 简介链接/MediaInfo + BBCode + 每日 2 条；只列额外项和站点侧差异。标题长度按 `titleMaxLen` 检查：本批 32 个配了 200；audiences、baozi、lajidui、lemonhd、ptcafe、pthome、shuioudao、xdy 这 8 个没配规则，长度不单独拦。
+
+| 站点 | 额外门禁 / 发前必查 | 适配经验（站点侧差异） |
+| --- | --- | --- |
+| audiences | 默认；判重必须走 Kimi WebBridge | Cloudflare Turnstile 只在页面可见时生成 iframe；后台标签页要报“标签页在后台”，不盲发，也不把验证页当“站内没有” |
+| baozi | 默认 | 常规 NexusPHP；tracker 别名已补，按 qB 覆盖真值核对 |
+| cangbao | 主标题禁中文；简介 BBCode；≥3 张可达图；链接 + MediaInfo | 死图先剪再计数；死图用 imgbox 重传，不要关图门禁 |
+| dragonhd | 默认 | 上传表单没有“中字/国语/HDR10”复选框时，发布后人工补标签 |
+| hdfans | 默认 | 同 hash 必须查 qB：只挂 hdfans tracker、progress=1 才算做种，不能只看历史日志 |
+| hdtime | 默认 | 上传表单没有分辨率下拉，不要硬找分辨率字段 |
+| hdvideo | `region_sel=美国(2)`、`style_sel=剧情` 必填；标题 ≤200 | 不填会被通用“上传失败！”拒绝；发后定位按 id 配对，不能抓回包第一条旧种 |
+| kufei | 默认 | 没有独立 MediaInfo/IMDb 字段，内容并进简介；上传回包正文可能才带唯一详情链接 |
+| lajidui | 默认（无规则） | 常规发种；没有单独规则时按每日 2 条和默认必填执行 |
+| lemonhd | 默认（无规则） | 站上会改写元信息，按 pieces + 文件清单核对（白名单仅日志）；回包可能不给详情链接，必要时下载目标种补挂 |
+| longpt | 默认 | 第一次抓到的 action 可能是 `bonusrain.php`，必须按真实上传页修正，不能提交到错误入口 |
+| luckpt | LuckAudit 官方预审；BDRip → `medium_sel=Encode(7)`；每日 20；链接 + MediaInfo | 预审 100/100 才发；截图不足先换图，不靠关图门禁；表单没有 BDRip 档 |
+| ptba | 默认 | 站上改写 `info.source`，按 pieces + 文件清单核对（白名单仅日志）；下载目标种后核对 pieces 和文件清单，不要求标题一字不差 |
+| ptcafe | 默认（无规则） | 同 hash 先查 tracker/progress；不要把“同 hash”直接当已做种 |
+| ptfans | `medium_sel=8`（表单有两个同名 Encode，取 8） | 站上改写 hash，按 pieces + 文件清单核对（白名单仅日志）；表单无“完结”复选框，发布后人工补 |
+| pthome | 默认（无规则） | 站上改写 hash，按 pieces + 文件清单核对（白名单仅日志）；页面域带 `www.`，tracker host 要按别名归一化 |
+| ptlgs | 海报 + ≥3 张截图（总图 ≥4）；链接 + MediaInfo；无 DDP/E-AC3 | 海报和截图是独立字段 `cover` / `screenshots`，不是只放进简介；总图不足 4 张不发；2026-11-25 真发 https://ptlgs.org/details.php?id=115350 已确认详情页两个区块都有图 |
+| ptsbao | 默认 | `source_sel` 是二级分类，按 type 父类 + 标题填；按 pieces + 文件清单核对（白名单仅日志）；无“完结”复选框 |
+| ptzone | 默认 | 常规 NexusPHP，五项发布检查全过 |
+| qingwa | 默认；完结标题不带 `Complete`，技术顺序固定 | Poirot 合集被 `torrent_too_large` 要求走 `offers.php`，记 `pending_offers`；标题顺序不对会被拒 |
+| sbpt | 链接 + MediaInfo；每日 20；无官方预审 | `existed=1` 不能推断作者；本次七条详情页作者都是本站账号，见 2.5.1；缺“中字”复选框时只能发布后人工补 |
+| shuioudao | 默认（无规则） | 简介图片可能需补图；改已发布种子只动简介，不换种子文件 |
+| tangpt | 默认 | 第一次抓到的可能是搜索表单；TLS 校验按站点实际情况处理，不能把搜索页当上传页 |
+| xdy | 默认（无规则） | 同 hash 按 qB tracker/progress 复核；不要凭日志判定 |
+| city13 | 默认 | 上传可能回 HTTP 200 但页面不可识别；先站内搜索或看账号上传列表，确认没发出再重试 |
+| crabpt | 默认 | 站上改写 hash，按 pieces + 文件清单核对（白名单仅日志）；源站 hdfans 502 时换源，不重复发 |
+| cspt | 默认 | 简介不收 MediaInfo 和图片外的 URL；`technical_info` 要单独清空；按 pieces + 文件清单核对（白名单仅日志） + `tracker.cspt.cc` 别名 |
+| cyanbug | 默认 | 判重检索可能超时；未确认站上没有之前不得上传 |
+| dubhe | 默认 | 判重搜索偶发 30 秒超时，重试一次；按 pieces + 文件清单核对（白名单仅日志）；无“完结”复选框 |
+| hdbao | 默认 | 站上改写 hash，按 pieces + 文件清单核对（白名单仅日志）；`--limit` 曾把待人工条目算进额度，已修 |
+| itzmx | 默认 | `.torrent` ≤ 266,240 bytes；按 pieces + 文件清单核对（白名单仅日志）；无“完结/中字”标签时发布后人工补 |
+| nanyang | 默认 | 站上改写 hash，按 pieces + 文件清单核对（白名单仅日志）；没有“中字”复选框时发布后人工补 |
+| novahd | 默认 | 4K 60fps 要选 `2160p/4K 60Fps`，不能选普通 2160p；站上已有其他版本仍可发 |
+| oshen | 默认 | 站上改写 hash，按 pieces + 文件清单核对（白名单仅日志）；无“完结”复选框；站点偶发抖动，重试前先核实上一轮结果 |
+| qilin | ≥3 张可达图；简介 BBCode | 海报防盗链、旧图床失效会被判“缺少海报或截图”；先把图换到 imgbox 再提交 |
+| railgun | 默认 | 站上改写 hash，按 pieces + 文件清单核对（白名单仅日志）；无“完结”复选框；回包可能没详情链接，需下载目标种补挂 |
+| tey | ≥3 张可达图；媒介只收 WEB-DL/HDTV/DVDR/CD/Track | 无 Blu-ray 档，蓝光/Remux 不能硬填 HDTV；按 pieces + 文件清单核对（白名单仅日志） + `tracker.tey.cc` 别名；已发但未审要记等审核 |
+| tjupt | 默认；剧集动态分类字段 `cname`/`ename`/`specificcat` | announce 用 `tracker-public.tjupt.org`；上传 120 秒仍超时的记录未复测；大合集要先估上传耗时 |
+| ubits | ≥3 张可达图；`source_sel` 地区、`team_sel=Other` 必填；图床黑名单 | imgbox 会被直接拒，改用 pixhost；按 pieces + 文件清单核对（白名单仅日志） |
+| xingyunge | 默认 | tracker 域名别名已补；按 qB 覆盖真值核对，不凭页面域名猜 |
+
+熊猫高清已暂停发种，不在 40 站表内；恢复时门禁仍是主标题禁中文、简介六段顺序、至少 4 张图。
+
+#### 2.5.1 sbpt 的 `existed` 到底是谁发的（2026-11-25 核实）
+
+这七条的详情页“由 … 发布”全部是本站账号 `Schalkiiii`，不是别人发的可辅种；`existed=1` 只说明站点按同 `info hash` 判重，不能单凭这个字段推断作者。逐条详情页：
+
+- 21764 知否：https://sbpt.link/details.php?id=21764
+- 21767 广告狂人：https://sbpt.link/details.php?id=21767
+- 21768 A Touch of Zen：https://sbpt.link/details.php?id=21768
+- 21780 绿里奇迹：https://sbpt.link/details.php?id=21780
+- 21782 Aquarela：https://sbpt.link/details.php?id=21782
+- 21783 我们的父辈：https://sbpt.link/details.php?id=21783
+- 21784 The Intern：https://sbpt.link/details.php?id=21784
+
+21764 当天早上先被旧的同 hash 判断记成 `same_hash_skipped`，后来按 qB 的 progress/tracker 复核为已在做种；其余条目经 `existed` 路径下载目标种、校验 pieces 后挂回 qB。准确说法是“都是自己账号的条目，这次按站点判重/补挂流程挂回”，不是“别人发的、我们捡来辅种”，也不能统一说成“以前发过但都没辅上”。
 
 ## 3. 全部站点（147 个）
 
@@ -239,7 +335,7 @@ xingyunge
 | qilin | 麒麟 | hdkyl.in | NexusPHP | 是 | — | — | ok | processing_sel[4] 未选 | ok | 9 | 479362 已补挂 qB；站点审核不通过（缺图），不影响做种；2026-11-24 横幅仍写“审核不通过，原因：缺少海报或截图（图片少于 2 张）”，覆盖记录落 `review_rejected`。旧简介 7 张图全不可达（豆瓣海报防盗链 418、`img.pterclub.com` TLS 失败），已全部换成 imgbox 图（1 海报 + 6 截图）并提交，等复审；门禁 `剪死图+至少3张` |
 | qingwa | 青蛙 | qingwapt.com | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 2 | announce 别名 `tracker.qingwapt.org` 已补；2026-11-24 Poirot 合集被站点判 `torrent_too_large`（要求改走 `offers.php` 候选），程序记 `pending_offers`（待走候选入口），不算失败、不自动重试，`status` 单列待跟进；同站《伪装者》发 `208575` 并挂回，校验 100%（构造 `c78e9cb2…`，站上 `d1eeec5c…`），当晚 9 张 `i13.tietuku.com` 死图已换 imgbox（复查 0 旧图 / 9 新图）；《知否》回包“已存在！”且 qB 已在做种（见 2.3） |
 | railgun | Railgun | bilibili.download | NexusPHP | 是 | — | — | ok |  | ok | 2 | 2026-11-23 首次实发 60632（`72889498…`）并补挂校验 100%；站上改写 hash，已加入白名单 |
-| sbpt | SBPT | sbpt.link | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 5 | 2026-11-25 核对：广告狂人 `21767`、A Touch of Zen `21768`、知否 `21764` 已做种；绿里奇迹 `21780`、Aquarela `21782`、我们的父辈 `21783`、The Intern `21784` 为 existed 补挂，qB 校验 100%；Aquarela、The Intern 缺“中字”标签需手动补 |
+| sbpt | SBPT | sbpt.link | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 5 | 2026-11-25 核对：广告狂人 `21767`、A Touch of Zen `21768`、知否 `21764` 已做种；绿里奇迹 `21780`、Aquarela `21782`、我们的父辈 `21783`、The Intern `21784` 已校验 100%；详情页作者均为本站账号，不是别人发的可辅种（见 2.5.1）；Aquarela、The Intern 缺“中字”标签需手动补 |
 | shuioudao | 下水道 | sewerpt.com | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 5 |  |
 | soulvoice | 聆音 | pt.soulvoice.club | NexusPHP | 是 | — | — | ok | type 未选 | ok | 1 |  |
 | tangpt | 躺平 | tangpt.top | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 1 |  |

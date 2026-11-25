@@ -118,6 +118,9 @@
 - **处理 Cloudflare**：它会对表单里的内联 `on*=` 属性计数，4 处就可能 403；提交前清掉事件属性。
 - **不要信单个回包 id**：luckpt 实测回包 `id=10230`，真实种子是 `61140`；多条新种的初始详情页打不开。发后只从回包正文或最终跳转里找链接，并且详情和下载的 id 必须对得上；对不上就记 `posted_unresolved` 等人工核对，不额外搜索。
 - **停用要分层**：`pausedSites` 整站停；`reseedPausedSites` 只停发种；关站另外写 `statusNote`。
+- **`existed=1` 不是作者证明**：它只说明站点上已有同 `info hash` 的条目。判断是自己发的还是别人发的，必须看详情页“由 … 发布”和发布时间；sbpt 七条实测作者全是本站账号 `Schalkiiii`，不能叫成“别人发的可辅种”。
+- **简介有图不等于独立字段有图**：ptlgs 这类站把海报、截图放在 `cover` / `screenshots`，数值存在 `required` 也不代表内容被填了；上传页有字段就必须从最终简介抽图填进去。详情页 `ktorrentcover` 为空、简介 0 张图，就是没填的实证，不是站点不显示。
+- **门禁分三层看**：全站硬规则（单 tracker、逐图剪死图、最低图数、上传后立刻挂回）、按站配置（`titleNoCjk`、`descrOrder`、必填字段、选档、日限额）、站点侧限制（没有 Blu-ray 档、种子文件上限、图床黑名单、Cloudflare）。前两层能改代码/配置解决，第三层只能绕开发种对象或换入口，不能硬填。
 
 ## 6. 已经查过的站
 
@@ -169,7 +172,7 @@ luckpt 的候选规则（**还没有写进 `boxsend.json`**）：
 
 ### 6.7 2026-11-23 新实发：ptba、cspt、dubhe、ptsbao、crabpt、hdbao、tey、oshen、ptfans、itzmx
 
-十站都是第一次向目标站发种，上传本身成功；站上返回的 `.torrent` hash 与本地上传构造的 hash 不同。ptba 已确认是站点改写了 `info.source`；cspt、dubhe、ptsbao、crabpt、hdbao、tey、oshen、ptfans、itzmx 的 pieces 和 `info.name` 未变，但具体改写字段没有逐字节核对。程序默认拒绝 hash 不一致；十站经 pieces 和 `info.name` 核对后加入白名单，后续同站发种直接放行，不再落 `posted_unresolved`。
+十站都是第一次向目标站发种，上传本身成功；站上返回的 `.torrent` hash 与本地上传构造的 hash 不同。ptba 已确认是站点改写了 `info.source`；cspt、dubhe、ptsbao、crabpt、hdbao、tey、oshen、ptfans、itzmx 的 pieces 和 `info.name` 未变，但具体改写字段没有逐字节核对。**这是 2026-11-23 当时的规则**：程序默认拒绝 hash 不一致，十站经 pieces 和 `info.name` 核对后加入白名单，后续同站发种直接放行。现行规则已改为只核对 pieces + 文件清单，白名单只用于日志标注，见 `ARCHITECTURE.md` 5.3。
 
 - **ptba**：源 `luckpt` 的 `金枝欲孽`（51.9 GB）→ `https://1ptba.com/details.php?id=106718`，站上 hash `abf41c82…`，构造 hash `4f8b63e2…`。站上 `info.source` 为 `[1ptba.com] 1PTBA.COM`，本地构造写的是 `ptba`。已把站点种子下回来挂进 qB，qB 校验 100%。
 - **cspt**：源 `ptba` 的 `Mad Men S01-S07`（95.1 GB）→ `https://cspt.top/details.php?id=259870`，站上 hash `cf568e1a…`，构造 hash `516522da…`。第一次补挂被 tracker 校验拦住：站上种子的 announce 在 `tracker.cspt.cc`，页面域是 `cspt.top`，`extra_announce_hosts` 缺别名。补 `cspt => ["tracker.cspt.cc"]` 后重新补挂成功；站上种子自带两条同站 announce，保留原样。
@@ -214,7 +217,7 @@ luckpt 的候选规则（**还没有写进 `boxsend.json`**）：
 
 - **railgun**：源 `carpt` 的 `Agatha.Christies.Poirot.S01-S13.Collection`（294.3 GB）→ `https://bilibili.download/details.php?id=60632`，站上 hash `72889498…`，构造 hash `6debbce8…`。目标站已有其他版本 4414，按策略继续发布；上传回包没给详情链接，落 `posted_unresolved`；补 `railgun` 到 hash 改写白名单后挂回，qB 校验 100%，tracker 为 `https://bilibili.download/announce.php?...`。第一次挂回读 tracker 列表时 qB 返回 404，日志“tracker 列表核对跳过”；已确认这是刚 add 后的瞬态，挂回读列表增加 3 次短重试。
 - **lemonhd**：同源同内容 → `https://lemonhd.net/details.php?id=48970`，站上 hash `3c00cbb2…`，构造 hash `d50dfa19…`。站上已有其他版本 13452，按策略继续发布；上传回包没给详情链接，落 `posted_unresolved`；补 `lemonhd` 到 hash 改写白名单后挂回，qB 校验 100%，tracker 为 `https://tracker.lemonhd.net/announce.php?...`。
-- 两站都只改写了元信息，pieces 和 `info.name` 与本地源种一致；仍按“白名单 + pieces + 标题”三重校验放行，不扩大成通用规则。
+- 两站都只改写了元信息，pieces 和 `info.name` 与本地源种一致；当时仍按“白名单 + pieces + 标题”三重校验放行。现行规则已改成 pieces + 文件清单，白名单只记日志。
 
 ### 6.12 2026-11-24 图片类的审核退回：ubits 379266、tey 623、麒麟 479362
 
@@ -230,7 +233,7 @@ luckpt 的候选规则（**还没有写进 `boxsend.json`**）：
   5. `py -3 scripts/edit-seed.py --site <站点> --id <id> --descr-file 新简介` 先演练，再加 `--apply` 提交；
   6. 复查详情页：`imgbox.com` 出现次数等于张数（tey 那条每张在简介里出现两次，所以是 18）、旧图站点计数 0；覆盖记录用 `py -3 scripts/set-cell-note.py <内容键> <站点> "说明"` 写成“已换图、等复审、别重发”，状态留 `review_rejected`，交给 `bsend followup` 盯。
 - 结果：ubits 379266 详情页 tietuku 0 处 / imgbox 9 处；tey 623 tietuku 0 / imgbox 18；麒麟 479362 豆瓣与 pterclub 都 0 / imgbox 14（7 张 ×2）。三站页面还挂着“不通过 / 未审”，站点没有用户侧“重新提交审核”的入口，等管理复审；程序不重发、不私信管理。
-- 门禁现状（2026-11-24 晚起）：剪死图是全站无条件硬规则；要图的站至少 3 张（ubits/tey/麒麟/藏宝阁 3 张、熊猫 4 张 + 段落顺序），由 `gates::image_floor` 硬编码，不再逐站配 `pruneDeadImages` / `requireImages`。以后再发同类内容，死图会在上传前被剪掉或拦下，不会等到站审才发现。
+- 门禁现状（2026-11-24 晚起）：剪死图是全站无条件硬规则；要图的站有硬性最低图数（ubits/tey/麒麟/藏宝阁 3 张，熊猫 4 张 + 段落顺序，ptlgs 4 张 = 1 海报 + 3 截图），由 `gates::image_floor` 硬编码，不再逐站配 `pruneDeadImages` / `requireImages`。以后再发同类内容，死图会在上传前被剪掉或拦下，不会等到站审才发现。
 
 ### 6.13 2026-11-25 调试期回归：标题、图床与简介字段
 
@@ -249,6 +252,12 @@ luckpt 的候选规则（**还没有写进 `boxsend.json`**）：
 - **补图脚本**：`py -3 scripts/seed-images.py --content <内容键> --video <本地视频>`。脚本用本机 ffmpeg 抽帧（可多条视频各取一帧，或单条按比例取多帧），也可用 `--douban <条目id>` 自动取豆瓣海报，默认上传 pixhost（UBITS 接受；tey 也可用），写入 `screenshot-overrides.json`；`prepare_released` 会把图追加到简介末尾。波洛这次用 S01E01 / S07E01 / S10E01 各取一帧，3 张图都返回 200；tey 预检从“简介图片 0 张”变成“3 张 ≥ 3”。下一道门是 `medium_sel`：tey 的选项只有 WEB-DL / HDTV / DVDR / CD / Track，没有 Bluray，这条 Blu-ray 合集不能硬填 HDTV，所以仍未上传；不是图床问题。
 - **audiences 判重**：代码 `kimi.rs` 固定走 Kimi WebBridge，先在用户已登录的真实浏览器打开 `torrents.php`，等 Cloudflare Turnstile token，再同源 `fetch` 搜索 URL；不再走无头 HTTP。2026-11-25 实测卡点不是“没点勾选框”：Kimi 能选中已打开的 audiences 标签页，但 Edge 窗口最小化时浏览器把页面判为 `document.visibilityState=hidden`，Turnstile 连 iframe 都不生成，`cf-turnstile-response` 一直为空；显式 `turnstile.render` 返回 widget id 也没有 token。程序现在会单独报“标签页在后台、Turnstile 不会生成验证框”，提示把标签页切到前台后重试，不把验证页当“站内没有”。
 - **术语**：`info hash` 是整个 `info` 字典的 SHA1，tracker/announce 不在 `info` 里；`pieces` 是每个分片的 SHA1 串；pieces 指纹（`pieces_hash`）是对 `pieces` 整串再算的 SHA1；分片长度是 piece length。三者不要混叫，详见 `ARCHITECTURE.md` 7.1。
+
+### 6.15 2026-11-25 sbpt 归属与 ptlgs 独立图字段
+
+- **sbpt 七条不是“别人发的可辅种”**：21764、21767、21768、21780、21782、21783、21784 的详情页作者全部是本站账号 `Schalkiiii`。`existed=1` 只能说明站点按同 `info hash` 判重，不能说明谁先发。21764 早上先被旧 `same_hash_skip` 误记，后来按 qB progress/tracker 复核为做种；其余按 `existed` 路径下载目标种、校验 pieces 后挂回。详情链接见 `SITES.md` 2.5.1。
+- **ptlgs 的 `cover` / `screenshots` 是独立必填字段**：上传页有 `cover`、`screenshots`，页面写“至少需要 3 张原始截图”；实际详情页 `115117`、`115313` 的 `ktorrentcover` 是 `<img src=''/>`，简介 0 张图，说明旧代码没填独立字段。Rust 已补 `posterField` / `screenshotField`：从最终简介按顺序抽图，第一张填海报，其余一行一个填截图；字段不存在就不硬塞，简介没图时清空。ptlgs 总图数按 4 张进 `gates::image_floor`。2026-11-25 真发《苦月亮》`115350` 做字段复测：详情页 `ktorrentcover` 有海报，`ktorrentscreenshots` 有 3 张截图，qB 校验 100%；站点仍标“未审”，等审核结果。
+- **为什么先剪死图再抽字段**：`apply_site_rules` 会先剪死图、转 BBCode，再重新抽一次独立字段；否则简介剪掉了死图，独立字段还留着死链，审核端仍会退回。
 
 
 

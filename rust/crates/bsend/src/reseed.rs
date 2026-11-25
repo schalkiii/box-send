@@ -1652,6 +1652,83 @@ fn form_has(page: &str, name: &str) -> bool {
     false
 }
 
+/// 从简介里按出现顺序抽图片 URL：HTML `<img src>` 与 BBCode `[img]…[/img]` 都认。
+/// 只接受绝对 http(s) 地址；重复图只留第一处，避免海报和截图字段重复提交。
+fn image_urls_from_descr(descr: &str) -> Vec<String> {
+    let mut urls: Vec<String> = Vec::new();
+    let mut push = |u: &str| {
+        let u = u.trim();
+        if (u.starts_with("http://") || u.starts_with("https://")) && !urls.iter().any(|x| x == u) {
+            urls.push(u.to_string());
+        }
+    };
+    let lower = descr.to_ascii_lowercase();
+    let mut i = 0;
+    while let Some(p) = lower[i..].find("<img") {
+        let start = i + p;
+        let end = lower[start..]
+            .find('>')
+            .map(|j| start + j + 1)
+            .unwrap_or(descr.len());
+        if let Some(src) = attr(&descr[start..end], "src") {
+            push(&src);
+        }
+        i = end;
+    }
+    let mut pos = 0;
+    while let Some(rel) = lower[pos..].find("[img]") {
+        let content_start = pos + rel + "[img]".len();
+        let Some(end) = lower[content_start..].find("[/img]") else {
+            break;
+        };
+        push(&descr[content_start..content_start + end]);
+        pos = content_start + end + "[/img]".len();
+    }
+    urls
+}
+
+/// 上传页把海报/截图放在独立字段时，从简介图片里抽出来填入。
+/// 只填页面真实存在的字段；配置里的旧字段名（站点改版后已消失）不会硬塞。
+fn fill_image_fields(
+    fields: &mut Vec<Field>,
+    page: &str,
+    descr: &str,
+    poster_field: Option<&str>,
+    screenshot_field: Option<&str>,
+) {
+    let urls = image_urls_from_descr(descr);
+    if urls.is_empty() {
+        if let Some(name) = poster_field {
+            if form_has(page, name) {
+                fields.retain(|(n, _)| n != name);
+            }
+        }
+        if let Some(name) = screenshot_field {
+            if form_has(page, name) {
+                fields.retain(|(n, _)| n != name);
+            }
+        }
+        return;
+    }
+    let mut poster_used = false;
+    if let Some(name) = poster_field {
+        if form_has(page, name) {
+            set_field(fields, name, urls[0].clone());
+            poster_used = true;
+        }
+    }
+    if let Some(name) = screenshot_field {
+        if form_has(page, name) {
+            let shots = if poster_used { &urls[1..] } else { &urls[..] };
+            if !shots.is_empty() {
+                set_field(fields, name, shots.join("\n"));
+            } else {
+                fields.retain(|(n, _)| n != name);
+            }
+        }
+    }
+}
+
 // ---------------- 选档映射（发布名/副标题 → 分类与质量下拉） ----------------
 
 /// 媒介词元（最长优先；重叠的短词自动跳过：WEB-DL 吃掉 WEB）
@@ -2857,6 +2934,10 @@ pub struct PreparedUpload {
     pub required_gaps: Vec<String>,
     /// 表单页原文（官方预审要从中取 LUCK_AUDIT_USER / 选项文案）
     pub form_html: String,
+    /// 上传页独立海报字段名（配置 `posterField`）
+    pub poster_field: Option<String>,
+    /// 上传页独立截图字段名（配置 `screenshotField`）
+    pub screenshot_field: Option<String>,
 }
 
 /// 取最终要提交的简介（`apply_site_rules` 可能已剪死图/转 BBCode）。
@@ -3075,6 +3156,15 @@ pub fn apply_site_rules(prep: &mut PreparedUpload, rules: &crate::gates::SiteRul
         }
     }
     apply_site_rules_tail(prep, rules);
+    // 剪死图 / 转 BBCode 之后再抽一次独立图片字段：尽量只提交最终简介里真正留下的图。
+    let descr = submitted_descr(prep, "").to_string();
+    fill_image_fields(
+        &mut prep.fields,
+        &prep.form_html,
+        &descr,
+        prep.poster_field.as_deref(),
+        prep.screenshot_field.as_deref(),
+    );
 }
 
 /// 门禁里不需要联网的部分（转 BBCode、选档、必填校验）。单测走这里，避免打外网图。
@@ -3255,8 +3345,15 @@ pub fn prepare_upload(target: &NexusPhp, info: &ReleaseInfo) -> Result<PreparedU
     }
 
     let tags_wanted = wanted_tags(info);
-    let (fields, picked_tags, select_notes) =
+    let (mut fields, picked_tags, select_notes) =
         build_upload_fields_for_site(info, &form_html, &tags_wanted, &target.site_id);
+    fill_image_fields(
+        &mut fields,
+        &form_html,
+        &info.descr,
+        target.poster_field.as_deref(),
+        target.screenshot_field.as_deref(),
+    );
     // 想勾的标签一个都没匹配上才警告（复选框 value 多是数字编码，
     // 拿 value 里含不含关键词来判会把勾上了的误报成漏勾）
     let tag_warn = if !tags_wanted.is_empty() && picked_tags.is_empty() {
@@ -3282,6 +3379,8 @@ pub fn prepare_upload(target: &NexusPhp, info: &ReleaseInfo) -> Result<PreparedU
         select_notes,
         required_gaps: vec![],
         form_html,
+        poster_field: target.poster_field.clone(),
+        screenshot_field: target.screenshot_field.clone(),
     })
 }
 
@@ -6647,7 +6746,8 @@ pub(crate) fn adapter_for(cfg: &Config, site_id: &str) -> Result<NexusPhp> {
     .with_context(|| format!("站点配置不合法：{}", s.id))?;
     a.user_agent = cfg.user_agent.clone();
     Ok(a.with_announce_hosts(s.announce_hosts.clone())
-        .with_announce_url(s.announce_url.clone()))
+        .with_announce_url(s.announce_url.clone())
+        .with_image_fields(s.poster_field.clone(), s.screenshot_field.clone()))
 }
 
 /// CLI/调试用：把上传字段清单展开成人能读的行
@@ -7096,6 +7196,8 @@ Frame rate : 25</pre>
             select_notes: vec![],
             required_gaps: vec![],
             form_html: String::new(),
+            poster_field: None,
+            screenshot_field: None,
         };
         let rules = crate::gates::SiteRules {
             descr_format: Some("bbcode".into()),
@@ -7127,6 +7229,8 @@ Frame rate : 25</pre>
             select_notes: vec![],
             required_gaps: vec![],
             form_html: String::new(),
+            poster_field: None,
+            screenshot_field: None,
         };
         apply_site_rules_tail(&mut prep, &crate::gates::SiteRules::default());
         let d = field_lookup(&prep.fields, "descr").unwrap_or("");
@@ -7147,6 +7251,8 @@ Frame rate : 25</pre>
             select_notes: vec![],
             required_gaps: vec![],
             form_html: String::new(),
+            poster_field: None,
+            screenshot_field: None,
         };
         let rules = crate::gates::SiteRules {
             descr_format: Some("html".into()),
@@ -7208,6 +7314,8 @@ Frame rate : 25</pre>
                 select_notes: vec!["分类：留空等人工选".into()],
                 required_gaps: vec![],
                 form_html: String::new(),
+                poster_field: None,
+                screenshot_field: None,
             },
             audit: Some(AuditVerdict {
                 passed: false,
@@ -8159,6 +8267,8 @@ Language : Chinese"));
 <select name="medium_sel[4]"><option value="0">请选择</option><option value="7">HDTV</option></select>
 <select name="codec_sel[4]"><option value="0">请选择</option><option value="1">x264</option></select>"#
                 .into(),
+            poster_field: None,
+            screenshot_field: None,
         };
         let info = ReleaseInfo {
             name: "T".into(),
@@ -8317,6 +8427,8 @@ Language : Chinese"));
             form_html: r#"<select name="type"><option value="0">请选择</option><option value="402">剧集</option></select>
 <select name="audiocodec_sel[8]"><option value="0">请选择</option><option value="1">PDF</option><option value="2">MOBI</option></select>"#
                 .into(),
+            poster_field: None,
+            screenshot_field: None,
         };
         let info = ReleaseInfo {
             name: "T".into(),
@@ -8347,6 +8459,8 @@ Language : Chinese"));
             select_notes: notes,
             required_gaps: vec![],
             form_html: form.into(),
+            poster_field: None,
+            screenshot_field: None,
         };
         let d = analyze_form("ht", "海棠", &prep, &drill_release());
         assert!(
@@ -8406,6 +8520,8 @@ Language : Chinese"));
             select_notes: _n,
             required_gaps: vec![],
             form_html: form.into(),
+            poster_field: None,
+            screenshot_field: None,
         };
         let d = analyze_form("tjupt", "北洋", &prep, &drill_release());
         assert!(d.title_auto);
@@ -8466,6 +8582,8 @@ Language : Chinese"));
             select_notes: vec![],
             required_gaps: vec![],
             form_html: String::new(),
+            poster_field: None,
+            screenshot_field: None,
         };
         let rep = ReviewReport {
             info: ReleaseInfo::default(),
@@ -8565,6 +8683,8 @@ Language : Chinese"));
             select_notes: notes,
             required_gaps: vec![],
             form_html: form.into(),
+            poster_field: None,
+            screenshot_field: None,
         }
     }
 
@@ -8757,6 +8877,8 @@ Language : Chinese"));
             url: "https://hdvideo.top/".into(),
             announce_hosts: vec!["hdvideo.top".into()],
             announce_url: None,
+            poster_field: None,
+            screenshot_field: None,
             framework: crate::sites::Framework::NexusPHP,
             search_url: None,
             api_key: None,
@@ -8949,5 +9071,70 @@ Language : Chinese"));
             links.download.as_deref(),
             Some("https://x.example/download.php?id=333")
         );
+    }
+
+    #[test]
+    fn image_urls_read_html_and_bbcode_in_order() {
+        let descr = r#"海报<img src="https://img.example/poster.jpg">截图[img]https://img.example/1.jpg[/img]<img src="https://img.example/poster.jpg">[IMG]https://img.example/2.jpg[/IMG]"#;
+        assert_eq!(
+            image_urls_from_descr(descr),
+            vec![
+                "https://img.example/poster.jpg",
+                "https://img.example/1.jpg",
+                "https://img.example/2.jpg"
+            ]
+        );
+    }
+
+    #[test]
+    fn image_fields_fill_cover_and_screenshots_when_page_has_them() {
+        let page =
+            r#"<input name="cover"><textarea name="screenshots"></textarea><input name="name">"#;
+        let descr = r#"<img src="https://img.example/poster.jpg"><img src="https://img.example/1.jpg"><img src="https://img.example/2.jpg"><img src="https://img.example/3.jpg">"#;
+        let mut fields: Vec<Field> = vec![("name".into(), "标题".into())];
+        fill_image_fields(&mut fields, page, descr, Some("cover"), Some("screenshots"));
+        let get = |n: &str| {
+            fields
+                .iter()
+                .find(|(name, _)| name == n)
+                .map(|(_, v)| v.as_str())
+        };
+        assert_eq!(get("cover"), Some("https://img.example/poster.jpg"));
+        assert_eq!(
+            get("screenshots"),
+            Some("https://img.example/1.jpg\nhttps://img.example/2.jpg\nhttps://img.example/3.jpg")
+        );
+    }
+
+    #[test]
+    fn image_fields_skip_missing_form_field() {
+        let page = r#"<input name="name">"#;
+        let descr = r#"<img src="https://img.example/poster.jpg">"#;
+        let mut fields: Vec<Field> = vec![("name".into(), "标题".into())];
+        fill_image_fields(&mut fields, page, descr, Some("cover"), Some("screenshots"));
+        assert_eq!(fields.len(), 1);
+    }
+
+    #[test]
+    fn image_fields_clear_stale_values_when_final_descr_has_no_images() {
+        let page =
+            r#"<input name="cover"><textarea name="screenshots"></textarea><input name="name">"#;
+        let mut fields: Vec<Field> = vec![
+            ("name".into(), "标题".into()),
+            ("cover".into(), "https://img.example/dead-poster.jpg".into()),
+            (
+                "screenshots".into(),
+                "https://img.example/dead-1.jpg".into(),
+            ),
+        ];
+        fill_image_fields(
+            &mut fields,
+            page,
+            "简介剪完死图后没有图",
+            Some("cover"),
+            Some("screenshots"),
+        );
+        assert!(fields.iter().all(|(n, _)| n != "cover"));
+        assert!(fields.iter().all(|(n, _)| n != "screenshots"));
     }
 }

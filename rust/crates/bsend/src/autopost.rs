@@ -791,6 +791,8 @@ mod tests {
                 api_key: None,
                 announce_hosts: vec!["sbpt.link".into()],
                 announce_url: None,
+                poster_field: None,
+                screenshot_field: None,
             }],
             coverage: crate::config::CoverageSettings {
                 auto_reseed_sites: vec!["sbpt".into()],
@@ -1155,6 +1157,8 @@ mod tests {
                 select_notes: Vec::new(),
                 required_gaps: Vec::new(),
                 form_html: "<html><body><form></form></body></html>".into(),
+                poster_field: None,
+                screenshot_field: None,
             },
             info,
             preflight: Default::default(),

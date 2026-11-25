@@ -36,8 +36,11 @@ Rust 2021；crate：`bsend`（引擎）、`bsend-cli`、`bsend-gui`。错误用 
 - 发布不看画质：站上有同名其他版本照样发（`assist.allowOtherVersion`）；只有站点明确返回 `existed` 才不发。
 - 标题按站点规范重排：完结剧集去掉 `Complete`，技术参数按“分辨率 → 片源 → 视频编码 → 音频编码”的顺序；站点改写标题时同样按这套顺序生成，不再把 `USA`、`MA`、`5.1` 塞到音频后面。
 - 第一次向 qB 里还没有该站种子的站点发种时，抄不到该站 passkey，必须在 `sourceSites[].overrides.announceURL` 填该站完整 tracker 地址；没填会直接中止，不会伪造无 passkey 的种子。
-- 判重以 info hash 和分片（pieces）为准；只有名称相同且总大小相等时才进人工核对，总大小不同就是不同内容。
+- **判重以 info hash 和分片（pieces）为准；只有名称相同且总大小相等时才进人工核对，总大小不同就是不同内容。**
+- **站上 hash 与上传构造不同也能挂回，但只认 pieces 和文件清单**：站点常改写 `info.source` 或标题；挂回前必须核对 pieces 指纹一致、文件清单一致（比较时忽略首段根目录名），不看 hash、也不看标题是否一字不差。`allows_target_hash_rewrite` 白名单只用于日志标注“这个站已实测改写过”，不是放行条件；pieces 或文件清单对不上就拒绝挂回，宁可落人工。
 - `existed` 只认最终跳转的 `existed=1`，或错误框里的明确重复措辞；上传表单原样返回不算重复。
+- **`existed=1` 只证明站点有同 `info hash` 的条目，不能证明是谁先发的**：判断归属要看详情页“由 … 发布”和发布时间；不要因为 `existed` 就把自己的条目说成“别人发的可辅种”。sbpt 2026-11-25 核实的七条都是本站账号 `Schalkiiii`，详见 `doc/SITES.md` 2.5.1。
+- **上传页的独立海报/截图字段不能省**：站上把海报、截图放在 `posterField` / `screenshotField` 时，程序要从最终简介按顺序抽图填进去；表单没有这个字段就不硬塞，简介没图时清空，不能只把图塞在简介里就算完成。ptlgs 是 `cover` + `screenshots`，站规要求海报加至少 3 张截图。
 - **面向人的文字一律说白话**：不用自造缩写或代号当术语。比如“把站点上的种子下回来挂进 qB”就写这句话，不要只丢一个命令名；命令名只出现在命令示例或“命令是 `bsend xxx`”这种明确指代里，正文先讲做什么，再给命令。日志、`status` / `audit` 输出、文档同样遵守。
 - **等站点侧动作要留成待跟进**：站点要求改走候选入口（如 `torrent_too_large` → `offers.php`）记 `pending_offers`（待走候选入口）；站上已发布但站点还没审完记 `pending_review`（等站点审核）；站点明写审核不通过记 `review_rejected`；回访时详情页说没有这条记 `gone_from_site`。都不算失败、不自动重发、不进失败冷却，但必须能在 `bsend status` / `bsend audit` 里看到；不要写成 `skipped` 一了百了。审核这三类由回访收尾（`bsend followup`；自动发种每轮开头也会跑一次）：页面不再有审核标记就把站点种子下回来挂进 qB。页面标记只认明写的字样，判定规则在 `sites/nexusphp.rs` 的 `review_mark_in`。
 - 失败冷却默认关闭：`assist.backoffHours` 不填或填 0 时，被拦或失败的条目下一轮直接重试；只有显式配小时数才在窗口内跳过（拦截与失败共用同一个窗口，`--dry-run` 同样受限），依据写在 `auto-audit.jsonl`。
@@ -45,6 +48,6 @@ Rust 2021；crate：`bsend`（引擎）、`bsend-cli`、`bsend-gui`。错误用 
 - 内容范围由 `assist.skipKeywords` 拦教育/成人，命中不占上传额度。
 - **未经用户明确允许，不得给站点管理发站内信/PM**（包括“问审核原因”“申请复审”）。审核被拒时只改种子、改代码、补证据；需要沟通先问用户。
 - **上传成功就立刻把站点种子挂回 qB 做种**（2026-11-24 起是硬步骤，没有开关）：上传后立即从站点下载 `.torrent`、按分片核对、作为独立种子加入 qB；站点刚建种时常先回 `torrent not registered`，程序固定重试 4 轮（每轮 15 秒），仍拿不到才落“待人工确认”，回访用 `bsend pull` 补。站点要先审才给下载的，落 `pending_review`，审完由 `bsend followup` 自动挂回。
-- 发种前门禁按站点配置执行：`titleNoCjk` 拦主标题汉字，`descrOrder` 校验简介标题顺序，`requireLinks` / `requireMediainfo` 校验必填。**剪死图是所有站点无条件执行的硬规则**（不再读 `assist.pruneDeadImages`）：提交前逐图探测，打不开的图直接剪掉。**要图的站至少 3 张可达图**也是硬规则（藏宝阁/优堡/太乙/麒麟 3 张，熊猫 4 张 + 段序；写在 `gates::image_floor`，配置里写多少都不算）。死图先用 `scripts/imgbox-upload.py` 重传到 imgbox、`scripts/swap-descr-images.py` 按顺序换链接，再改简介，不能靠关掉门禁绕过。源站简介本来就没有图时，用 `scripts/seed-images.py` 从本地视频抽帧，或按豆瓣条目自动取海报、直接传海报 URL；上传 pixhost/imgbox，写入 `screenshot-overrides.json`。发布时程序会自动追加，不许手工在简介里编图。
+- 发种前门禁按站点配置执行：`titleNoCjk` 拦主标题汉字，`descrOrder` 校验简介标题顺序，`requireLinks` / `requireMediainfo` 校验必填。**剪死图是所有站点无条件执行的硬规则**（不再读 `assist.pruneDeadImages`）：提交前逐图探测，打不开的图直接剪掉。**要图的站有硬性最低图数**也是硬规则（藏宝阁/优堡/太乙/麒麟 3 张，熊猫 4 张 + 段序，ptlgs 4 张 = 1 张海报 + 3 张截图；写在 `gates::image_floor`，配置里写多少都不算）。死图先用 `scripts/imgbox-upload.py` 重传到 imgbox、`scripts/swap-descr-images.py` 按顺序换链接，再改简介，不能靠关掉门禁绕过。源站简介本来就没有图时，用 `scripts/seed-images.py` 从本地视频抽帧，或按豆瓣条目自动取海报、直接传海报 URL；上传 pixhost/imgbox，写入 `screenshot-overrides.json`。发布时程序会自动追加，不许手工在简介里编图。
 - **熊猫暂停发种**（2026-11-24 起）：`panda` 已从 `assist.autoReseedSites` 摘掉并列入 `assist.reseedPausedSites`；站上那条 141276 是候选种子 24 小时没做种被系统删的，重发必须先“上传→立刻挂回 qB 做种”，当前不自动发。
 - 详细规则见 `doc/ARCHITECTURE.md`；运行数据与巡检见 `doc/OPERATIONS.md`；站点清单见 `doc/SITES.md`；未完成项见 `doc/ROADMAP.md`。历史审计与批次报告已并入这些文档，不再单独保留。
