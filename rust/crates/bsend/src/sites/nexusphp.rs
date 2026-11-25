@@ -47,6 +47,8 @@ pub struct NexusPhp {
     pub poster_field: Option<String>,
     /// 上传页的截图字段名（如 `screenshots`）；提交时一行一个 URL。
     pub screenshot_field: Option<String>,
+    /// 上传 POST 的单独超时（秒）：默认 120，可由 `assist.reseedRules.<site>.uploadTimeoutSec` 放宽
+    pub upload_timeout_sec: u64,
     pub user_agent: String,
     client: Client,
 }
@@ -162,6 +164,7 @@ impl NexusPhp {
             announce_url: None,
             poster_field: None,
             screenshot_field: None,
+            upload_timeout_sec: 120,
             search_url_tmpl: search_url_tmpl
                 .filter(|s| !s.is_empty())
                 .map(|s| s.to_string()),
@@ -282,7 +285,9 @@ impl NexusPhp {
             // 上传页比列表页慢得多：站点要在服务端解 bencode、算 hash、查重再落库，
             // 北洋园（tjupt）实测 30s 全局超时会在回包前断开（2026-11-24 连挂两次）。
             // 只给上传这一步放宽，列表/检索仍用全局 30s。
-            .timeout(std::time::Duration::from_secs(120))
+            .timeout(std::time::Duration::from_secs(
+                self.upload_timeout_sec.max(1),
+            ))
             .header(REFERER, referer)
             .header("User-Agent", &self.user_agent)
             .multipart(form);

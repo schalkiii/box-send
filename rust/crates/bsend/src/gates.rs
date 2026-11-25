@@ -71,6 +71,8 @@ pub struct SiteRules {
     pub descr_format: Option<String>,
     /// 每日自动发种上限（缺省 2）
     pub daily_limit: Option<u32>,
+    /// 上传请求超时秒数（缺省 120）：站点在服务端解 torrent、查重慢时可逐站放宽
+    pub upload_timeout_sec: Option<u64>,
     /// 规则来源备注
     pub note: Option<String>,
 }
@@ -84,6 +86,9 @@ impl SiteRules {
     }
     pub fn daily_limit(&self) -> u32 {
         self.daily_limit.unwrap_or(2)
+    }
+    pub fn upload_timeout_sec(&self) -> u64 {
+        self.upload_timeout_sec.unwrap_or(120).max(1)
     }
     /// 简介是否按 BBCode 提交：缺省是；只有显式 `html` 才保持 HTML。
     pub fn descr_is_bbcode(&self) -> bool {
@@ -419,6 +424,16 @@ mod tests {
             required_gaps: &[],
             audit_passed: Some(true),
         }
+    }
+
+    #[test]
+    fn upload_timeout_defaults_to_120_and_honors_site_override() {
+        let mut rules = SiteRules::default();
+        assert_eq!(rules.upload_timeout_sec(), 120);
+        rules.upload_timeout_sec = Some(300);
+        assert_eq!(rules.upload_timeout_sec(), 300);
+        rules.upload_timeout_sec = Some(0);
+        assert_eq!(rules.upload_timeout_sec(), 1);
     }
 
     #[test]

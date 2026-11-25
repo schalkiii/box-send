@@ -1246,6 +1246,7 @@ pub fn build_adapters(
         )
         .with_context(|| format!("站点配置不合法：{}", s.id))?;
         adapter.user_agent = cfg.user_agent.clone();
+        adapter.upload_timeout_sec = cfg.coverage.rules_for(&s.id).upload_timeout_sec();
         adapter = adapter
             .with_announce_hosts(s.announce_hosts.clone())
             .with_announce_url(s.announce_url.clone());

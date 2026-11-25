@@ -79,7 +79,7 @@ xingyunge
 | nanyang | 已补挂 | qB 校验 100%，状态 `seeding` | https://nanyangpt.com/details.php?id=226159 ｜ 构造 `187d1487…`，站上 `8a9b9ab2…` | 源 soulvoice 54682《知否知否应是绿肥红瘦》4K WEB-DL；表单没有“中字”类标签复选框，需人工补 |
 | ubits | 已补挂；审核没过已换图 | qB 校验 100%，做种中；覆盖记录 `review_rejected` | https://ubits.club/details.php?id=379266 ｜ 构造 `d9970bce…`，站上 `2a57b787…` | 源 hdsky 27637《伪装者》1080p HDTV；前两次报“上传失败！”，补 `source_sel[4]`（地区）和 `team_sel[4]`（`Other`）后通过。11-24 站内信判“海报与截图均无法访问（图床域名已失效）”：简介 9 张图全是已失效的 `i13.tietuku.com`；已换 imgbox 新图（1 海报 + 8 截图）并提交，页面仍显示不通过，等管理复审（详见 `SITE-DEBUG.md` 6.12） |
 | hdfans | 已确认并补挂 | 287791 就是同一条《伪装者》，qB `b1e600a6…` 校验 100% | http://hdfans.org/details.php?id=287791 | 覆盖记录已是 `reseeded`（11-23 23:49 转种成功），qB 里 11-23 23:49 就在上传，无需重发 |
-| tjupt | 登录态已恢复（演练通过，未实发） | `gatecheck --sites tjupt` 通过；真实上传超时未复测 | — | announce 地址按站点下载的种子改成 `tracker-public.tjupt.org`（https、带 passkey，已写进 `overrides.announceURL`，备份 `boxsend.json.bak-261124-101552`）。2026-11-24 11:35 上传曾 120s 超时且无回包。**2026-11-24 晚已从 CookieCloud 拉到 `tjupt.org` 的 `access_token`（有效期 2027-01-15）**，`torrents.php` / `takeupload.php` 均 200、非 `login.php`；`gatecheck` 构造字段 + 预审通过（站点无预审）。下一步再实发一条，看超时是否随登录态恢复消失。站上已有 `416154`（FLAC/DDP5.1）与 `236519`（同名 FRDS 合集、pieces 与本地不同），属实不同内容 |
+| tjupt | 已实发 25GB 单条；274GB 合集仍卡后端超时 | 652794 已挂回 qB、校验 100%，等站点审核 | https://www.tjupt.org/details.php?id=652794 | announce 地址按站点下载的种子定案为 `tracker-public.tjupt.org`（https、带 passkey，已写进 `overrides.announceURL`）。2026-11-25 真发《我们的父辈》25GB 成功，站上改写 hash/标题，按 pieces + 文件清单核对后挂回 qB，校验 100%；页面还标“待审核”。同内容的 274GB《波洛全季》合集上传 5 分钟仍回 HTTP 200、正文 0 字节，站点没有留下条目，暂不自动重试。站上已有 `416154`（FLAC/DDP5.1）与 `236519`（同名 FRDS 合集、pieces 与本地不同），属实不同内容 |
 | qingwa | 分区：Poirot 不走普通上传；《伪装者》已发并挂回 | Poirot = 站点判定过大，记为待走候选入口；《伪装者》`208575` 校验 100% | https://qingwapt.com/details.php?id=208575 ｜ 构造 `c78e9cb2…`，站上 `d1eeec5c…` | Poirot 回包其实是 `torrent_too_large` 表单（自动 submit 到 `offers.php?add_offer=1`）：站点要求改走候选入口，不是未知回包；程序记 `pending_offers`（待走候选入口），不算失败、不自动重试，`bsend status` 单列“待跟进”等人工去候选页提交（2026-11-24 11:33 真跑复现一次，覆盖记录落 `pending_offers`、审计 result=`pending_offers`、`status` 显示“待走候选入口 1”）。同站《伪装者》发布后自动挂回被 hash 校验拒绝，改用 `bsend pull` 把站点种子下回来挂进 qB，成功 |
 | audiences | 判重已接 Kimi WebBridge，当前卡在验证框不渲染 | — | 程序按“没确认重复就不上传”中止，没有盲发；无头 HTTP 复用不了浏览器会话。2026-11-24 晚可行性实验通过：Kimi WebBridge 驱动本机真实浏览器，audiences 已登录 `Schalkiii`；页面内 `fetch('/torrents.php?search=…')` 返回 200、未跳登录、命中 2 个 `details.php?id=`、无人机验证。2026-11-25 已接入程序，但 Kimi 选中的标签页是后台（`visibilityState=hidden`），Turnstile 不生成 iframe、token 为空；需要把标签页切到前台再试，程序明确报“标签页在后台”，不盲发 |
 
@@ -127,7 +127,7 @@ xingyunge
 | ubits | 上传被图床黑名单拦下 | https://ubits.club/details.php?id=379266 | 简介含 imgbox，站点要求换 pixhost 等图床 |
 | qilin | 审核未过，简介已转 BBCode | https://www.hdkyl.in/details.php?id=479362 | 等站点重审 |
 | tey | 已补 3 张截图，质量档没有 Bluray 选项 | https://carpt.net/details.php?id=532 | 不是 tey 图床坏；tey 623《伪装者》9 张图正常。carpt 532 简介 0 个 [img]、编辑页无 takeedit 表单，已用 `scripts/seed-images.py` 补 3 张 pixhost 截图，tey 预检“3 张 ≥ 3”通过；卡在 `medium_sel` 只有 WEB-DL/HDTV/DVDR/CD/Track，没有 Bluray，不能硬填 HDTV，未上传 |
-| tjupt | 294GB 大合集超时，未重发 | https://www.tjupt.org/details.php?id=236519 | 站点同名旧种不是我们的 |
+| tjupt | 274GB 合集仍超时；25GB 单条已发并挂回 | https://www.tjupt.org/details.php?id=652794 | 652794 校验 100%，等站点审核；274GB 合集本站没留下条目，不自动重试 |
 | itzmx | 大种 403 / 超 266,240 字节 | https://pt.itzmx.com/details.php?id=13134 | 换小种再试 |
 | audiences | 判重已接 Kimi WebBridge；当前卡在验证框不渲染 | — | 2026-11-25 重试：Kimi 能选中已打开的 audiences 标签页，但浏览器把页面判为 `visibilityState=hidden`（窗口最小化或不在前台），Turnstile 一直不生成 iframe、token 为空；显式 `turnstile.render` 也没有 token。同源 `fetch` 搜索仍返回“搜索人机验证未通过”。需要把该标签页切到前台、让页面可见后再试；程序明确报“标签页在后台”，不把验证页当站内没有，也不盲发 |
 
@@ -206,7 +206,7 @@ xingyunge
 | qilin | ≥3 张可达图；简介 BBCode | 海报防盗链、旧图床失效会被判“缺少海报或截图”；先把图换到 imgbox 再提交 |
 | railgun | 默认 | 站上改写 hash，按 pieces + 文件清单核对（白名单仅日志）；无“完结”复选框；回包可能没详情链接，需下载目标种补挂 |
 | tey | ≥3 张可达图；媒介只收 WEB-DL/HDTV/DVDR/CD/Track | 无 Blu-ray 档，蓝光/Remux 不能硬填 HDTV；按 pieces + 文件清单核对（白名单仅日志） + `tracker.tey.cc` 别名；已发但未审要记等审核 |
-| tjupt | 默认；剧集动态分类字段 `cname`/`ename`/`specificcat` | announce 用 `tracker-public.tjupt.org`；上传 120 秒仍超时的记录未复测；大合集要先估上传耗时 |
+| tjupt | 默认；剧集动态分类字段 `cname`/`ename`/`specificcat` | announce 用 `tracker-public.tjupt.org`；上传超时秒数可逐站配（`uploadTimeoutSec`，缺省 120）；274GB 大合集先别自动重试，25GB 单条已实测成功并挂回 |
 | ubits | ≥3 张可达图；`source_sel` 地区、`team_sel=Other` 必填；图床黑名单 | imgbox 会被直接拒，改用 pixhost；按 pieces + 文件清单核对（白名单仅日志） |
 | xingyunge | 默认 | tracker 域名别名已补；按 qB 覆盖真值核对，不凭页面域名猜 |
 
@@ -340,7 +340,7 @@ xingyunge
 | soulvoice | 聆音 | pt.soulvoice.club | NexusPHP | 是 | — | — | ok | type 未选 | ok | 1 |  |
 | tangpt | 躺平 | tangpt.top | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 1 |  |
 | tey | 太乙 | pt.tey.cc | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 1 | 2026-11-23 已实发 `623`，`c9570904…`，补挂 qB 校验 100%；`medium_sel` 仅 WEB-DL/HDTV/DVDR/CD/Track，蓝光源会被门禁拦；qB 老种走 `tracker.tey.cc`，已补别名；站上改写 hash，已入白名单；新种状态“未审”（2026-11-24 回访仍未审，覆盖记录落 `pending_review`）。同一条简介曾带 9 张失效的 `i13.tietuku.com` 图，已换 imgbox 图并提交；门禁 `剪死图+至少3张` |
-| tjupt | 北洋园 | tjupt.org | NexusPHP | 是 | — | — | ok | [tjupt] 表单里没找到「中字」类标签复选框，请发布后手动补 | unsupported | 1 | 2026-11-24 剧集分类的 `cname/ename/specificcat` 已能自动填；announce 以站点下载的种子定案为 `tracker-public.tjupt.org`（已写进 `overrides.announceURL`）；2026-11-24 晚从 CookieCloud 拉到 `tjupt.org` 的 `access_token`（2027-01-15 到期）并合并进 `cookies.json`，`torrents.php` / `takeupload.php` 均 200、非 `login.php`，`gatecheck` 通过；上传 120s 超时尚未复测；站上已有 `416154`、`236519`（pieces 与本地不同，属实不同内容） |
+| tjupt | 北洋园 | tjupt.org | NexusPHP | 是 | — | — | ok | [tjupt] 表单里没找到「中字」类标签复选框，请发布后手动补 | unsupported | 1 | 2026-11-24 剧集分类的 `cname/ename/specificcat` 已能自动填；announce 以站点下载的种子定案为 `tracker-public.tjupt.org`（已写进 `overrides.announceURL`）。2026-11-25 真发《我们的父辈》25GB：`652794`，站上改 hash/标题，按 pieces + 文件清单核对后挂回 qB，校验 100%，页面等审核；同日 274GB《波洛全季》合集上传 5 分钟仍回 HTTP 200 空正文、站上无条目，暂不自动重试 |
 | ubits | 优堡 | ubits.club | NexusPHP | 是 | — | — | ok | source_sel[4] 未选 | ok | 8 | `source_sel[4]`（地区）和 `team_sel[4]`（`Other`）已能自动填，上面的检查结论是旧结果；2026-11-24 首次实发 `379266`（《伪装者》，源 hdsky），站上 hash 与构造不同（构造 `d9970bce…`，站上 `2a57b787…`），已加入白名单，把站点种子下回来挂进 qB，校验 100%、单站 tracker；该条简介 9 张 `i13.tietuku.com` 死图已换 imgbox，页面仍标不通过，等复审（见 2.3） |
 | vclib | VC-Lib | pt.vclib.online | NexusPHP | 是 | — | — | ok | type 未选 | ok | 2 |  |
 | xdy | 修道院 | xdypt.vip | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 1 | 2026-11-25 核对知否 `8043`：站点种与 qB 原种同 `info hash`，qB progress=1、只挂 xdy tracker，按 `bsend pull` 复核记 `seeding` |

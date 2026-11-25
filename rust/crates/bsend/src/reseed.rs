@@ -3470,16 +3470,26 @@ pub fn submit_upload(
         .unwrap_or_default();
     let mut last_err = String::new();
     for attempt in 0..2 {
-        let resp = target
-            .post_upload(
-                &prep.action,
-                &prep.fields,
-                "file",
-                filename,
-                torrent_data,
-                &prep.form_url,
-            )
-            .with_context(|| format!("提交上传失败（第 {} 次）", attempt + 1))?;
+        let resp = match target.post_upload(
+            &prep.action,
+            &prep.fields,
+            "file",
+            filename,
+            torrent_data,
+            &prep.form_url,
+        ) {
+            Ok(resp) => resp,
+            Err(e) => {
+                // 网络层超时/断连没有回包，不能像站点拒绝那样直接判死；
+                // 同一字节再投一次，第二次仍不通才报失败。
+                if attempt == 0 {
+                    last_err = format!("{e:#}");
+                    thread::sleep(Duration::from_secs(2));
+                    continue;
+                }
+                return Err(e.context(format!("提交上传失败（第 {} 次）", attempt + 1)));
+            }
+        };
         dump_upload_response(
             dump_dir,
             &target.site_id,
@@ -3557,6 +3567,13 @@ pub fn submit_upload(
 
 /// 上传未成功时提取错误（errorbox → 常见错误特征 → 兜底）
 fn extract_upload_error(body: &str, status: u16) -> String {
+    // 空回包不是“未知页面”：tjupt 对超大种子处理到后端超时后会回 HTTP 200、
+    // 正文 0 字节。必须说清“没有拿到结论”，不能让人误以为站点静默通过。
+    if body.trim().is_empty() {
+        return format!(
+            "HTTP {status} 空回包（站点后端没有返回内容，通常是处理超时或崩溃；本次未确认发布）"
+        );
+    }
     // 种子过大：NexusPHP 系不回错误框，而是回一个 `torrent_too_large` 表单自动跳
     // offers.php（候选区）。按普通“未识别返回”记会把站点明确的结论埋掉。
     if body.contains("torrent_too_large") || body.contains("add_offer=1") {
@@ -6326,6 +6343,15 @@ fn run_reseed_inner(
     }
 }
 
+/// 转种动作日志里的 `seeded`：格子的状态是“在做种”之一，或 note 明确写了
+/// 种子已挂回 qB（审核待定/审核不通过但已挂回时，格子状态不是 Reseeded）。
+fn outcome_seeded(status: Option<CoverageStatus>, note: Option<&str>) -> bool {
+    matches!(
+        status,
+        Some(CoverageStatus::Reseeded | CoverageStatus::Assisted | CoverageStatus::Seeding)
+    ) || note.is_some_and(|n| n.contains("已挂回 qB"))
+}
+
 /// 转种动作日志（JSONL，fail-open）：GUI/CLI/autopost 每次转种都写一行。
 /// 与 `auto-audit.jsonl` 分开：后者管日限额/失败冷却，这里只留可追溯的动作现场。
 fn append_reseed_log(
@@ -6359,10 +6385,7 @@ fn append_reseed_log(
         .and_then(|c| serde_json::to_value(c.status).ok())
         .and_then(|v| v.as_str().map(str::to_string))
         .unwrap_or_default();
-    let seeded = matches!(
-        cell.map(|c| c.status),
-        Some(CoverageStatus::Reseeded | CoverageStatus::Assisted | CoverageStatus::Seeding)
-    );
+    let seeded = outcome_seeded(cell.map(|c| c.status), note.as_deref());
     let line = serde_json::json!({
         "at": now_unix(),
         "started_at": started,
@@ -6764,6 +6787,7 @@ pub(crate) fn adapter_for(cfg: &Config, site_id: &str) -> Result<NexusPhp> {
     )
     .with_context(|| format!("站点配置不合法：{}", s.id))?;
     a.user_agent = cfg.user_agent.clone();
+    a.upload_timeout_sec = cfg.coverage.rules_for(&s.id).upload_timeout_sec();
     Ok(a.with_announce_hosts(s.announce_hosts.clone())
         .with_announce_url(s.announce_url.clone())
         .with_image_fields(s.poster_field.clone(), s.screenshot_field.clone()))
@@ -7017,6 +7041,16 @@ Frame rate : 25</pre>
         assert!(!is_mediainfo_block(
             "随便一段话\n第二行\n第三行\n第四行\n第五行"
         ));
+    }
+
+    #[test]
+    fn empty_upload_response_is_reported_as_timeout_not_unknown() {
+        let msg = extract_upload_error("", 200);
+        assert!(
+            msg.contains("空回包") && msg.contains("未确认发布"),
+            "{msg}"
+        );
+        assert!(!msg.contains("未识别的返回"), "{msg}");
     }
 
     #[test]
@@ -8982,6 +9016,23 @@ Language : Chinese"));
         };
         assert!(d.note.contains("当前没做种"), "{}", d.note);
         assert!(d.note.contains("待人工处理"), "{}", d.note);
+    }
+
+    #[test]
+    fn seeded_summary_trusts_explicit_mount_note() {
+        assert!(outcome_seeded(Some(CoverageStatus::Reseeded), None));
+        assert!(!outcome_seeded(
+            Some(CoverageStatus::PendingReview),
+            Some("站上已发布，等站点审核；审完前拿不到站点种子，没挂回 qB")
+        ));
+        assert!(outcome_seeded(
+            Some(CoverageStatus::PendingReview),
+            Some("站上已发布，种子已挂回 qB 做种；站点页面还标着“待审核”，等审核结果")
+        ));
+        assert!(outcome_seeded(
+            Some(CoverageStatus::ReviewRejected),
+            Some("站点审核没过：缺少海报；种子已挂回 qB，仍在做种")
+        ));
     }
 
     #[test]
