@@ -349,7 +349,7 @@
 - 新增 20 个测试：qB 客户端 9 个、CLI 9 个、自动发种审计 1 个、`posted_verifying` e2e 1 个。
 - 全量测试从 396 个增加到 416 个；本机实际跑 413 个（GUI 3 个未在本机编译）。
 - `cargo test --workspace --exclude bsend-gui` 全绿；`cargo clippy --workspace --all-targets --exclude bsend-gui -- -D warnings` 全绿；`cargo fmt --all` 通过。
-- 本机 `cargo test --workspace` 失败在 GUI 链接（GNU 缺 `ktmw32`；MSVC 缺 `link.exe`），不是本次测试逻辑失败；远端 Windows CI 使用 MSVC，提交后由 CI 复核。
+- 本机 `cargo test --workspace` 失败在 GUI 链接（GNU 缺 `ktmw32`；MSVC 缺 `link.exe`），不是本次测试逻辑失败；2026-11-25 12:54 推送后，远端 `rust` 工作流 success：Linux 核心库 + CLI 全绿，Windows 全 workspace（含 GUI）全绿。
 - 行覆盖率没有测出来：GNU 的 `cargo llvm-cov` 报 `profiler_builtins` 缺失；MSVC 缺 `llvm-tools-preview` 和链接器。报告里用“测试数/千行”代替，不能当行覆盖率。
 
 ## 7. 自查
