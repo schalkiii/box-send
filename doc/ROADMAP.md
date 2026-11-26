@@ -155,7 +155,7 @@ reseed/coverage_io.rs  覆盖记录读写
 - **qingwa**：未覆盖的是成人合集和多片合集，属于内容黑名单范围，不是适配器故障。
 - **haitang**：只有曲艺、有声书类目，和影视范围不匹配，已移出白名单。
 - **haoxue**：Next.js/Flux 单页应用，静态上传页拿不到，需要按前端接口重做，已移出白名单。
-- **agsvpt**：提交域和登录域不一致，返回“你没有该权限”；2026-11-23 已 disable 并移出自动发种白名单。
+- **agsvpt**：2026-11-23 当时提交域和登录域不一致，返回“你没有该权限”，已 disable 并移出自动发种白名单。2026-11-26 复核：GET `upload.php` 返回完整上传表单、没有权限拒绝字样，旧“无发布权限”结论可能已过时，但还没实证（真发一条才能定论）；适配缺口见 `SITES.md` 第 3 节该站行。
 - **ptba / cspt / dubhe / ptsbao / crabpt / hdbao / tey / oshen / ptfans / itzmx / railgun / lemonhd**：2026-11-23 首次实发（hdbao 2 条，其余各 1 条）并挂回成功；十二站都会改写种子元信息，站上 hash 与构造 hash 不同，已加入 hash 改写白名单。cspt 另有 `tracker.cspt.cc` 别名，tey 另有 `tracker.tey.cc` 别名；dubhe 判重搜索偶发 30 秒超时；ptsbao 的 `source_sel` 是二级分类，已按 type 父类 + 标题自动填；crabpt 此前候选源站 `hdfans` 502，被失败冷却挡住，改走 `hdsky` 源后成功；hdbao 的 `autopost --limit` 计数缺陷已修；tey 表单没有 Blu-ray 媒介档，蓝光/Remux 源会被门禁拦，HDTV/WEB-DL 可发；oshen 前两次站点抖动，第三次才恢复；ptfans 此前上传页/判重超时，恢复后一次通过；railgun、lemonhd 上传回包都没给详情链接，按详情页补挂成功。
 - **itzmx**：站点 torrent 文件上限 `266,240 bytes`，大合集/大剧包会被拒；改用 `ubits` 源的《Liar Game》小种（源种 96,934 bytes）首次实发 `13134` 并挂回，qB 校验 100%。后续给该站选种先看 `.torrent` 文件大小，不要只看内容体积；详情页没有“完结/中字”标签，发布后人工补。
 - **pthome / nanyang / ubits**：2026-11-24 首次上传成功（`284701` / `226159` / `379266`），站上 hash 与构造的不同，三站已加入 hash 改写白名单，把站点种子下回来挂进 qB，校验 100%。ubits 的 `source_sel[4]`、`team_sel[4]` 不补会被拒，现已自动填。
@@ -179,7 +179,141 @@ reseed/coverage_io.rs  覆盖记录读写
 - **旧“没有”记录可能误导**：新流程不读它们；迁移期不要拿旧覆盖率高低下结论。
 - **两个 Agent 同时改 `reseed.rs` 会互相覆盖**：单种子单站点改造结束前，其他工作不要碰这个文件。
 
-## 7. 相关文档
+## 7. 全部站点全自动差距评估（2026-11-26 实测）
+
+### 7.1 口径与证据来源
+
+- 证据：`bsend-batch-2026-11-26.md`（74 次真实上传尝试、覆盖 37 站）、当天 `auto-audit.jsonl` 与 `reseed-log.jsonl`、`boxsend.json` 的白名单/暂停名单、`SITES.md` 历史记录。本轮没有再跑会写覆盖记录的命令，结论只对上述只读材料负责。
+- **"能全自动"必须有完整链路证据**：上传成功 → 从站点把种子下载回来 → 按 pieces 指纹和文件清单核对 → 挂进 qB 校验 100%。页面还标"未审"的算 `pending_review`，由 `bsend followup` 机器回访收尾，不算人工兜底。
+- 没有本轮或历史完整链路证据的，一律标"未验证"，不按"代码看起来支持"推断。
+- 配置现状：白名单 `autoReseedSites` 40 站；`sourceSites` 里启用扫描 100 站；其余是源站、暂停站、无权限站、动态表单站、连不通站、类目不符站、关站站和还没接适配器的外文站。
+
+### 7.2 白名单 40 站逐站矩阵
+
+判定分四档：**能全自动**（链路已打通）、**需补适配**（代码/配置缺口，修了能发）、**站点侧限制**（程序改不了，只能半自动或人工兜底）、**未验证**（没有完整链路证据）。
+
+| 站点 | 本轮实际结果 | 判定 | 判定依据（可核对的证据） |
+| --- | --- | --- | --- |
+| baozi | 2 条已提交、已挂回，等审核 | 能全自动 | 83868 https://p.t-baozi.cc/details.php?id=83868 ；83869 https://p.t-baozi.cc/details.php?id=83869 ；均 `pending_review`，回访收尾 |
+| cangbao | 1 条已挂回等审核；1 条已有条目复核 404 | 能全自动 | 44240 https://cangbao.ge/details.php?id=44240 已挂回；1674 下载种子 HTTP 404，未判其他版本 https://cangbao.ge/details.php?id=1674 |
+| dragonhd | 1 条已做种；1 条判重检索超时 | 能全自动（检索稳定性待补） | 49038 https://www.dragonhd.xyz/details.php?id=49038 已做种；War 检索 `torrents.php?search=…` 30 秒超时后中止，未盲发 |
+| hdtime | 2 条已做种 | 能全自动 | 239557 https://hdtime.org/details.php?id=239557 ；239558 https://hdtime.org/details.php?id=239558 |
+| hdvideo | 1 条已挂回等审核；1 条 `existed=1` 线索未核实；1 条被 G2 拦 | 能全自动 | 79086 https://hdvideo.top/details.php?id=79086 已挂回；74646 线索 https://hdvideo.top/details.php?id=74646&existed=1 未能定位核对 |
+| kufei | 2 条已做种；1 条被 G2 拦 | 能全自动 | 142311 https://kufei.org/details.php?id=142311 ；142312 https://kufei.org/details.php?id=142312 ；被拦条目的 `medium_sel` 选档待补 |
+| lemonhd | 2 条已做种 | 能全自动 | 49207 https://lemonhd.net/details.php?id=49207 ；49208 https://lemonhd.net/details.php?id=49208 |
+| ptcafe | 2 条已做种 | 能全自动 | 137339 https://ptcafe.club/details.php?id=137339 ；137340 https://ptcafe.club/details.php?id=137340 |
+| ptlgs | 1 条已挂回等审核 | 能全自动 | 115362 https://ptlgs.org/details.php?id=115362 ；历史 115350 已验证独立 `cover`/`screenshots` 字段填得对 |
+| ptsbao | 1 条已做种；1 条被 G2 拦 | 能全自动 | 135848 https://ptsbao.club/details.php?id=135848 ；被拦条目 `medium_sel` 选档待补 |
+| pthome | 1 条已有并做种；1 条"已存在！"被记成失败 | 能全自动（回包识别待补） | 272549 https://www.pthome.net/details.php?id=272549 已自己做种；War 回包"已存在！"目前落 `failed`，应判重复 |
+| qingwa | 1 条已挂回，后续审核通过 | 能全自动（大合集走候选入口属站点侧限制） | 208804 https://qingwapt.com/details.php?id=208804 ；Poirot 合集 `torrent_too_large`，记 `pending_offers`，候选表单不代填 |
+| sbpt | 1 条命中已有 | 能全自动 | 21768 https://sbpt.link/details.php?id=21768 ；历史七条详情页作者均为本站账号，已做种或校验 100%（见 `SITES.md` 2.5.1） |
+| shuioudao | 2 条已挂回等审核 | 能全自动 | 72641 https://sewerpt.com/details.php?id=72641 ；72642 https://sewerpt.com/details.php?id=72642 |
+| tangpt | 2 条已挂回等审核 | 能全自动 | 74000 https://www.tangpt.top/details.php?id=74000 ；74001 https://www.tangpt.top/details.php?id=74001 |
+| xdy | 2 条已做种 | 能全自动 | 8073 https://xdypt.vip/details.php?id=8073 ；8074 https://xdypt.vip/details.php?id=8074 |
+| crabpt | 2 条已挂回等审核 | 能全自动 | 241256 https://crabpt.vip/details.php?id=241256 ；241257 https://crabpt.vip/details.php?id=241257 |
+| cyanbug | 2 条已挂回等审核；首轮 TLS 断连后重试成功 | 能全自动（偶发连接抖动） | 105724 https://cyanbug.net/details.php?id=105724 ；105725 https://cyanbug.net/details.php?id=105725 |
+| dubhe | 2 条已做种 | 能全自动 | 55806 https://dubhe.site/details.php?id=55806 ；55807 https://dubhe.site/details.php?id=55807 |
+| hdbao | 1 条已做种；1 条命中已有 | 能全自动 | 54876 https://hdbao.cc/details.php?id=54876 ；54657 https://hdbao.cc/details.php?id=54657&existed=1 |
+| nanyang | 2 条已做种 | 能全自动 | 226318 https://nanyangpt.com/details.php?id=226318 ；226319 https://nanyangpt.com/details.php?id=226319 |
+| novahd | 2 条已做种 | 能全自动 | 227797 https://pt.novahd.top/details.php?id=227797 ；227798 https://pt.novahd.top/details.php?id=227798 |
+| oshen | 2 条已做种 | 能全自动 | 57273 http://www.oshen.win/details.php?id=57273 ；57274 http://www.oshen.win/details.php?id=57274 |
+| railgun | 2 条已做种 | 能全自动 | 60808 https://bilibili.download/details.php?id=60808 ；60809 https://bilibili.download/details.php?id=60809 |
+| ubits | 1 条已做种 | 能全自动 | 379934 https://ubits.club/details.php?id=379934 ；图床黑名单（imgbox 拒、必须 pixhost）规则已落地 |
+| xingyunge | 2 条已挂回等审核 | 能全自动 | 192758 https://pt.xingyungept.org/details.php?id=192758 ；192759 https://pt.xingyungept.org/details.php?id=192759 |
+| ptba | 本轮无缺口条目，没有可发内容 | 能全自动（历史证据） | 历史 106718 https://1ptba.com/details.php?id=106718 已发布并挂回、校验 100%；本轮源站本身，缺口已被覆盖 |
+| audiences | 2 次上传失败，通用"上传失败！" | 需补适配（叠加站点侧人工依赖） | 上传页是自定义 JS 表单，`type` 以隐藏值 `0` 提交，程序没有对应选档逻辑；判重检索还依赖真实浏览器前台渲染 Turnstile，后台标签页 token 为空（`kimi.rs` 已报"标签页在后台"） |
+| longpt | 4 条中止：表单 action 落到 `bonusrain.php` | 需补适配 | 审计 error："上传表单 action 不是上传处理页：https://longpt.org/bonusrain.php（命中 bonusrain.php），已中止提交"；历史 51065 曾发成，入口识别现在仍会走错 |
+| ptfans | 本轮未发：分类归到 H 漫区；源站详情页超时 | 需补适配 | Coraline 被自动归到"H漫(动漫、漫画)"区，分类映射错误；另一条源站 `carpt.net/details.php?id=198553` 请求超时 |
+| ptzone | 1 条被 G2 拦（`audiocodec_sel` 未选）；1 条详情页复核超时 | 需补适配 | 112597 https://ptzone.xyz/details.php?id=112597 复核请求超时；历史 190916 五项检查全过、发成过 |
+| city13 | 2 条 HTTP 200 未识别失败；2 条被 G2 拦 | 需补适配 | 回包既不是详情页也不是错误框，程序认不出；历史 88256 https://13city.org/details.php?id=88256 是靠站内搜索人工兜底确认已发 |
+| qilin | 1 条已发布但挂回失败；1 条同分片跳过 | 需补适配 | 480763 https://www.hdkyl.in/details.php?id=480763 站点种子带 `hdkylin.top` 非目标 tracker，按单站策略拒绝补挂，落 `posted_unresolved`；418978 https://www.hdkyl.in/details.php?id=418978 同分片跳过 |
+| lajidui | 2 条已挂回等审核，但属安全集外误发 | 需补适配（候选范围失守） | 85084 https://pt.lajidui.top/details.php?id=85084 （人民的名义）、85085 https://pt.lajidui.top/details.php?id=85085 （伪装者）；批次备注：不在安全集内，未做人工核对 |
+| luckpt | 1 条命中已有；2 条官方预审未过被拦 | 站点侧限制（半自动） | 61704 https://pt.luckpt.de/details.php?id=61704 ；G5 LuckAudit 官方预审未清零不发，程序代过不了预审，只能等条目自身过审 |
+| cspt | 4 条中止：账号无发布权限 | 站点侧限制（权限缺失） | 审计 error："该账号无发布权限（页面提示含「没有发布种子的权限」）：https://cspt.top/upload.php" |
+| itzmx | 2 次失败：通用上传失败；HTTP 403 | 站点侧限制（文件大小上限，403 待查） | 历史 13134 https://pt.itzmx.com/details.php?id=13134 小种发成；站点 `.torrent` 上限 266,240 bytes，大合集普遍被拒；本轮 Coraline 回 HTTP 403 是新现象 |
+| tey | 1 条已挂回等审核；3 条被 G2 拦（蓝光/Remux） | 站点侧限制（HDTV/WEB-DL 可自动，蓝光不行） | 624 https://pt.tey.cc/details.php?id=624 已挂回；`medium_sel` 只有 WEB-DL/HDTV/DVDR/CD/Track，没有 Blu-ray，不能硬填 HDTV |
+| tjupt | 2 次失败：大种子上传空回包 | 站点侧限制（体积门槛） | 历史 652794 https://www.tjupt.org/details.php?id=652794 25GB 单条发成并挂回；274GB 合集上传 5 分钟回 HTTP 200 空正文、站上无条目，重试仍空回包 |
+| hdfans | 1 条被 G2 拦（`medium_sel` 未选） | 未验证 | 本轮没有新上传成功证据；287791、287874 是原种挂目标站 tracker、progress=1，不算程序发布；选档缺口待补后再验证 |
+
+**矩阵小结**：白名单 40 站里，26 站本轮链路打通、1 站有历史完整链路证据（ptba）；7 站需补适配；5 站受站点侧限制；1 站未验证。
+
+### 7.3 白名单之外的站点（107 站，按没启用的原因分组）
+
+| 分组 | 站点 | 为什么没启用 / 能不能自动 |
+| --- | --- | --- |
+| 账号没有发布权限（站点侧，程序改不了） | btschool、carpt、chdbits、cmct、daxiangjiao、discfan、dstudio、ggpt、hdarea、hdhome、hdsky、hhanclub、hitpt、kamept、keepfrds、march、njtupt、okpt、playlet、pt52、pter、ptskit、siqi、tccf、tokyo、ultrahd、wtsakura、xingwan、zmpt | 上传页明示"没有发布种子的权限"；只有账号升级权限后才谈得上适配 |
+| 权限待实证（旧"无权限"结论可能过时） | agsvpt | 2026-11-26 GET `upload.php` 返回完整上传表单、没有权限拒绝字样；2026-11-23 的"无发布权限"结论可能已过时，但要真发一条才能定论，当前未实证；`sourceSites` 里 `enabled:false`、`managed:false` |
+| 动态/JS 上传界面，当前程序不支持 | hddolby、mypt、ptt、rousi、ttg、haoxue、hdcity、muxuege、aling、fenghuang、iloli、hdu、xingtan | 拿不到可解析的静态表单（自定义 JS、SPA、隐藏字段），或表单有小缺口（`medium_sel`/`audiocodec_sel`/`team_sel`/`source_sel`/`processing_sel` 未选）；haoxue 是 Next.js/Flux 单页应用，要按前端接口重做 |
+| 连不通 / 超时 / 403（网络或登录态） | freefarm、gtk、hdclone、hudbt、u2、shadow、sunny、piggo、tu88 | 域名、TLS、连接超时或跳登录页；整站暂停，不写"站上没有"的记录 |
+| 类目不符（不转影视） | haitang、kelu、vclib、nicept、ziran、soulvoice、musopia、dicmusic | 只有曲艺、有声书、音乐、电子书类目，影视内容不宜发 |
+| 已关站或换形态 | momentpt、ptlao、movie52、yinghua | 告别页、404 或域名解析失败 |
+| 其他站点程序，适配器未接入、未验证 | aither、alpharatio、animez、anthelion、azusa、beyondhd、bitporn、blutopia、brokenstones、byr、clearjav、empornium、exoticaz、fappaizuri、filelist、generationfree、gpw、haidan、happyfappy、hdspace、hdtorrents、huno、iptorrents、jpopsuki、lst、milkie、monika、mteam、myanonamouse、nebulance、oldtoons、opencd、orpheus、ourbits、ptneko、sjtu、sportscult、tlf、torrentleech、yemapt、yzyy、zhuque | Gazelle / Unit3D / Blu / XBTIT / custom / Discuz / TNode / YemaPT / Haidan 等程序，当前只有 NexusPHP 上传链路；未测过，不推断能不能发 |
+| 只停发种（暂停状态） | panda | 候选种子 24 小时没做种被系统删；站规严（主标题禁中文、简介六段顺序、至少 4 张图）；恢复前提是"上传→立刻挂回 qB 做种"闭环先跑通 |
+
+### 7.4 "需补适配"站按缺口类型归类
+
+| 缺口类型 | 涉及站点 | 本轮证据 | 修一次能覆盖几站 |
+| --- | --- | --- | --- |
+| 上传表单结构不支持（自定义 JS 表单、隐藏字段、action 落到别处） | audiences、longpt | audiences：`type` 隐藏值 0，无选档逻辑；longpt：action 误判到 `bonusrain.php` 中止 | 白名单 2 站；同一套表单解析改造还能给 hddolby、mypt、ptt、rousi、ttg 等动态站打底 |
+| 判重/详情页检索超时，或回包认不出来 | dragonhd、ptzone、pthome、city13、hdvideo、cyanbug | dragonhd 检索超时；ptzone 详情页超时；pthome"已存在！"落 failed；city13 HTTP 200 未识别；hdvideo `existed=1` 线索定位不到；cyanbug 首轮 TLS EOF | 6 站（统一加检索重试 + 错误文案/回包分类 + 站内搜索兜底确认） |
+| G2 选档下拉匹配不上（`medium_sel`/`audiocodec_sel` 未选） | hdfans、kufei、hdvideo、ptsbao、city13、ptzone | 今日被 G2 拦下的条目，片源/音频 token 对不上站点真实选项；同站另有条目发成，说明是偶发或单类型映射缺口 | 6 站（补选档映射和 `selectPicks`；匹配不上仍落人工，不硬填） |
+| 分类映射错误 | ptfans | Coraline 被归到"H漫(动漫、漫画)"区 | 1 站；分类文案映射表是全站共用，修正后其他站同类问题一并受益 |
+| 挂回时 tracker 别名识别不全 | qilin | 480763 站点种子带 `hdkylin.top` announce，和页面域 `hdkyl.in` 是同站别名，被单站策略当非目标 tracker 拒绝 | 1 站；别名归一逻辑可复用给其他多 announce 站 |
+| 候选范围/安全集校验失守 | lajidui | 恢复禁转标记后按全量候选生成草稿，把安全集外的人民的名义、伪装者发了上去 | 1 站；编排层校验，白名单/安全集范围对所有站生效 |
+| 发布前自动补图没接进流水 | sbpt、hdbao、hdfans（续测预检发现） | 白色巨塔在 sbpt 7 张图全死、剪完 0 张；伪装者在 hdbao 9 张全死；Liar Game 在 hdfans 只剩 1 张海报；目前补图是半自动脚本流水，发布前不会自动找海报/抽帧 | 所有要图站（藏宝阁/优堡/太乙/麒麟/熊猫/ptlgs 等）共性问题 |
+
+### 7.5 下一步最值得做的 5 件事（按影响面排序）
+
+1. **修回包识别和检索超时重试**（解锁 dragonhd、ptzone、pthome、city13、hdvideo、cyanbug 6 站）
+   - 把"已存在！"这类站点明文判重归入重复，不再记失败；检索/详情页 30 秒超时允许重试 1–2 次；HTTP 200 但页面认不出来时，先站内搜索或看账号上传列表确认到底发没发，再决定重试。
+   - 验收：city13 一条演练回包能正确归类；dragonhd、ptzone 检索超时自动重试后拿到结果；pthome"已存在！"落重复而不是失败；有单测覆盖这几类回包，一轮 dry-run 没有未识别回包。
+2. **补 G2 选档映射**（解锁 hdfans、kufei、hdvideo、ptsbao、city13、ptzone 6 站，部分与第 1 件重叠）
+   - 把今日被拦条目的片源、音频 token 对到站点真实选项；站点列表里没有的选项落人工，不硬填。
+   - 验收：今日被拦的 7 条 dry-run 演练 G2 全过，或明确落人工；tey 的蓝光源仍被正确拦下（站点无 Blu-ray 档，不允许硬填 HDTV）。
+3. **修表单入口识别和隐藏/JS 字段解析**（解锁 longpt、audiences 2 站，并为动态表单站打底）
+   - longpt 正确识别 `takeupload.php`，不再走到 `bonusrain.php`；audiences 隐藏 `type=0` 字段要有选档逻辑；提交链路仍标注需要浏览器前台 Turnstile。
+   - 验收：longpt 演练 action 指向上传处理页；audiences 表单能构造出 `type` 选值；audiences 判重仍走真实浏览器，后台标签页明确报"标签页在后台"。
+4. **修分类映射和候选安全集范围**（解锁 ptfans、lajidui 2 站）
+   - ptfans 影视条目不再落到 H 漫/动漫区；候选生成只走白名单和安全集，恢复禁转标记后不扩大范围。
+   - 验收：Coraline→ptfans 分类落到电影/剧集；lajidui 候选里不再出现安全集外的人民的名义、伪装者；用回放脚本复现同两条问题条目。
+5. **挂回前归一 tracker 别名 + 发布前自动补图**（解锁 qilin 1 站，并消除要图站的死图退回）
+   - 挂回前把同站 announce 别名归一（如 `hdkylin.top` ↔ `hdkyl.in`），只有真的别的站 tracker 才拒绝；发布前死图剪完不足时，自动从正片抽帧或取海报、传 pixhost 再写回简介，接进自动流水而不是靠手工脚本。
+   - 验收：qilin 480763 按别名核对后能挂回；sbpt/hdbao/hdfans 死图条目 dry-run 能补足图数，补不足的明确落人工；补图动作在自动发种流程里自动触发。
+
+### 7.6 只能半自动 + 人工兜底的站及原因
+
+| 站点 | 原因 | 程序现在能做到哪一步 |
+| --- | --- | --- |
+| cspt 及其余无权限站（名单见 7.3 第一组） | 账号没有发布权限，站点侧限制 | 只能辅种；发布要等账号权限变化 |
+| luckpt | 站点官方 LuckAudit 预审，预审不过不发 | 预审通过的条目能自动发；预审本身程序代过不了 |
+| tey（蓝光/Remux 部分） | 媒介下拉没有 Blu-ray 档 | HDTV/WEB-DL 能自动发；蓝光/Remux 只能人工或不发 |
+| itzmx（大种部分） | `.torrent` 文件上限 266,240 bytes | 小种能自动发；大合集被业务错误框拒绝，本轮 Coraline 还回了 403，原因待查 |
+| tjupt（超大合集部分） | 站点后端处理大种子超时，空回包 | 25GB 左右单条能自动发；几百 GB 合集要拆小或换内容 |
+| qingwa（大合集） | `torrent_too_large`，站点要求走 `offers.php` 候选入口 | 记 `pending_offers`，候选表单不代填，等人去候选页提交 |
+| audiences | 判重依赖真实浏览器前台渲染 Turnstile；上传页是自定义 JS 表单 | 检索走 Kimi WebBridge；后台标签页明确报错，不盲发；表单选档未接 |
+| panda | 暂停发种；候选种子 24 小时未做种被系统删 | 等"上传→立刻挂回"闭环验证后再恢复 |
+| hddolby、mypt、ptt、rousi、ttg、haoxue 等动态表单站 | 静态表单拿不到，适配器形态不支持 | 只能记录站点形态，要按前端接口重做 |
+| 连不通站（freefarm、gtk、hdclone、hudbt、u2、shadow、sunny、piggo、tu88） | 网络/TLS/登录态不通 | 整站暂停，连通后再测 |
+| 类目不符站（haitang、kelu、vclib、nicept、ziran、soulvoice、musopia、dicmusic） | 没有影视类目 | 只做提示，不转种 |
+| 已关站（momentpt、ptlao、movie52、yinghua） | 告别页/404/域名失效 | 暂停并记 `statusNote` |
+| 外文程序站（Gazelle/Unit3D/Blu/XBTIT/Discuz/TNode 等） | 适配器未接入 | 未验证，不在自动发种范围 |
+
+### 7.7 与 `SITES.md` 实测对不上的地方（待另一处统一修订，本节不改 `SITES.md`）
+
+1. **cspt**：`SITES.md` 2.1、2.5、第 3 节表标"可发，259870 已挂回"；今日审计 4 条都是"该账号无发布权限"。权限疑似被收回，状态需要改。
+2. **ptfans**：`SITES.md` 2.1 标"可发 11111"，2.5 行只记了 `medium_sel=8` 选档；今日分类被归到 H 漫/动漫区，源详情页还超时；配置 note 写着 `publishEnabled 仍 false`，文档没反映分类映射问题。
+3. **longpt**：`SITES.md` 2.2 表标"可发 51065"，2.5 行备注 action 可能误配但读起来像已修；今日 4 条仍落到 `bonusrain.php` 中止。
+4. **audiences**：`SITES.md` 2.5 行只记了 Turnstile/后台标签页；今日两次失败在上传表单结构（自定义 JS、`type` 隐藏值 0，程序不支持），这个表单缺口文档没记。
+5. **city13**：`SITES.md` 2.4 记 88256 靠站内搜索确认已发；今日 2 条仍 HTTP 200 未识别，回包缺口还在。
+6. **itzmx**：`SITES.md` 2.1 标"可发（限小种）"；今日出现 HTTP 403（Coraline）和通用上传失败（War），403 是新现象，文档未记。
+7. **hdfans**：`SITES.md` 2.3 只记 287791、287874 已核实做种；今日 A Touch 被 G2 `medium_sel` 拦，选档缺口未记。
+8. **ptzone**：`SITES.md` 2.2 标"可发 190916"；今日详情页复核超时、`audiocodec_sel` 未选被拦，稳定性和选档缺口未记。
+9. **扫描站数**：`SITES.md` 第 1 节写"参与扫描 101 个"，配置实测 `enabled=true` 是 100 个。
+10. **cangbao 43994**：`SITES.md` 记审核图标已标"通过"；今日批次备注页面仍标"未审"，qB 已校验 100%。
+11. **lajidui**：`SITES.md` 2.4 记 4 条等审核、三项下拉已核对；今日 85084、85085 是安全集外误发，候选范围失守问题文档未记。
+12. **qilin**：`SITES.md` 2.5 行只记缺图/换图等复审；今日 480763 挂回被非目标 tracker 拒（`posted_unresolved`），挂回 tracker 别名识别缺口未记。
+
+## 8. 相关文档
 
 - 为什么这样判断、怎么发一条种子：`ARCHITECTURE.md`
 - 数据文件、命令、巡检、排障：`OPERATIONS.md`

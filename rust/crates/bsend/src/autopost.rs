@@ -205,6 +205,9 @@ pub fn run_autopost_with(
                             cell.status = CoverageStatus::Seeding;
                             cell.at = now;
                             cell.note = Some(m.note.clone());
+                            // 草稿格子存的是源种链接；翻成目标站做种后，
+                            // 不能把源站链接留在目标站格子里。
+                            cell.url = None;
                         }
                     }
                 }
@@ -440,6 +443,7 @@ pub fn run_autopost_with(
             .find(|(n, _)| n == "type")
             .map(|(_, l)| l.clone());
         let descr_final = reseed::submitted_descr(&rep.prepared, &rep.info.descr);
+        let (poster_count, screenshot_count) = reseed::image_split_counts(&rep.prepared);
         let results = {
             let input = gates::GateInput {
                 rules: &rules,
@@ -451,6 +455,8 @@ pub fn run_autopost_with(
                 type_label: type_label.as_deref(),
                 core_gaps: &core,
                 required_gaps: &rep.prepared.required_gaps,
+                poster_count,
+                screenshot_count,
                 audit_passed: rep.audit.as_ref().map(|a| a.passed),
             };
             gates::evaluate(&input)

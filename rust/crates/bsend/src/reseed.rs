@@ -717,14 +717,35 @@ fn normalize_release_title_for(name: &str, completed: bool) -> String {
 
 /// 站点对标题片源写法的硬性要求。青蛙实测：Remux 资源必须写 `BluRay`，
 /// 不能带 `Blu-ray` 的横杠；只改目标站标题，不改源站页和其他站口径。
+/// 大小写（`Blu-ray`/`Blu-Ray`/`BLU-RAY`/`blu-ray`）、连字符/空格（`Blu ray`）、
+/// 无分隔（`BLURAY`）变体都归一到 `BluRay`。
 fn normalize_title_for_site(name: &str, site_id: &str) -> String {
     if site_id != "qingwa" {
         return name.to_string();
     }
-    name.replace("Blu-ray", "BluRay")
-        .replace("Blu-Ray", "BluRay")
-        .replace("Blu ray", "BluRay")
-        .replace("blu-ray", "BluRay")
+    let lower = name.to_ascii_lowercase();
+    let lb = lower.as_bytes();
+    let mut out = String::with_capacity(name.len());
+    let mut i = 0usize;
+    while i < lb.len() {
+        if lb[i..].starts_with(b"blu") {
+            let sep = if matches!(lb.get(i + 3), Some(b'-') | Some(b' ')) {
+                1
+            } else {
+                0
+            };
+            let ray_at = i + 3 + sep;
+            if lb.len() >= ray_at + 3 && &lb[ray_at..ray_at + 3] == b"ray" {
+                out.push_str("BluRay");
+                i = ray_at + 3;
+                continue;
+            }
+        }
+        let ch = name[i..].chars().next().unwrap();
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    out
 }
 
 /// 详情页解析：发布名/副标题/简介/MediaInfo/条目链接（Swift `parse` 的通用子集）
@@ -1707,9 +1728,6 @@ pub fn build_upload_fields_for_site(
             notes.push(format!("{field}：按青蛙蓝光规则选「{label}」"));
         }
     }
-    if site_id == "tjupt" {
-        fill_tjupt_series_fields(&mut fields, &site_info, page);
-    }
     if site_id == "ubits" {
         fill_ubits_quality_fields(&mut fields, &site_info, page);
     }
@@ -1808,41 +1826,129 @@ fn fill_select_by_label(fields: &mut Vec<Field>, page: &str, prefix: &str, label
     false
 }
 
-fn fill_tjupt_series_fields(fields: &mut Vec<Field>, info: &ReleaseInfo, _page: &str) {
-    let type_val = fields
-        .iter()
-        .find(|(n, _)| n == "type")
-        .map(|(_, v)| v.clone());
-    let Some(type_val) = type_val else {
-        return;
+/// 剧集类型/地区归类线索（标题/简介命中即归类；归不出走兜底「其他」）。
+const SERIES_REGIONS: &[&str] = &["大陆", "港台", "美剧", "日剧", "韩剧", "英剧", "泰剧"];
+
+/// 按站点规则补分类下 JS 异步注入的附加必填字段。
+///
+/// 静态上传页里没有这些控件（页面 JS 再从分类片段接口拉）；规则由
+/// [`SiteRules.category_rules`](crate::gates::SiteRules) 声明。能拉到分类片段时，
+/// 以片段里的真实控件名为准；派生不出中文名/英文名就记缺口落人工，不发空值。
+pub fn prepare_category_fields(
+    target: &NexusPhp,
+    prep: &mut PreparedUpload,
+    info: &ReleaseInfo,
+    rules: &crate::gates::SiteRules,
+) -> Result<()> {
+    let Some(type_val) = field_lookup(&prep.fields, "type") else {
+        return Ok(());
     };
-    if type_val != "402" {
-        return;
-    }
-    // 剧集必填：中文名、英文名、剧集类型。
-    if let Some(cname) = first_bracket_name(&info.subtitle).or_else(|| {
-        info.descr
-            .split(['●', '◎', '\n'])
-            .find(|s| s.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c)))
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-    }) {
-        set_field(fields, "cname", cname);
-    }
-    if !info.name.is_empty() {
-        set_field(fields, "ename", info.name.clone());
-    }
-    const SERIES_REGIONS: &[&str] = &["大陆", "港台", "美剧", "日剧", "韩剧", "英剧", "泰剧"];
-    let hay = format!("{} {} {}", info.subtitle, info.descr, info.name);
-    if let Some(region) = SERIES_REGIONS.iter().find(|r| hay.contains(**r)) {
-        set_field(fields, "specificcat", (*region).to_string());
-        // 页面上的复选框会同时提交同名 value；服务端两种都认。
-        if !fields.iter().any(|(n, _)| n == region) {
-            fields.push(((*region).to_string(), (*region).to_string()));
+    let Some(rule) = rules.category_rules.iter().find(|r| r.category == type_val) else {
+        return Ok(());
+    };
+    // 拉分类控件定义片段；拉不到就不猜字段名，记缺口落人工。
+    let fragment: Option<String> = match &rule.detail_endpoint {
+        Some(template) => {
+            let rel = template.replace("{catid}", type_val);
+            let url = resolve_url(&rel, &target.base);
+            match target.fetch_html(&url, &prep.form_url) {
+                Ok(html) => Some(html),
+                Err(e) => {
+                    prep.required_gaps.push(format!(
+                        "必填缺失：分类 {type_val} 的附加字段定义片段拉取失败（{e:#}），落人工核对"
+                    ));
+                    return Ok(());
+                }
+            }
         }
-    } else {
-        // 页面有该必填项但内容没线索时留空会造成静默退回，直接用“其他”。
-        set_field(fields, "specificcat", "其他".to_string());
+        None => None,
+    };
+    let controls_html = fragment.as_deref().unwrap_or(&prep.form_html);
+    apply_category_rule_fields(
+        &mut prep.fields,
+        &mut prep.required_gaps,
+        info,
+        controls_html,
+        rule,
+    );
+    Ok(())
+}
+
+/// 纯逻辑部分：按规则把派生值补进字段；控件不在片段/页面里、或派生不出值就记缺口。
+fn apply_category_rule_fields(
+    fields: &mut Vec<Field>,
+    gaps: &mut Vec<String>,
+    info: &ReleaseInfo,
+    controls_html: &str,
+    rule: &crate::gates::CategoryRule,
+) {
+    let hay = format!("{} {} {}", info.subtitle, info.descr, info.name);
+    for f in &rule.fields {
+        // 只认真实控件；片段/静态页里都没有这个字段名就不臆造。
+        if !form_has(controls_html, &f.field) {
+            gaps.push(format!(
+                "必填缺失：{}（分类 {} 的异步控件里找不到该字段）",
+                f.field, rule.category
+            ));
+            continue;
+        }
+        let cur = field_lookup(fields, &f.field)
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        match f.kind {
+            crate::gates::CategoryFieldKind::ChineseName => {
+                if !cur.is_empty() {
+                    continue;
+                }
+                let cname = first_bracket_name(&info.subtitle).or_else(|| {
+                    info.descr
+                        .split(['●', '◎', '\n'])
+                        .find(|s| s.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c)))
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                });
+                match cname {
+                    Some(v) => set_field(fields, &f.field, v),
+                    None => gaps.push(format!(
+                        "必填缺失：{}（派生不出中文名，落人工核对）",
+                        f.field
+                    )),
+                }
+            }
+            crate::gates::CategoryFieldKind::EnglishName => {
+                if !cur.is_empty() {
+                    continue;
+                }
+                let ename = info.name.trim().to_string();
+                if ename.is_empty() {
+                    gaps.push(format!(
+                        "必填缺失：{}（主标题为空，派生不出英文名，落人工核对）",
+                        f.field
+                    ));
+                } else {
+                    set_field(fields, &f.field, ename);
+                }
+            }
+            crate::gates::CategoryFieldKind::SpecificCat => {
+                if !cur.is_empty() {
+                    continue;
+                }
+                let region = SERIES_REGIONS.iter().find(|r| hay.contains(**r));
+                let value = region
+                    .map(|r| r.to_string())
+                    .or_else(|| f.default.clone())
+                    .unwrap_or_else(|| "其他".to_string());
+                set_field(fields, &f.field, value);
+            }
+            crate::gates::CategoryFieldKind::Checkbox => {
+                if fields.iter().any(|(n, _)| n == &f.field) {
+                    continue;
+                }
+                let value = f.default.clone().unwrap_or_else(|| f.field.clone());
+                fields.push((f.field.clone(), value));
+            }
+        }
     }
 }
 
@@ -1963,6 +2069,27 @@ fn fill_image_fields(
             }
         }
     }
+}
+
+/// 从构造结果拆出（海报张数，截图张数）：独立字段有值按字段算；没有独立字段时
+/// 第一张简介图算海报，其余算截图。门禁按站点底线分别核对。
+pub fn image_split_counts(prep: &PreparedUpload) -> (usize, usize) {
+    let descr_imgs = image_urls_from_descr(submitted_descr(prep, "")).len();
+    let poster = prep
+        .poster_field
+        .as_deref()
+        .and_then(|f| field_lookup(&prep.fields, f))
+        .filter(|v| !v.trim().is_empty())
+        .map(|_| 1)
+        .unwrap_or(usize::from(descr_imgs > 0));
+    let shots = prep
+        .screenshot_field
+        .as_deref()
+        .and_then(|f| field_lookup(&prep.fields, f))
+        .filter(|v| !v.trim().is_empty())
+        .map(|v| v.lines().filter(|l| !l.trim().is_empty()).count())
+        .unwrap_or(descr_imgs.saturating_sub(poster));
+    (poster, shots)
 }
 
 // ---------------- 选档映射（发布名/副标题 → 分类与质量下拉） ----------------
@@ -3584,6 +3711,41 @@ fn apply_site_rules_tail(prep: &mut PreparedUpload, rules: &crate::gates::SiteRu
         }
     }
 
+    // requiredTags：配置声明上传必须勾选的标签（如 agsvpt ⛵方舟 value=52；
+    // 13 是杜比、51 是合并）。代码不预设某站所有种子必勾某个标签，是否需要由配置决定。
+    // 先按页面真实控件自动勾上；构造完仍未选中就记缺口，门禁阻断，不带空值 POST。
+    for req in &rules.required_tags {
+        let controls = input_controls(&prep.form_html, &req.field, "checkbox");
+        let hit = controls.iter().find(|(_, value, label, _)| {
+            req.value.as_deref().is_some_and(|v| v == value)
+                || req
+                    .label
+                    .as_deref()
+                    .is_some_and(|l| label_matches(label, l))
+        });
+        match hit {
+            Some((name, value, label, _)) => {
+                if !prep.fields.iter().any(|(n, v)| n == name && v == value) {
+                    prep.fields.push((name.clone(), value.clone()));
+                }
+                prep.select_notes.push(format!(
+                    "{name}：按规则勾选必需标签「{label}」（requiredTags）"
+                ));
+            }
+            None => {
+                let want = req
+                    .label
+                    .clone()
+                    .or_else(|| req.value.clone())
+                    .unwrap_or_else(|| req.field.clone());
+                prep.required_gaps.push(format!(
+                    "必填缺失：{}（必需标签「{}」未勾选）",
+                    req.field, want
+                ));
+            }
+        }
+    }
+
     // requiredFields：必填前缀任一未选即记缺口；门禁据此拒绝发布，绝不带空值 POST
     for prefix in &rules.required_fields {
         if prefix_selected(&prep.fields, &prep.form_html, prefix) {
@@ -3920,18 +4082,21 @@ pub fn submit_upload(
 
 /// 上传未成功时提取错误（errorbox → 常见错误特征 → 兜底）
 fn extract_upload_error(body: &str, status: u16) -> String {
-    // 空回包不是“未知页面”：tjupt 对超大种子处理到后端超时后会回 HTTP 200、
-    // 正文 0 字节。必须说清“没有拿到结论”，不能让人误以为站点静默通过。
-    if body.trim().is_empty() {
-        return format!(
-            "HTTP {status} 空回包（站点后端没有返回内容，通常是处理超时或崩溃；本次未确认发布）"
-        );
-    }
     // 种子过大：NexusPHP 系不回错误框，而是回一个 `torrent_too_large` 表单自动跳
-    // offers.php（候选区）。按普通“未识别返回”记会把站点明确的结论埋掉。
+    // offers.php（候选区）。这是结构性信号，优先于空壳判断：表单本身没有可见文本，
+    // 按普通“未识别返回”记会把站点明确的结论埋掉。
     if body.contains("torrent_too_large") || body.contains("add_offer=1") {
         return "站点判定种子过大（torrent_too_large），要求改走候选（offers.php）；不自动重试"
             .into();
+    }
+    // 空回包不是“未知页面”：tjupt 对超大种子处理到后端超时后会回 HTTP 200、
+    // 正文 0 字节；有的站只回一个没有可见文本的 HTML 空壳。两种都按“后端没给结论”
+    // 记，不能混成站点拒绝，也不能让人误以为站点静默通过。
+    let visible = strip_tags(body);
+    if body.trim().is_empty() || visible.trim().is_empty() {
+        return format!(
+            "HTTP {status} 空回包（站点后端没有返回内容，通常是处理超时或崩溃；本次未确认发布）"
+        );
     }
     if let Some(t) = div_inner(body, "errorbox") {
         let t = strip_tags(&t).trim().to_string();
@@ -3939,12 +4104,30 @@ fn extract_upload_error(body: &str, status: u16) -> String {
             return t;
         }
     }
+    // 缺必填项类拒绝：站点明写某项没填（tjupt 编辑页实测回“有项目没有填写”）。
+    // 和后端超时分开报：这是站点明确的校验拒绝，回包里有正文；超时是没有结论。
+    const MISSING_FIELD_MARKERS: &[&str] = &[
+        "有项目没有填写",
+        "没有填写",
+        "请填写必填",
+        "必填项目",
+        "必填字段",
+    ];
+    if let Some(marker) = MISSING_FIELD_MARKERS.iter().find(|m| body.contains(**m)) {
+        let snippet = visible
+            .lines()
+            .find(|l| l.contains(*marker))
+            .unwrap_or(marker)
+            .trim()
+            .to_string();
+        return format!("站点提示缺少必填项：{snippet}");
+    }
     for marker in ["已经上传", "已存在", "被人上传", "上传失败", "发布失败"] {
         if let Some(p) = body.find(marker) {
             let seg = strip_tags(&body[p..floor_char_boundary(body, p + 120)]);
             let line = seg.lines().next().unwrap_or("").trim().to_string();
             if !line.is_empty() {
-                return line;
+                return format!("站点拒绝（回包未展开具体原因）：{line}");
             }
         }
     }
@@ -4178,8 +4361,9 @@ pub fn review_reseed(
         }
     }
     log("抓目标站上传表单，构造提交字段…");
-    let mut prepared = prepare_upload(&rel.tgt, &rel.info)?;
     let rules = cfg.coverage.rules_for(&req.target_site);
+    let mut prepared = prepare_upload(&rel.tgt, &rel.info)?;
+    prepare_category_fields(&rel.tgt, &mut prepared, &rel.info, &rules)?;
     apply_site_rules(&mut prepared, &rules);
     // 必填缺口 / 图片全剪这类本地硬阻断要计入预检结论，不能只在字段列表下面提示。
     for gap in &prepared.required_gaps {
@@ -4853,7 +5037,15 @@ pub fn drill_release() -> ReleaseInfo {
 pub fn drill_upload_form(target: &NexusPhp) -> FormDrill {
     let info = drill_release();
     match prepare_upload(target, &info) {
-        Ok(prep) => analyze_form(&target.site_id, &target.site_name, &prep, &info),
+        Ok(mut prep) => {
+            let _ = prepare_category_fields(
+                target,
+                &mut prep,
+                &info,
+                &crate::gates::SiteRules::default(),
+            );
+            analyze_form(&target.site_id, &target.site_name, &prep, &info)
+        }
         Err(e) => FormDrill {
             site_id: target.site_id.clone(),
             site_name: target.site_name.clone(),
@@ -6241,8 +6433,9 @@ fn run_reseed_inner(
             prep
         }
         None => {
-            let mut prep = prepare_upload(&tgt, &info)?;
             let rules = cfg.coverage.rules_for(&req.target_site);
+            let mut prep = prepare_upload(&tgt, &info)?;
+            prepare_category_fields(&tgt, &mut prep, &info, &rules)?;
             apply_site_rules(&mut prep, &rules);
             if pre_audit_supported(&prep.form_html) {
                 log("调用站点官方预审（LuckAudit）…");
@@ -7454,12 +7647,48 @@ Frame rate : 25</pre>
         assert!(picked.iter().any(|p| p == "cnsub"));
     }
 
+    fn tjupt_series_rule() -> crate::gates::CategoryRule {
+        crate::gates::category_rules_default("tjupt")
+            .into_iter()
+            .next()
+            .expect("tjupt 应有剧集分类规则")
+    }
+
     #[test]
-    fn tjupt_series_fields_are_filled_from_subtitle_and_tags() {
-        let form = r#"<form action="takeupload.php" method="post">
-<select name="type"><option value="402" selected>剧集</option></select>
-<input type="text" name="small_descr" value="">
-<textarea name="descr"></textarea>
+    fn category_rule_missing_control_blocks_and_names_field() {
+        // 片段里没有 cname 控件 → 记下缺口点名 cname，不臆造字段名
+        let fragment = r#"<form>
+<input type="text" name="ename">
+<select name="specificcat"><option>其他</option></select>
+</form>"#;
+        let info = ReleaseInfo {
+            name: "Poirot S01 1080p x265 MNHD".into(),
+            subtitle: "【大侦探波洛】国英双配".into(),
+            descr: "英剧 推理".into(),
+            ..Default::default()
+        };
+        let mut fields = vec![("type".into(), "402".into())];
+        let mut gaps = Vec::new();
+        apply_category_rule_fields(
+            &mut fields,
+            &mut gaps,
+            &info,
+            fragment,
+            &tjupt_series_rule(),
+        );
+        assert!(gaps.iter().any(|g| g.contains("cname")), "{gaps:?}");
+        assert!(fields.iter().all(|(n, _)| n != "cname"), "{fields:?}");
+        // 其余两个控件在片段里，照常填上
+        assert!(fields.iter().any(|(n, _)| n == "ename"));
+        assert!(fields.iter().any(|(n, _)| n == "specificcat"));
+    }
+
+    #[test]
+    fn category_rule_all_controls_present_fills_and_passes() {
+        let fragment = r#"<form>
+<input type="text" name="cname">
+<input type="text" name="ename">
+<select name="specificcat"><option>其他</option><option>英剧</option></select>
 </form>"#;
         let info = ReleaseInfo {
             name: "Agatha Christies Poirot S01-S13 Collection Bluray 1080p x265 10bit MNHD-FRDS"
@@ -7468,11 +7697,80 @@ Frame rate : 25</pre>
             descr: "◎标　　签　英剧 | 推理".into(),
             ..Default::default()
         };
-        let (fields, _, _) = build_upload_fields_for_site(&info, form, &[], "tjupt");
+        let mut fields = vec![("type".into(), "402".into())];
+        let mut gaps = Vec::new();
+        apply_category_rule_fields(
+            &mut fields,
+            &mut gaps,
+            &info,
+            fragment,
+            &tjupt_series_rule(),
+        );
+        assert!(gaps.is_empty(), "{gaps:?}");
         assert!(fields.contains(&("cname".into(), "大侦探波洛".into())));
         assert!(fields.contains(&("ename".into(), info.name.clone())));
         assert!(fields.contains(&("specificcat".into(), "英剧".into())));
-        assert!(fields.contains(&("英剧".into(), "英剧".into())));
+    }
+
+    #[test]
+    fn category_rule_no_chinese_name_goes_manual() {
+        // 副标题/简介都抽不出中文 → 落人工，不发空 cname
+        let fragment = r#"<form>
+<input type="text" name="cname">
+<input type="text" name="ename">
+<select name="specificcat"><option>其他</option></select>
+</form>"#;
+        let info = ReleaseInfo {
+            name: "Some English Title 2024 1080p WEB-DL x264".into(),
+            subtitle: "Some English Subtitle".into(),
+            descr: "IMDb: https://www.imdb.com/title/tt1/\nEnglish description".into(),
+            ..Default::default()
+        };
+        let mut fields = vec![("type".into(), "402".into())];
+        let mut gaps = Vec::new();
+        apply_category_rule_fields(
+            &mut fields,
+            &mut gaps,
+            &info,
+            fragment,
+            &tjupt_series_rule(),
+        );
+        assert!(
+            gaps.iter()
+                .any(|g| g.contains("cname") && g.contains("派生不出中文名")),
+            "{gaps:?}"
+        );
+        assert!(fields.iter().all(|(n, _)| n != "cname"), "{fields:?}");
+    }
+
+    #[test]
+    fn category_rule_empty_english_name_goes_manual() {
+        let fragment = r#"<form>
+<input type="text" name="cname">
+<input type="text" name="ename">
+<select name="specificcat"><option>其他</option></select>
+</form>"#;
+        let info = ReleaseInfo {
+            name: "".into(),
+            subtitle: "【伪装者】国产剧".into(),
+            descr: "大陆 谍战".into(),
+            ..Default::default()
+        };
+        let mut fields = vec![("type".into(), "402".into())];
+        let mut gaps = Vec::new();
+        apply_category_rule_fields(
+            &mut fields,
+            &mut gaps,
+            &info,
+            fragment,
+            &tjupt_series_rule(),
+        );
+        assert!(
+            gaps.iter()
+                .any(|g| g.contains("ename") && g.contains("英文名")),
+            "{gaps:?}"
+        );
+        assert!(fields.iter().all(|(n, _)| n != "ename"), "{fields:?}");
     }
 
     #[test]
@@ -7591,6 +7889,27 @@ Frame rate : 25</pre>
         let msg = extract_upload_error(&body, 200);
         assert!(msg.contains("上传失败"), "{msg}");
         assert!(!site_rejects_size(&msg), "{msg}");
+    }
+
+    #[test]
+    fn missing_field_rejection_is_labeled_separately_from_timeout() {
+        // tjupt 编辑页实测回“有项目没有填写”：是站点明确的缺字段拒绝，
+        // 不能和后端超时/空回包混成一类，也不能只丢一句笼统“上传失败”。
+        let body = r#"<html><body><div class="error">有项目没有填写，请检查后重新提交</div></body></html>"#;
+        let msg = extract_upload_error(body, 200);
+        assert!(msg.contains("缺少必填项"), "{msg}");
+        assert!(msg.contains("有项目没有填写"), "{msg}");
+        assert!(!msg.contains("空回包"), "{msg}");
+        assert!(!msg.contains("未识别的返回"), "{msg}");
+    }
+
+    #[test]
+    fn tag_only_empty_shell_counts_as_empty_response_timeout() {
+        // 正文只剩 HTML 标签、没有可见文本：按后端超时/空回包记，不算站点拒绝
+        let body = r#"<html><head><title></title></head><body><form></form></body></html>"#;
+        let msg = extract_upload_error(body, 200);
+        assert!(msg.contains("空回包"), "{msg}");
+        assert!(!msg.contains("未识别的返回"), "{msg}");
     }
 
     #[test]
@@ -9479,6 +9798,133 @@ Language : Chinese"));
             prep.required_gaps,
             vec!["必填缺失：style_sel[4][]（配置标签未命中：中字/国语）".to_string()]
         );
+    }
+
+    #[test]
+    fn required_tags_52_checkbox_auto_selected_or_blocked() {
+        // 配置要求勾 ⛵方舟（value 52；13 是杜比、51 是合并，不能混勾）
+        let form = r#"<form action="takeupload.php" enctype="multipart/form-data"><input type="file" name="file">
+<input type="checkbox" name="tags[4][]" value="52"> 方舟
+<input type="checkbox" name="tags[4][]" value="13"> 杜比
+</form>"#;
+        let mut prep = prep_from_form(form);
+        let rules = crate::gates::SiteRules {
+            required_tags: vec![crate::gates::RequiredTag {
+                field: "tags[4][]".into(),
+                value: Some("52".into()),
+                label: Some("方舟".into()),
+            }],
+            ..Default::default()
+        };
+        apply_site_rules(&mut prep, &rules);
+        assert!(
+            prep.fields
+                .iter()
+                .any(|(n, v)| n == "tags[4][]" && v == "52"),
+            "{:?}",
+            prep.fields
+        );
+        // 杜比（13）不是方舟，不能被当成必需标签勾上
+        assert!(
+            !prep
+                .fields
+                .iter()
+                .any(|(n, v)| n == "tags[4][]" && v == "13"),
+            "{:?}",
+            prep.fields
+        );
+        assert!(prep.required_gaps.is_empty(), "{:?}", prep.required_gaps);
+
+        // 红：页面上没有配置要求的 52 → 记缺口，门禁点名是哪个必需标签没勾
+        let empty_form = r#"<form action="takeupload.php" enctype="multipart/form-data"><input type="file" name="file"></form>"#;
+        let mut prep2 = prep_from_form(empty_form);
+        apply_site_rules(&mut prep2, &rules);
+        assert!(
+            prep2
+                .required_gaps
+                .iter()
+                .any(|g| g.contains("必需标签「方舟」未勾选")),
+            "{:?}",
+            prep2.required_gaps
+        );
+    }
+
+    #[test]
+    fn image_split_counts_poster_first_rest_screenshots() {
+        // 没有独立字段：第一张简介图算海报，其余算截图
+        let prep = PreparedUpload {
+            action: "https://x/takeupload.php".into(),
+            form_url: "https://x/upload.php".into(),
+            fields: vec![(
+                "descr".into(),
+                "[img]https://a/1.jpg[/img]\n[img]https://a/2.jpg[/img]\n[img]https://a/3.jpg[/img]"
+                    .into(),
+            )],
+            picked_tags: vec![],
+            tag_warn: None,
+            select_notes: vec![],
+            required_gaps: vec![],
+            form_html: "<html><body><form></form></body></html>".into(),
+            poster_field: None,
+            screenshot_field: None,
+        };
+        assert_eq!(image_split_counts(&prep), (1, 2));
+
+        // 有独立字段：海报字段 1 张，截图字段按行算
+        let prep2 = PreparedUpload {
+            action: "https://x/takeupload.php".into(),
+            form_url: "https://x/upload.php".into(),
+            fields: vec![
+                ("cover".into(), "https://a/1.jpg".into()),
+                (
+                    "screenshots".into(),
+                    "https://a/2.jpg\nhttps://a/3.jpg".into(),
+                ),
+            ],
+            picked_tags: vec![],
+            tag_warn: None,
+            select_notes: vec![],
+            required_gaps: vec![],
+            form_html: "<html><body><form></form></body></html>".into(),
+            poster_field: Some("cover".into()),
+            screenshot_field: Some("screenshots".into()),
+        };
+        assert_eq!(image_split_counts(&prep2), (1, 2));
+    }
+
+    #[test]
+    fn qingwa_bluray_variants_normalized_to_bluray() {
+        for variant in [
+            "Blu-ray", "Blu-Ray", "BLU-RAY", "Blu-RAY", "blu-Ray", "Blu ray", "BLURAY", "bluray",
+        ] {
+            let name = format!("Show 2024 1080p {variant} REMUX AVC-GRP");
+            let got = normalize_title_for_site(&name, "qingwa");
+            assert!(got.contains("BluRay"), "{variant} → {got}");
+            assert!(
+                !got.contains("Blu-ray") && !got.contains("Blu ray"),
+                "{variant} → {got}"
+            );
+        }
+        // 非青蛙站保持原样
+        assert_eq!(
+            normalize_title_for_site("Show 2024 Blu-ray 1080p", "sbpt"),
+            "Show 2024 Blu-ray 1080p"
+        );
+    }
+
+    #[test]
+    fn wanted_tags_detects_remux_in_any_case() {
+        for name in [
+            "Show 2024 Blu-ray REMUX 1080p AVC",
+            "Show 2024 blu-ray remux 1080p AVC",
+            "Show 2024 Remux 1080p AVC",
+        ] {
+            let info = ReleaseInfo {
+                name: name.into(),
+                ..Default::default()
+            };
+            assert!(wanted_tags(&info).contains(&"Remux"), "{name}");
+        }
     }
 
     #[test]

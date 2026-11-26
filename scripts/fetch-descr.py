@@ -37,9 +37,16 @@ def main() -> int:
     base_url = next(s["url"].rstrip("/") for s in cfg["sourceSites"] if s["id"] == site)
     host = urlparse(base_url).hostname or ""
     cookies = json.loads((BASE / "cookies.json").read_text(encoding="utf-8"))
+    h = host.lower()
+    matched = [
+        c
+        for key, arr in cookies.items()
+        if h == key.lower().lstrip(".") or h.endswith("." + key.lower().lstrip("."))
+        for c in arr
+    ]
     s = requests.Session()
     s.headers.update({"User-Agent": "Mozilla/5.0"})
-    for c in cookies.get(host, []):
+    for c in matched:
         s.cookies.set(c["name"], c["value"], domain=host)
     detail = f"{base_url}/details.php?id={sid}"
     edit = f"{base_url}/edit.php?id={sid}"

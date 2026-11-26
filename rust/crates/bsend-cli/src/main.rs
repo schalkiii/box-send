@@ -1919,6 +1919,8 @@ struct GatecheckRow {
     audit_details: Vec<String>,
     core_gaps: Vec<String>,
     gates: Vec<(String, String, String)>,
+    /// 构造出来的提交字段（演练留证用，不 POST）
+    fields: Vec<(String, String)>,
 }
 
 fn cmd_gatecheck(cfg: &Config, sites: Option<Vec<String>>, as_json: bool) -> Result<()> {
@@ -1931,8 +1933,12 @@ fn cmd_gatecheck(cfg: &Config, sites: Option<Vec<String>>, as_json: bool) -> Res
         adapters.len()
     );
     for a in &adapters {
+        let site_rules = cfg.coverage.rules_for(&a.site_id);
         let mut prep = match bsend::reseed::prepare_upload(a, &info) {
-            Ok(p) => p,
+            Ok(mut p) => {
+                let _ = bsend::reseed::prepare_category_fields(a, &mut p, &info, &site_rules);
+                p
+            }
             Err(e) => {
                 rows.push(GatecheckRow {
                     site: a.site_id.clone(),
@@ -1943,11 +1949,11 @@ fn cmd_gatecheck(cfg: &Config, sites: Option<Vec<String>>, as_json: bool) -> Res
                     audit_details: vec![],
                     core_gaps: vec![],
                     gates: vec![],
+                    fields: vec![],
                 });
                 continue;
             }
         };
-        let site_rules = cfg.coverage.rules_for(&a.site_id);
         bsend::reseed::apply_site_rules(&mut prep, &site_rules);
         let drill = bsend::reseed::analyze_prepared(&a.site_id, &a.site_name, &prep, &info);
         let core = drill.core_gaps();
@@ -1976,6 +1982,7 @@ fn cmd_gatecheck(cfg: &Config, sites: Option<Vec<String>>, as_json: bool) -> Res
             }
         }
         let descr_final = bsend::reseed::submitted_descr(&prep, &info.descr);
+        let (poster_count, screenshot_count) = bsend::reseed::image_split_counts(&prep);
         let input = bsend::gates::GateInput {
             rules: &rules,
             name: &info.name,
@@ -1986,6 +1993,8 @@ fn cmd_gatecheck(cfg: &Config, sites: Option<Vec<String>>, as_json: bool) -> Res
             type_label: type_label.as_deref(),
             core_gaps: &core,
             required_gaps: &prep.required_gaps,
+            poster_count,
+            screenshot_count,
             audit_passed,
         };
         let results = bsend::gates::evaluate(&input);
@@ -2014,6 +2023,7 @@ fn cmd_gatecheck(cfg: &Config, sites: Option<Vec<String>>, as_json: bool) -> Res
             audit_details,
             core_gaps: core,
             gates,
+            fields: prep.fields.clone(),
         });
     }
     let save_path = cfg

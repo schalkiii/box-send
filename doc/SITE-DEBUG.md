@@ -165,7 +165,7 @@ luckpt 的候选规则（**还没有写进 `boxsend.json`**）：
 
 ### 6.5 agsvpt、tey
 
-- agsvpt：提交域和登录域不一致，返回“你没有该权限”并跳登录页；2026-11-23 已 `enabled=false` 并移出自动发种白名单。
+- agsvpt：2026-11-23 当时提交域和登录域不一致，返回“你没有该权限”并跳登录页，已 `enabled=false` 并移出自动发种白名单。2026-11-26 复核见 6.19：上传页 GET 能返回完整表单、无权限拒绝字样，旧“无发布权限”结论可能已过时，但未实证；标签值与剪图现场也记在 6.19。
 - tey：发布检查曾报 `medium_sel` 没选，根因是该站 `medium_sel[4]` 只有 WEB-DL/HDTV/DVDR/CD/Track，蓝光/Remux 源没有对应项；HDTV/WEB-DL 源可正常选档。2026-11-23 已用 HDTV 源实发成功，见 6.7。
 
 ### 6.6 qilin 和 panda
@@ -303,6 +303,18 @@ luckpt 的候选规则（**还没有写进 `boxsend.json`**）：
 - **同一部剧的多个内容键不能只补一个**：白色巨塔 HDTV 是 `m:5a4dfe1d693cfb1b`，Fod WEB-DL 是 `m:b11ef7224f2fec09`；最初只补一个，`#85` 仍从 11 张剪到 1 张。`seed-images.py` 新增 `--also-content` 和 `--for-name` 后，按版本分别抽 3 张：b11 写 WEB-DL 帧，5a4 写 HDTV 帧；`#85` 变为 `11→4`，伪装者 `#31` 变为 `13→4`。源页 `https://carpt.net/details.php?id=13542`，伪装者源页 `https://hdsky.me/details.php?id=27637&hit=1`。
 - **回放是脚本，不是看一遍日志**：`scripts/replay-reseed.py` 实际调用 `bsend reseed --draft <N>`（不传 `--yes`），本轮用它断言 `#56` 的 `source_sel[4]=10`、`processing_sel[4]=11`、`team_sel[4]=5`，`#85` 的 `11→4`，`#31` 的 `13→4`；把 `11→1`、`source_sel[4]=0` 作为 `--reject`。修完先跑回放，再执行 `--apply`。
 - **补图都走脚本**：85084、Liar Game、白色巨塔 HDTV、白色巨塔 WEB-DL 的图由 `seed-images.py` 生成/上传；85085 复用 qingwa `208575` 的 4 张 pixhost 图，经 `edit-seed.py --append-image` 追加。本轮新增的 `m:667`、`m:5a4` 也用 `seed-images.py` 重写清单，不再手改 `screenshot-overrides.json`。所有新图 HEAD 200。
+
+### 6.19 2026-11-26 站内信处理：北洋园剧集分类字段与两条上传失败、AGSVPT 标签与剪图、回访跳过非目标站
+
+- **北洋园（tjupt）剧集分类字段：历史上已实现，本轮改成规则驱动**：中文名 `cname`、英文名 `ename`、剧集类型 `specificcat`，还有地区复选框，来自 `showcategorydetail.php?catid=402`，静态 HTML 里不存在。HEAD 版本里这段历史上是写死的 tjupt 特判 `fill_tjupt_series_fields`（`type=402` 时填三个字段）；本轮做的是质量升级，不是从零实现：改成站点规则抽象（`CategoryRule`，配置 `categoryRules` 可覆盖、缺省走内置兜底表），提交前拉分类片段按片段里的真实控件名核对，控件不在就记缺口、不臆造字段；中文名/英文名派生不出时不再静默留空，而是记本地缺口、真提交前硬拦并点名缺哪个；旧特判和旧单测已删除，没有两份重复实现。2026-11-26 只读演练（`gatecheck --sites tjupt`，只 GET 上传页和分类片段、未 POST）构造出的载荷带 `cname=无台标完整版 全41集1080P`、`ename=The.Disguiser.Complete.1080p.HDTV.x264.AAC-JING`、`specificcat=其他`，必填缺失清单为空；当时唯二阻断项都是图片底线（简介 0 张可用图、站点要求 1 张），与分类字段无关。
+- **当天北洋园两条“上传失败”不是缺剧集分类字段，原因待查**：`m:0c6a4c72…` Coraline 分类是动漫，`m:2c9c8b01…` Bitter Moon 分类是电影，两条回包正文都是 `上传未成功：上传失败！`。这两条走动漫/电影分类，根本不经过剧集 402 的那三个字段；两条都是非空正文的站点拒绝，不是空回包超时。当时没有保留这两次的回包快照，站点具体拒在哪个字段上离线无法取证，记“原因待查”。对照：同批剧集 `m:5ddeceab…`（波洛合集）连续四次请求层超时、之后两次 HTTP 200 但正文是空壳，这才符合“大种子后端扛不住”的形态，和 274GB 合集 5 分钟空回包是同一类。
+- **AGSVPT 方舟标签值是 52，不是 13**：方舟计划标签 value `52`；`13` 是杜比、`51` 是合并。之前代码注释和记录把 13 当方舟，已在代码里改正。[546963](https://www.agsvpt.com/details.php?id=546963) 被拒的原因之一就是方舟计划种子没勾方舟标签。
+- **AGSVPT 剪死图（546963）**：简介原来 11 张图——1 张豆瓣、6 张 `img.pterclub.com`、4 张 pixhost；`img.pterclub.com` 在本机 TLS 连不上（和麒麟 479362、luckpt 现场是同一个图床问题），豆瓣裸请求 418 防盗链。剪到 4 张 pixhost 活图：1 张海报 + 3 张截图；其他字段原样保留，只提交一次。页面仍挂着旧“审核不通过 / (禁止)”横幅，站点没有用户侧重提入口，等管理复审；不重发、不私信。
+- **pterclub 图在本机取不到**：`img.pterclub.com` 本机 TLS 握手失败，不是源站图片本身失效；本地剪图和补图时不能把这类链接当成可达，站审端同样打不开。
+- **回访跳过不在配置里的站**：命令是 `bsend followup`，只回访配置里有的站；AGSVPT 不在发布目标里，直接被跳过。这是它被拒后一直没人管、覆盖记录还能错写成 `seeding` 的原因之一。
+- **本轮回访判定干净的三条**：藏宝阁 [44189](https://cangbao.ge/details.php?id=44189) 审核通过；优堡 [379934](https://ubits.club/details.php?id=379934) 候选被允许并审核通过；青蛙 [208804](https://qingwapt.com/details.php?id=208804) 标题已是 `BluRay`、Remux 标签已勾。三条页面都无审核标记，覆盖记录 `reseeded`。青蛙同站 [208692](https://qingwapt.com/details.php?id=208692)、[208575](https://qingwapt.com/details.php?id=208575) 仍是审核没过、等站点重审，是历史待跟进。
+- **AGSVPT 现状（未实证部分先标未验证）**：`sourceSites` 里 `enabled:false`、`managed:false`，不在自动发种名单也不在暂停名单；还缺标签字段配置（`tags[4][]`）、`announceURL`、多选标签自动勾（国语 5 / 中字 6）、团队档映射（BeiTai→30）；“方舟计划”的入选条件还没摸清，不是每条种子都该勾 52。当天上传页 GET 返回完整表单、没有权限拒绝字样，旧“无发布权限”结论可能已过时，但还没实证。
+- **覆盖记录纠正留痕**：内容键 `m:5826983b00126e58` 的 agsvpt 格子原来写成 `seeding` + 源站 `cyanbug.net` 链接（`https://cyanbug.net/details.php?id=5586`），状态错、链接是源站；已改为 `review_rejected` + `https://www.agsvpt.com/details.php?id=546963`，`note` 写明拒因、已补标签 52 和 4 张图、等复审、本地旧副本不能当已做种。内容键 `m:0996dd966965cbb1` 的 tjupt 格子保持 `pending_review`，`note` 改成“2026-11-26 已补海报+截图和 `[mediainfo]`、重新进待审、还差中文名拆分”。
 
 ## 7. 调试期回归的检查顺序
 

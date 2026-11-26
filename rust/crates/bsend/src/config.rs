@@ -188,11 +188,19 @@ impl Default for CoverageSettings {
 }
 
 impl CoverageSettings {
-    /// 取某站生效的发种规则。图数门槛不读配置：要图的站按 `gates::image_floor`
-    /// 硬编码（至少 3 张；熊猫、ptlgs 4 张），别处配了 `requireImages` 也以这里为准。
+    /// 取某站生效的发种规则。图数门槛不读配置：要图的站按 `gates::image_floor_detail`
+    /// 硬编码（总图数 + 海报/截图拆分），别处配了 `requireImages` 也以这里为准。
     pub fn rules_for(&self, site: &str) -> crate::gates::SiteRules {
         let mut rules = self.reseed_rules.get(site).cloned().unwrap_or_default();
-        rules.require_images = crate::gates::image_floor(site);
+        let floor = crate::gates::image_floor_detail(site);
+        rules.require_images = floor.map(|f| f.min_total);
+        rules.require_poster = floor.filter(|f| f.min_poster > 0).map(|f| f.min_poster);
+        rules.require_screenshots = floor
+            .filter(|f| f.min_screenshots > 0)
+            .map(|f| f.min_screenshots);
+        if rules.category_rules.is_empty() {
+            rules.category_rules = crate::gates::category_rules_default(site);
+        }
         rules
     }
 }
@@ -265,6 +273,31 @@ impl Config {
             .map(|(id, why)| format!("{id}（{why}）"))
             .collect();
         Some(format!("这些启用站被排除，未参与本轮：{}", list.join("、")))
+    }
+
+    /// 按站点 id 取站点配置（参与本轮的站点列表里查）。
+    pub fn site_conf(&self, id: &str) -> Option<&SiteConf> {
+        self.sites.iter().find(|s| s.id == id)
+    }
+
+    /// 覆盖记录里的详情链接域名必须属于目标站。站点不在配置里、或链接域名
+    /// 不匹配该站任一别名 → Err；调用方不得把这条记录写进覆盖索引。
+    /// 空链接由调用方判断（None 不校验）。
+    pub fn validate_coverage_url(&self, site_id: &str, url: &str) -> Result<()> {
+        let Some(conf) = self.site_conf(site_id) else {
+            anyhow::bail!("站点 {site_id} 不在配置里，无法校验详情链接域名");
+        };
+        let Some(host) = url_host(url) else {
+            anyhow::bail!("详情链接解析不出域名：{url}");
+        };
+        if conf.matches_tracker(&host) {
+            Ok(())
+        } else {
+            anyhow::bail!(
+                "详情链接域名 {host} 不属于站点 {site_id}（本站别名：{}）；拒绝写入覆盖记录",
+                conf.announce_hosts.join("/")
+            );
+        }
     }
 }
 

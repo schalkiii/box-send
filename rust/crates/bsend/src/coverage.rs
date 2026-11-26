@@ -39,6 +39,8 @@ pub struct RoundReport {
     pub preskipped: usize,
     /// 预算耗尽、本轮根本没查成的格子数（不写索引，下轮从头来）
     pub skipped_no_budget: usize,
+    /// 详情链接域名不属于目标站、被拒绝写入的格子数（不写索引）
+    pub url_mismatched: usize,
     /// 各预算 (已用, 上限)
     pub budget: BTreeMap<&'static str, (i32, i32)>,
 }
@@ -143,6 +145,54 @@ pub struct RoundOptions {
     pub persist: bool,
     /// 只处理这些内容（contentKey 前缀或名称包含，实机调试/单条重试用）
     pub content_filter: Option<String>,
+}
+
+/// 把一条 ItemDone 写进索引。详情链接域名必须属于目标站（草稿格子存的是源种链接，
+/// 按既有语义不校验）；域名不匹配返回 Err，调用方不得落格。
+#[allow(clippy::too_many_arguments)]
+fn insert_done_cell(
+    index: &mut ContentIndex,
+    cfg: &Config,
+    site_id: &str,
+    key: &str,
+    status: CoverageStatus,
+    url: Option<&str>,
+    note: &str,
+    source: Option<&SourceRecord>,
+    verify_hash: Option<&str>,
+    now: i64,
+) -> Result<()> {
+    if status != CoverageStatus::ReseedDraft {
+        if let Some(u) = url {
+            cfg.validate_coverage_url(site_id, u)?;
+        }
+    }
+    if let Some(src) = source {
+        if let Some(e) = index.contents.get_mut(key) {
+            e.source = Some(src.clone());
+        }
+    }
+    if let Some(e) = index.contents.get_mut(key) {
+        e.coverage.insert(
+            site_id.to_string(),
+            SiteCoverage {
+                status,
+                at: now,
+                url: url.map(|s| s.to_string()),
+                note: if note.is_empty() {
+                    None
+                } else {
+                    Some(note.to_string())
+                },
+                verify_hash: if status == CoverageStatus::Verifying {
+                    verify_hash.map(|s| s.to_string())
+                } else {
+                    None
+                },
+            },
+        );
+    }
+    Ok(())
 }
 
 /// 跑一整轮：扫描 → 合并索引 → 预筛 → 站点 worker 池 → 应用结论 → 落盘。
@@ -444,31 +494,25 @@ pub fn run_round(
                 draft,
                 verify_hash,
             } => {
-                if let Some(src) = &source {
-                    if let Some(e) = index.contents.get_mut(&key) {
-                        e.source = Some(src.clone());
-                    }
-                }
-                if let Some(e) = index.contents.get_mut(&key) {
-                    e.coverage.insert(
-                        site_id.clone(),
-                        SiteCoverage {
-                            status,
-                            at: t0,
-                            url: url.clone(),
-                            note: if note.is_empty() {
-                                None
-                            } else {
-                                Some(note.clone())
-                            },
-                            // 非 Verifying 结论一律清空（收尾凭据只属于校验中格子）
-                            verify_hash: if status == CoverageStatus::Verifying {
-                                verify_hash.clone()
-                            } else {
-                                None
-                            },
-                        },
-                    );
+                // 覆盖记录里的详情链接域名必须属于目标站；域名不匹配就整条拒绝写入，
+                // 不静默存进去。草稿格子存的是源种链接，按既有语义不校验。
+                if let Err(e) = insert_done_cell(
+                    &mut *index,
+                    cfg,
+                    &site_id,
+                    &key,
+                    status,
+                    url.as_deref(),
+                    &note,
+                    source.as_ref(),
+                    verify_hash.as_deref(),
+                    t0,
+                ) {
+                    report.url_mismatched += 1;
+                    emit(Event::Log(format!(
+                        "覆盖记录拒绝写入（{site_id} / {key}）：{e:#}"
+                    )));
+                    continue;
                 }
                 *report.by_status.entry(status).or_insert(0) += 1;
                 if let Some(d) = &draft {
@@ -1519,6 +1563,7 @@ fn fingerprint_of(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::index::ContentEntry;
 
     #[test]
     fn member_name_fallback_picks_largest_different_name() {
@@ -1966,5 +2011,152 @@ mod tests {
         assert!(!is_checking("MetaDL"));
         assert!(!is_checking("metaDL "));
         assert!(!is_checking(" metaDL"));
+    }
+
+    fn test_cfg() -> Config {
+        Config {
+            config_path: std::env::temp_dir().join("boxsend-coverage-test.json"),
+            data_dir: None,
+            downloader: crate::config::DownloaderSettings {
+                url: "http://127.0.0.1:1".into(),
+                username: "u".into(),
+                password: "p".into(),
+                save_path: None,
+                category: None,
+                default_up_limit: 0,
+                site_up_limits: std::collections::HashMap::new(),
+            },
+            sites: vec![
+                crate::config::SiteConf {
+                    id: "agsvpt".into(),
+                    name: "AGSVPT".into(),
+                    url: "https://www.agsvpt.com/".into(),
+                    framework: crate::sites::Framework::NexusPHP,
+                    search_url: None,
+                    api_key: None,
+                    announce_hosts: vec!["www.agsvpt.com".into(), "tracker.agsvpt.cn".into()],
+                    announce_url: None,
+                    poster_field: None,
+                    screenshot_field: None,
+                },
+                crate::config::SiteConf {
+                    id: "cyanbug".into(),
+                    name: "CyanBug".into(),
+                    url: "https://cyanbug.net/".into(),
+                    framework: crate::sites::Framework::NexusPHP,
+                    search_url: None,
+                    api_key: None,
+                    announce_hosts: vec!["cyanbug.net".into()],
+                    announce_url: None,
+                    poster_field: None,
+                    screenshot_field: None,
+                },
+            ],
+            coverage: crate::config::CoverageSettings::default(),
+            user_agent: "bsend-test".into(),
+            cookies: std::collections::HashMap::new(),
+            cookie_cloud: None,
+            skipped_sites: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn coverage_url_must_belong_to_target_site() {
+        let cfg = test_cfg();
+        // 本站详情链接放行
+        cfg.validate_coverage_url("agsvpt", "https://www.agsvpt.com/details.php?id=5586")
+            .unwrap();
+        // 源站链接写进目标站格子 → 拒绝
+        let err = cfg
+            .validate_coverage_url("agsvpt", "https://cyanbug.net/details.php?id=5586")
+            .unwrap_err();
+        assert!(err.to_string().contains("cyanbug.net"), "{err}");
+        // 站点不在配置里 → 拒绝
+        assert!(cfg
+            .validate_coverage_url("nope", "https://x.example/details.php?id=1")
+            .is_err());
+    }
+
+    #[test]
+    fn insert_done_cell_rejects_foreign_url_and_keeps_index() {
+        let cfg = test_cfg();
+        let mut index = ContentIndex::in_memory();
+        index.contents.insert(
+            "m:5826983b00126e58".into(),
+            ContentEntry {
+                name: "Some Show".into(),
+                total_size: 1,
+                file_count: 1,
+                manifest_digest: "0".repeat(16),
+                torrents: Default::default(),
+                tracker_hosts: vec![],
+                first_seen: 0,
+                gone_since: None,
+                coverage: Default::default(),
+                source: None,
+                forbid_reseed: false,
+            },
+        );
+        // 红：把源站链接写进 agsvpt 做种格 → 拒绝，索引里不留格子
+        let res = insert_done_cell(
+            &mut index,
+            &cfg,
+            "agsvpt",
+            "m:5826983b00126e58",
+            CoverageStatus::Seeding,
+            Some("https://cyanbug.net/details.php?id=5586"),
+            "下载器已挂该站 tracker",
+            None,
+            None,
+            0,
+        );
+        assert!(res.is_err());
+        assert!(!index
+            .contents
+            .get("m:5826983b00126e58")
+            .unwrap()
+            .coverage
+            .contains_key("agsvpt"));
+
+        // 绿：本站详情链接 → 落格
+        insert_done_cell(
+            &mut index,
+            &cfg,
+            "agsvpt",
+            "m:5826983b00126e58",
+            CoverageStatus::Seeding,
+            Some("https://www.agsvpt.com/details.php?id=5586"),
+            "下载器已挂该站 tracker",
+            None,
+            None,
+            0,
+        )
+        .unwrap();
+        let cell = index
+            .contents
+            .get("m:5826983b00126e58")
+            .unwrap()
+            .coverage
+            .get("agsvpt")
+            .unwrap();
+        assert_eq!(
+            cell.url.as_deref(),
+            Some("https://www.agsvpt.com/details.php?id=5586")
+        );
+
+        // 草稿格子存源种链接是既有语义，不校验域名
+        insert_done_cell(
+            &mut index,
+            &cfg,
+            "cyanbug",
+            "m:5826983b00126e58",
+            CoverageStatus::ReseedDraft,
+            Some("https://cyanbug.net/details.php?id=5586"),
+            "",
+            None,
+            None,
+            0,
+        )
+        .unwrap();
     }
 }

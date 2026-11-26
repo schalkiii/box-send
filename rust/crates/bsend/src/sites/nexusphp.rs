@@ -1928,13 +1928,16 @@ const REVIEW_PENDING_MARKS: &[&str] = &[
     "待审",
 ];
 
-/// 「审核没过」的字样（正文里写的）。实见样本：麒麟详情页红字“审核不通过，原因：缺少海报或截图（图片少于 2 张）”。
+/// 「审核没过」的字样（正文里写的）。实见样本：麒麟详情页红字“审核不通过，原因：缺少海报或截图（图片少于 2 张）”；
+/// agsvpt 标题旁的 `(禁止)` / `（禁止）` 徽标也是审核没过的标记。
 const REVIEW_REJECTED_MARKS: &[&str] = &[
     "审核不通过",
     "审核未通过",
     "未通过审核",
     "审核没有通过",
     "审核被拒",
+    "(禁止)",
+    "（禁止）",
 ];
 
 /// 审核图标主题下的“不通过”形态。同一套图标（tey `title="未审"`、藏宝阁 `title="通过"`）
@@ -2696,6 +2699,32 @@ mod tests {
                 ReviewMark::Rejected,
                 "审核不通过，原因：缺图，请补图后再提交".to_string()
             ))
+        );
+    }
+
+    #[test]
+    fn review_mark_banned_badge_counts_as_rejected() {
+        // 标题旁的 `(禁止)` / `（禁止）` 徽标是审核没过，不能当成正常做种
+        for badge in ["(禁止)", "（禁止）"] {
+            let page = format!("Some Title 2024 1080p {badge}");
+            let mark = review_mark_in(&page);
+            assert_eq!(
+                mark.map(|(m, _)| m),
+                Some(ReviewMark::Rejected),
+                "{badge} 应判审核被拒"
+            );
+        }
+        // 详情页标题区域里的禁徽标也要认
+        let html = "<html><body><h1>Some Title 2024 1080p (禁止)</h1>\
+            <table><tr><td><a href=\"download.php?id=9\">t.torrent</a></td></tr></table></body></html>";
+        assert_eq!(
+            review_mark(html, "Some Title 2024 1080p").map(|(m, _)| m),
+            Some(ReviewMark::Rejected)
+        );
+        // 正文明写“审核不通过”仍是拒绝
+        assert_eq!(
+            review_mark_in("审核不通过，原因：缺少海报或截图").map(|(m, _)| m),
+            Some(ReviewMark::Rejected)
         );
     }
 

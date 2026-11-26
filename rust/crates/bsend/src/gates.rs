@@ -30,6 +30,58 @@ pub struct GateResult {
     pub message: String,
 }
 
+/// 站点必须勾选的一个标签：字段名/前缀 + 复选框 value 或页面标签文案。
+/// `value` 与 `label` 至少给一个；页面控件按任一命中即视为已勾上。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RequiredTag {
+    /// 复选框字段名/前缀（如 `tags[4][]`）
+    pub field: String,
+    /// 复选框 value（标签 id，如 agsvpt ⛵方舟 `52`）；与 label 任一命中即可
+    pub value: Option<String>,
+    /// 页面标签文案（日志/报错用）；与 value 任一命中即可
+    pub label: Option<String>,
+}
+
+/// 分类下由页面 JS 异步注入的附加必填字段，取值口径。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CategoryFieldKind {
+    /// 中文名：从副标题/简介抽中文片段；派生不出就记缺口，不发空值
+    #[default]
+    ChineseName,
+    /// 英文名：取主标题；为空就记缺口，不发空值
+    EnglishName,
+    /// 剧集类型/地区：按标题线索归类，归不出用 `default`（兜底「其他」）
+    SpecificCat,
+    /// 地区复选框：按片段里的真实控件勾选，不臆造字段名
+    Checkbox,
+}
+
+/// 分类下一个 JS 异步注入的附加必填字段（静态上传页里没有这个控件）。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CategoryRequiredField {
+    /// 表单字段名（以异步片段里的真实控件为准，不要凭空猜）
+    pub field: String,
+    pub kind: CategoryFieldKind,
+    /// `SpecificCat` 归不出时的兜底值；`Checkbox` 的提交 value；其余类型不用
+    pub default: Option<String>,
+}
+
+/// 某个分类（表单 `type` 值，如剧集 `402`）需要的附加必填字段。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CategoryRule {
+    /// 分类 value，与表单 `type` 字段值比对
+    pub category: String,
+    /// 分类控件定义片段的端点模板，`{catid}` 替换成分类值；
+    /// 如 `showcategorydetail.php?catid={catid}`。拉到片段后以片段里的真实控件名为准。
+    pub detail_endpoint: Option<String>,
+    #[serde(default)]
+    pub fields: Vec<CategoryRequiredField>,
+}
+
 /// 站点规范（`assist.reseedRules.<siteId>`；缺省全保守）
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -61,10 +113,24 @@ pub struct SiteRules {
     /// （如 `["中字","国语"]`）。按页面真实标签归一匹配；匹配不到不臆造、保持未选。
     #[serde(default)]
     pub multi_picks: std::collections::BTreeMap<String, Vec<String>>,
+    /// 站点必须勾选的标签（由配置 `reseedRules.<siteId>.requiredTags` 声明；
+    /// 如 agsvpt ⛵方舟：字段 `tags[4][]`、value `52`。注意 `13` 是杜比、`51` 是合并，
+    /// 不要混）。构造完成后仍未选中即记缺口并阻断发布；按页面真实控件自动勾，
+    /// 勾不上不臆造。代码层不预设"某站所有种子一律勾某个标签"，是否需要由配置决定。
+    #[serde(default)]
+    pub required_tags: Vec<RequiredTag>,
+    /// 分类下 JS 异步注入的附加必填字段（按分类 value 声明；静态上传页没有这些控件）。
+    /// 配置 `reseedRules.<siteId>.categoryRules` 可覆盖/追加；缺省走 [`category_rules_default`]。
+    #[serde(default)]
+    pub category_rules: Vec<CategoryRule>,
     /// 必填字段名前缀（如 `["region_sel","style_sel"]`）：任一前缀下没有已选值
     /// 即判核心缺口并阻断发布；未配置的站点行为不变。
     #[serde(default)]
     pub required_fields: Vec<String>,
+    /// 简介海报最低张数（硬规则，由 [`image_floor_detail`] 按站点覆盖；None = 不要求拆分）
+    pub require_poster: Option<usize>,
+    /// 简介截图最低张数（硬规则，由 [`image_floor_detail`] 按站点覆盖；None = 不要求拆分）
+    pub require_screenshots: Option<usize>,
     /// 简介格式：缺省 `bbcode` = 提交前把 HTML 转 BBCode（NexusPHP 的简介框是
     /// BBCode 编辑器，原样提交 HTML 会被转义成字面 `<fieldset>`）；显式 `html`
     /// 才保持 HTML 原样（仅用于确认支持 HTML 的站）。
@@ -98,16 +164,89 @@ impl SiteRules {
     }
 }
 
+/// 要图站点的图片底线：总图数 + 海报/截图拆分要求（硬规则，不读配置）。
+/// `min_poster` / `min_screenshots` 为 0 表示该站不要求按独立字段拆分，只看总图数。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ImageFloor {
+    pub min_total: usize,
+    pub min_poster: usize,
+    pub min_screenshots: usize,
+}
+
+/// 各站实测站规口径：
+/// - 藏宝阁 / 优堡 / 太乙 / 麒麟：3 张（死图剪掉后不够就拦；只看总图数，不拆海报/截图）
+/// - 熊猫：4 张（站规更严，且要求分段顺序；只看总图数）
+/// - ptlgs：4 张 = 1 张海报 + 3 张截图（独立字段 `cover` / `screenshots`）
+/// - agsvpt：1 张海报 + 1 张截图（缺海报或截图都会被审核退回）
+/// - tjupt：至少 1 张图（管理要求补海报，按总图兜底，不拆海报/截图）
+pub fn image_floor_detail(site_id: &str) -> Option<ImageFloor> {
+    match site_id {
+        "cangbao" | "ubits" | "tey" | "qilin" => Some(ImageFloor {
+            min_total: 3,
+            min_poster: 0,
+            min_screenshots: 0,
+        }),
+        "panda" => Some(ImageFloor {
+            min_total: 4,
+            min_poster: 0,
+            min_screenshots: 0,
+        }),
+        "ptlgs" => Some(ImageFloor {
+            min_total: 4,
+            min_poster: 1,
+            min_screenshots: 3,
+        }),
+        "agsvpt" => Some(ImageFloor {
+            min_total: 2,
+            min_poster: 1,
+            min_screenshots: 1,
+        }),
+        "tjupt" => Some(ImageFloor {
+            min_total: 1,
+            min_poster: 0,
+            min_screenshots: 0,
+        }),
+        _ => None,
+    }
+}
+
+/// 实测站规兜底的分类附加必填字段（配置 `categoryRules` 非空时以配置为准）。
+/// tjupt 剧集分类（`type=402`）的 `cname`/`ename`/`specificcat` 是页面 JS
+/// 从 `showcategorydetail.php?catid=402` 异步注入的，静态上传页里没有；不补就被
+/// 服务端以“有项目没有填写”退回。字段名以异步片段为准，这里只存实测口径。
+pub fn category_rules_default(site_id: &str) -> Vec<CategoryRule> {
+    match site_id {
+        "tjupt" => vec![CategoryRule {
+            category: "402".into(),
+            detail_endpoint: Some("showcategorydetail.php?catid={catid}".into()),
+            fields: vec![
+                CategoryRequiredField {
+                    field: "cname".into(),
+                    kind: CategoryFieldKind::ChineseName,
+                    default: None,
+                },
+                CategoryRequiredField {
+                    field: "ename".into(),
+                    kind: CategoryFieldKind::EnglishName,
+                    default: None,
+                },
+                CategoryRequiredField {
+                    field: "specificcat".into(),
+                    kind: CategoryFieldKind::SpecificCat,
+                    default: Some("其他".into()),
+                },
+            ],
+        }],
+        _ => Vec::new(),
+    }
+}
+
 /// 要图的站点最低图数：硬规则，不读配置。
 /// 这些站的审核会逐张看图，少于门槛必被退回；`At least 3` 是 2026-11-24 定下的底线。
 /// 熊猫高清站规另外明说“4 张图 + 段序”，比底线更严，保留 4，免得按 3 张发又被退。
 /// ptlgs 上传页要求独立 `cover` 海报 + 至少 3 张 `screenshots`，所以按 4 张算总图数。
 pub fn image_floor(site_id: &str) -> Option<usize> {
-    match site_id {
-        "panda" | "ptlgs" => Some(4),
-        "cangbao" | "ubits" | "tey" | "qilin" => Some(3),
-        _ => None,
-    }
+    image_floor_detail(site_id).map(|f| f.min_total)
 }
 
 /// 主标题里是否有汉字（CJK Unified Ideographs + 扩展 A + 兼容区）。
@@ -177,6 +316,10 @@ pub struct GateInput<'a> {
     pub core_gaps: &'a [String],
     /// 规则判定的必填字段缺口（`apply_site_rules` 写入；每条文案含「必填缺失」）；非空即 Block
     pub required_gaps: &'a [String],
+    /// 海报张数（独立字段有值按字段算；否则第一张简介图算海报）
+    pub poster_count: usize,
+    /// 截图张数（独立字段按行算；否则其余简介图算截图）
+    pub screenshot_count: usize,
     /// 官方预审结论：None = 站点无预审；Some(false) = 未通过
     pub audit_passed: Option<bool>,
 }
@@ -252,13 +395,17 @@ pub fn evaluate(input: &GateInput<'_>) -> Vec<GateResult> {
         },
     );
 
-    // G3 必填字段（规则配置的单选/复选组；未配置 requiredFields 不参与判定）
-    if !input.rules.required_fields.is_empty() {
+    // G3 必填字段 / 必需标签（规则配置的单选/复选组；已有本地缺口时也参与判定，
+    // 例如分类异步字段派生不出值，缺口不能被门禁吞掉）
+    if !input.rules.required_fields.is_empty()
+        || !input.rules.required_tags.is_empty()
+        || !input.required_gaps.is_empty()
+    {
         add(
             "G3 必填字段",
             input.required_gaps.is_empty(),
             if input.required_gaps.is_empty() {
-                "必填字段均已选中".into()
+                "必填字段与必需标签均已选中".into()
             } else {
                 input.required_gaps.join("；")
             },
@@ -286,6 +433,36 @@ pub fn evaluate(input: &GateInput<'_>) -> Vec<GateResult> {
                 format!("简介图片 {n} 张 ≥ {min}")
             } else {
                 format!("简介图片仅 {n} 张 < 站点要求 {min}（跑图床重传或补截图）")
+            },
+        );
+    }
+
+    // G3 海报 / 截图拆分（站点按独立字段或首图拆分要求时才检查）
+    if let Some(min_poster) = input.rules.require_poster {
+        add(
+            "G3 海报",
+            input.poster_count >= min_poster,
+            if input.poster_count >= min_poster {
+                format!("海报 {} 张 ≥ {min_poster}", input.poster_count)
+            } else {
+                format!(
+                    "海报仅 {} 张 < 站点要求 {min_poster}（补海报）",
+                    input.poster_count
+                )
+            },
+        );
+    }
+    if let Some(min_shots) = input.rules.require_screenshots {
+        add(
+            "G3 截图",
+            input.screenshot_count >= min_shots,
+            if input.screenshot_count >= min_shots {
+                format!("截图 {} 张 ≥ {min_shots}", input.screenshot_count)
+            } else {
+                format!(
+                    "截图仅 {} 张 < 站点要求 {min_shots}（补截图）",
+                    input.screenshot_count
+                )
             },
         );
     }
@@ -422,6 +599,8 @@ mod tests {
             type_label: Some("剧集"),
             core_gaps: &[],
             required_gaps: &[],
+            poster_count: 0,
+            screenshot_count: 0,
             audit_passed: Some(true),
         }
     }
@@ -536,15 +715,21 @@ mod tests {
     }
 
     #[test]
-    fn required_field_gate_absent_when_unconfigured() {
-        // 旧配置不配 requiredFields：即使外部塞了缺口，门禁不出现、行为不变
+    fn required_field_gate_shows_local_gap_when_unconfigured() {
+        // 站点没配 requiredFields/requiredTags，但已有本地缺口（如分类异步字段
+        // 派生不出值）：门禁仍要把缺口展示出来并拦下，和真实提交前硬拦口径一致。
         let rules = SiteRules::default();
         let gaps = vec!["必填缺失：region_sel[4]".into()];
         let mut input = base_input(&rules);
         input.required_gaps = &gaps;
         let out = evaluate(&input);
-        assert!(!out.iter().any(|r| r.gate == "G3 必填字段"));
-        assert!(all_passed(&out), "{out:?}");
+        let gate = out
+            .iter()
+            .find(|r| r.gate == "G3 必填字段")
+            .expect("有本地缺口就应出现必填字段门禁");
+        assert_eq!(gate.verdict, Verdict::Block);
+        assert!(gate.message.contains("region_sel[4]"), "{gate:?}");
+        assert!(!all_passed(&out));
     }
 
     #[test]
@@ -667,6 +852,97 @@ mod tests {
         };
         let mut input = base_input(&rules);
         input.descr = "【转载出处】TLF\n【海报】[img]x[/img]\n【截图】[img]y[/img]";
+        let out = evaluate(&input);
+        assert!(all_passed(&out), "{out:?}");
+    }
+
+    #[test]
+    fn image_floor_detail_covers_new_sites() {
+        let agsvpt = image_floor_detail("agsvpt").unwrap();
+        assert_eq!(agsvpt.min_total, 2);
+        assert_eq!(agsvpt.min_poster, 1);
+        assert_eq!(agsvpt.min_screenshots, 1);
+        let tjupt = image_floor_detail("tjupt").unwrap();
+        assert_eq!(tjupt.min_total, 1);
+        assert_eq!(tjupt.min_poster, 0);
+        assert_eq!(tjupt.min_screenshots, 0);
+        let ptlgs = image_floor_detail("ptlgs").unwrap();
+        assert_eq!(ptlgs.min_total, 4);
+        assert_eq!(ptlgs.min_poster, 1);
+        assert_eq!(ptlgs.min_screenshots, 3);
+        // 原有总图数站点不拆海报/截图（回归：不能把 3 张按 1 海报 + 2 截图误拦）
+        let cangbao = image_floor_detail("cangbao").unwrap();
+        assert_eq!(
+            (
+                cangbao.min_total,
+                cangbao.min_poster,
+                cangbao.min_screenshots
+            ),
+            (3, 0, 0)
+        );
+        let panda = image_floor_detail("panda").unwrap();
+        assert_eq!(
+            (panda.min_total, panda.min_poster, panda.min_screenshots),
+            (4, 0, 0)
+        );
+        assert!(image_floor_detail("unknown").is_none());
+    }
+
+    #[test]
+    fn required_tag_52_gate_blocks_when_missing_then_passes() {
+        // 配置声明上传必须勾 ⛵方舟（value 52；13 是杜比、51 是合并，不要混）
+        let rules = SiteRules {
+            required_tags: vec![RequiredTag {
+                field: "tags[4][]".into(),
+                value: Some("52".into()),
+                label: Some("方舟".into()),
+            }],
+            ..Default::default()
+        };
+        // 红：配置要求的 52 标签没勾上 → 必填字段门禁拦下，并点名是哪个标签
+        let gaps = vec!["必填缺失：tags[4][]（必需标签「方舟」未勾选）".into()];
+        let mut input = base_input(&rules);
+        input.required_gaps = &gaps;
+        let out = evaluate(&input);
+        let gate = out
+            .iter()
+            .find(|r| r.gate == "G3 必填字段")
+            .expect("配了 requiredTags 就要出现必填字段门禁");
+        assert_eq!(gate.verdict, Verdict::Block);
+        assert!(gate.message.contains("方舟"));
+        assert!(!all_passed(&out));
+        // 绿：标签已勾上、无缺口 → 通过
+        let input2 = base_input(&rules);
+        let out2 = evaluate(&input2);
+        assert!(all_passed(&out2), "{out2:?}");
+    }
+
+    #[test]
+    fn poster_screenshot_split_gate_blocks_and_passes() {
+        let rules = SiteRules {
+            require_poster: Some(1),
+            require_screenshots: Some(1),
+            ..Default::default()
+        };
+        // 红：没海报也没截图
+        let mut input = base_input(&rules);
+        input.poster_count = 0;
+        input.screenshot_count = 0;
+        let out = evaluate(&input);
+        assert!(out
+            .iter()
+            .any(|r| r.gate == "G3 海报" && r.verdict == Verdict::Block));
+        assert!(out
+            .iter()
+            .any(|r| r.gate == "G3 截图" && r.verdict == Verdict::Block));
+        // 红：有海报、没截图
+        input.poster_count = 1;
+        let out = evaluate(&input);
+        assert!(out
+            .iter()
+            .any(|r| r.gate == "G3 截图" && r.verdict == Verdict::Block));
+        // 绿：海报 1、截图 1
+        input.screenshot_count = 1;
         let out = evaluate(&input);
         assert!(all_passed(&out), "{out:?}");
     }

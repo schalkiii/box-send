@@ -20,6 +20,7 @@ import json
 import os
 import re
 import sys
+import time
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
@@ -46,12 +47,29 @@ def find_site_url(site: str) -> str:
     raise SystemExit(f"配置里找不到站点 {site}")
 
 
+def cookies_for(cookies: dict, host: str) -> list[dict]:
+    """按 host 取 cookie：host 等于键，或是键的子域（与 bsend config.rs 的 cookie_header_for 语义一致）。"""
+    h = host.lower()
+    out: list[dict] = []
+    for key, arr in cookies.items():
+        k = key.lower().lstrip(".")
+        if h == k or h.endswith("." + k):
+            out.extend(arr)
+    return out
+
+
 def session_for(host: str) -> requests.Session:
     cookies = json.loads((BASE / "cookies.json").read_text(encoding="utf-8"))
     s = requests.Session()
     s.headers.update({"User-Agent": "Mozilla/5.0"})
-    for c in cookies.get(host, []):
-        s.cookies.set(c["name"], c["value"], domain=host)
+    now = time.time()
+    for c in cookies_for(cookies, host):
+        exp = c.get("expirationDate")
+        if exp is not None and exp > 0 and exp < now:
+            continue
+        if not c.get("value") and exp is None:
+            continue
+        s.cookies.set(c["name"], c.get("value", ""), domain=host)
     return s
 
 
@@ -106,6 +124,13 @@ def main() -> int:
     ap.add_argument("--append-image", action="append", default=[], metavar="URL", help="把图片以 [img] 追加到简介末尾，可重复")
     ap.add_argument("--name")
     ap.add_argument("--subtitle")
+    ap.add_argument(
+        "--extra-field",
+        action="append",
+        default=[],
+        metavar="NAME=VALUE",
+        help="透传一个表单字段（站点 JS 异步注入、静态解析取不到的必填项用），可重复",
+    )
     ap.add_argument("--apply", action="store_true")
     args = ap.parse_args()
 
@@ -168,6 +193,13 @@ def main() -> int:
     if args.subtitle is not None:
         data["small_descr"] = args.subtitle
         changed.append("small_descr")
+    for pair in args.extra_field:
+        if "=" not in pair:
+            print(f"--extra-field 格式应为 NAME=VALUE：{pair}")
+            return 1
+        key, value = pair.split("=", 1)
+        data[key] = value
+        changed.append(key)
     if args.descr_file:
         new_descr = Path(args.descr_file).read_text(encoding="utf-8")
         field = next((f for f in DESCR_FIELDS if f in data), None)
