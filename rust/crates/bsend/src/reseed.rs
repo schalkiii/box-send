@@ -403,7 +403,10 @@ fn normalize_release_title(name: &str) -> String {
     while i + 1 < chars.len() {
         // 从首个 ASCII 词起，且后面 6 个字符内存在连续字母；这样 I.Am... 的
         // 单字母 I 不会被误当噪声，而 1080p 末尾的孤立 p 也不会触发。
+        // p 前面是数字时直接排除：`1080p.HDTV` 的 p 后面也能看到 HDTV 的连续字母，
+        // 只靠 6 字符窗口会把 p 当成英文段开头，标题只剩「p HDTV…」。
         if chars[i].is_ascii_alphabetic()
+            && (i == 0 || !chars[i - 1].is_ascii_digit())
             && chars[i..chars.len().min(i + 6)]
                 .windows(2)
                 .any(|w| w[0].is_ascii_alphabetic() && w[1].is_ascii_alphabetic())
@@ -425,6 +428,15 @@ fn normalize_release_title(name: &str) -> String {
     }
     let suffix: String = chars[i..].iter().collect();
     let suffix = suffix.trim_start_matches(['.', '-', '_', '[', ']', ' ']);
+    // 源标题只有中文名、后面直接跟 1080p/HDTV/x265 这类技术词时，不能当成
+    // “中文前缀 + 英文名”把中文名整段裁掉；否则标题会只剩技术参数。
+    let first_word = suffix
+        .split(['.', ' ', '_', '-', '['])
+        .find(|w| !w.is_empty())
+        .unwrap_or("");
+    if tech_rank(first_word).is_some() {
+        return name.to_string();
+    }
     if suffix.chars().filter(|c| c.is_ascii_alphanumeric()).count() >= 8
         && suffix.chars().any(|c| c.is_ascii_digit())
     {
@@ -840,6 +852,15 @@ fn input_value(html: &str, name: &str) -> Option<String> {
 /// 标题尾部促销角标（`[50%]`/`[FREE]`/`[2x]`/`[免费]`…）：站点折扣标记混进发布名要剥掉，
 /// 但 `[中字]` 这类内容标签保留
 fn strip_promo_suffix(name: &str) -> String {
+    // 站点常把促销角标和审核提示一起挂在标题尾部，例如
+    // `Liar Game ... [50%] (通过)`；先按角标位置裁掉，再走尾部循环。
+    // 带「剩余时间」的交给下面按倒计时判断，避免把标题正文里的
+    // 「剩余时间剧情解析」误当促销尾巴裁掉。
+    let name = if name.contains("剩余时间") || name.contains("剩餘時間") {
+        name
+    } else {
+        strip_site_title_badges(name)
+    };
     let mut s = name.trim_end().to_string();
     // 免费促销常带倒计时尾巴（luckpt 实测「[免费] 剩余时间：6天18时」）：
     // 先剥倒计时，[免费] 才落到尾部能被方括号循环剥掉
@@ -7307,6 +7328,11 @@ Frame rate : 25</pre>
             strip_promo_suffix("Movie.2024 [中字] [50%]"),
             "Movie.2024 [中字]"
         );
+        // 角标后面还跟着审核状态，不能只认“以 ] 结尾”：Liar Game 源页实测
+        assert_eq!(
+            strip_promo_suffix("Liar Game S01 2007 2160p WEB-DL H.264 AAC-ADWeb [50%] (通过)"),
+            "Liar Game S01 2007 2160p WEB-DL H.264 AAC-ADWeb"
+        );
     }
 
     #[test]
@@ -8189,6 +8215,11 @@ Language : English"
         assert_eq!(
             normalize_release_title("纯中文标题.2018.1080p"),
             "纯中文标题.2018.1080p"
+        );
+        // 中文名后面直接跟技术词时，不能把中文名裁掉；白色巨塔实测曾生成「p HDTV…」
+        assert_eq!(
+            normalize_release_title("白色巨塔.E01-E21.2003.1080p.HDTV.x265.AC3￡cXcY@FRDS"),
+            "白色巨塔.E01-E21.2003.1080p.HDTV.x265.AC3￡cXcY@FRDS"
         );
     }
 

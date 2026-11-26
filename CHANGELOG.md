@@ -7,7 +7,9 @@
 
 ### Changed
 
-- 青蛙（qingwa）Remux 资源标题按站点规范把 `Blu-ray` 写成 `BluRay`，并在表单有「Remux」复选框时自动勾选；2026-11-26 `208804` 已按此改好，等站点重新审核。
+- 青蛙（qingwa）Remux 资源标题按站点规范把 `Blu-ray` 写成 `BluRay`，并在表单有「Remux」复选框时自动勾选；2026-11-26 `208804` 已按此改好，站内信 `643794` 确认审核通过，qB 本来就在做种。
+
+- 源标题清洗修正两处：中文名后面直接跟 `1080p`/`HDTV`/`x265` 这类技术词时，不再把中文名裁掉；`[50%] (通过)` 这类“促销角标 + 审核提示”会一起从标题尾部剥掉，不再把角标带进发布名。白色巨塔、Liar Game 的转种审阅实测由错误标题恢复为正常标题。
 
 - 图片检查覆盖 BBCode（`[img]` / `[img=尺寸]`）和 HTML 两种写法；`hdsky.me`、`img.hdsky.me`、`imgur.com` 源站热链即使本机 200 也按死图剪掉，UBits 另把 `imgbox.com` 按死图处理。新增 `scripts/rehost-descr-images.py` 把简介图片统一转存 pixhost。2026-11-25 藏宝阁 44189 因 3 张 hdsky 图被拒，已换 pixhost 等复审。
 
