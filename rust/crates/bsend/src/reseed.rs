@@ -1713,6 +1713,9 @@ pub fn build_upload_fields_for_site(
     if site_id == "ubits" {
         fill_ubits_quality_fields(&mut fields, &site_info, page);
     }
+    if site_id == "lajidui" {
+        fill_lajidui_quality_fields(&mut fields, &site_info, page);
+    }
     (fields, picked, notes)
 }
 
@@ -1743,6 +1746,66 @@ fn fill_ubits_quality_fields(fields: &mut Vec<Field>, info: &ReleaseInfo, _page:
         // 源组不是 UBits 自家组，按 Other 提交，避免冒充驻站组。
         set_field(fields, "team_sel[4]", "5".to_string());
     }
+}
+
+/// lajidui 的 `processing_sel` 是文件容器（MP4/MKV），`source_sel` 是地区，
+/// `team_sel` 没有默认值；通用选档只看标题，三项都会留空。
+/// 2026-11-26 两条误发种子（85084/85085）都卡在这三项。
+fn fill_lajidui_quality_fields(fields: &mut Vec<Field>, info: &ReleaseInfo, page: &str) {
+    let hay = format!("{} {} {}", info.subtitle, info.descr, info.name);
+    let region_label = if hay.contains("中国大陆") || hay.contains("大陆") {
+        "大陆"
+    } else if hay.contains("香港") {
+        "香港"
+    } else if hay.contains("台湾") {
+        "台湾"
+    } else if hay.contains("日本") {
+        "日本"
+    } else if hay.contains("韩国") {
+        "韩国"
+    } else if hay.contains("欧美") {
+        "欧美"
+    } else {
+        "Other"
+    };
+    fill_select_by_label(fields, page, "source_sel", region_label);
+
+    let container_hay = format!("{} {}", info.name, info.mediainfo).to_ascii_lowercase();
+    let container = if container_hay.contains(".mp4") || container_hay.contains("mpeg-4") {
+        Some("MP4")
+    } else if container_hay.contains(".mkv") || container_hay.contains("matroska") {
+        Some("MKV")
+    } else {
+        None
+    };
+    if let Some(container) = container {
+        fill_select_by_label(fields, page, "processing_sel", container);
+    }
+
+    let matched = release_group(&info.name)
+        .map(|group| fill_select_by_label(fields, page, "team_sel", &group))
+        .unwrap_or(false);
+    if !matched {
+        // 站点没有这个组时不能冒充驻站组；有 Other 就选 Other。
+        fill_select_by_label(fields, page, "team_sel", "Other");
+    }
+}
+
+/// 只填当前为空/0 的同前缀下拉；选项文案必须真实存在。
+fn fill_select_by_label(fields: &mut Vec<Field>, page: &str, prefix: &str, label: &str) -> bool {
+    let Some(name) = select_field_names(fields, prefix).into_iter().next() else {
+        return false;
+    };
+    let cur = field_lookup(fields, &name).unwrap_or("").to_string();
+    if !cur.is_empty() && cur != "0" {
+        return true;
+    }
+    let options = select_options(page, &name);
+    if let Some(value) = match_option(&options, label) {
+        set_field(fields, &name, value);
+        return true;
+    }
+    false
 }
 
 fn fill_tjupt_series_fields(fields: &mut Vec<Field>, info: &ReleaseInfo, _page: &str) {
@@ -7429,6 +7492,50 @@ Frame rate : 25</pre>
         };
         let (fields, _, _) = build_upload_fields_for_site(&info, form, &[], "ubits");
         assert!(fields.contains(&("source_sel[4]".into(), "1".into())));
+        assert!(fields.contains(&("team_sel[4]".into(), "5".into())));
+    }
+
+    #[test]
+    fn lajidui_quality_fields_fill_region_container_and_team() {
+        let form = r#"<form action="takeupload.php" method="post">
+<select name="source_sel[4]"><option value="0" selected>请选择一项</option><option value="7">大陆</option></select>
+<select name="processing_sel[4]"><option value="0" selected>请选择一项</option><option value="10">MKV</option><option value="11">MP4</option></select>
+<select name="team_sel[4]"><option value="0" selected>请选择一项</option><option value="13">QHstudIo</option><option value="5">Other</option></select>
+<input type="text" name="name" value="">
+<textarea name="descr"></textarea>
+</form>"#;
+        let info = ReleaseInfo {
+            name: "In the Name of People 2017 S01 2160p 60fps WEB-DL HEVC 10bit AAC-QHstudIo"
+                .into(),
+            subtitle: "人民的名义 全55集".into(),
+            descr: "中国大陆 2017".into(),
+            mediainfo: "Complete name : K:\\Download\\E01.mp4\nFormat : MPEG-4".into(),
+            ..Default::default()
+        };
+        let (fields, _, _) = build_upload_fields_for_site(&info, form, &[], "lajidui");
+        assert!(fields.contains(&("source_sel[4]".into(), "7".into())));
+        assert!(fields.contains(&("processing_sel[4]".into(), "11".into())));
+        assert!(fields.contains(&("team_sel[4]".into(), "13".into())));
+    }
+
+    #[test]
+    fn lajidui_unknown_team_uses_other_and_mkv() {
+        let form = r#"<form action="takeupload.php" method="post">
+<select name="source_sel[4]"><option value="0" selected>请选择一项</option><option value="7">大陆</option></select>
+<select name="processing_sel[4]"><option value="0" selected>请选择一项</option><option value="10">MKV</option><option value="11">MP4</option></select>
+<select name="team_sel[4]"><option value="0" selected>请选择一项</option><option value="5">Other</option></select>
+<input type="text" name="name" value="">
+<textarea name="descr"></textarea>
+</form>"#;
+        let info = ReleaseInfo {
+            name: "The Disguiser 1080p HDTV x264 AAC-JING".into(),
+            subtitle: "伪装者".into(),
+            descr: "中国大陆".into(),
+            mediainfo: "Complete name : J:\\Download\\EP01.mkv\nFormat : Matroska".into(),
+            ..Default::default()
+        };
+        let (fields, _, _) = build_upload_fields_for_site(&info, form, &[], "lajidui");
+        assert!(fields.contains(&("processing_sel[4]".into(), "10".into())));
         assert!(fields.contains(&("team_sel[4]".into(), "5".into())));
     }
 

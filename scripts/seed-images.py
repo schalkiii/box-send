@@ -17,6 +17,11 @@ r"""给“源站简介没有图”的种子补图：本机视频抽帧（可选�
   # 已有海报原图时，也可直接给 --poster-url
   py -3 scripts/seed-images.py --content m:... --video ... --poster-url "https://img9.doubanio.com/..."
 
+  # 同一部剧有多个内容键（HDTV / WEB-DL 分开算）时，把同一批图写到多个键；
+  # 也可以按内容名子串自动找齐。
+  py -3 scripts/seed-images.py --content m:... --video ... --also-content m:...
+  py -3 scripts/seed-images.py --content m:... --video ... --for-name "白色巨塔"
+
   # 只看会抽哪几帧、不上传不写文件
   py -3 scripts/seed-images.py --content m:... --video ... --dry-run
 
@@ -218,6 +223,8 @@ def qb_videos(content_key: str) -> list[Path]:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--content", help="coverage.json 的内容键，例如 m:5dde...")
+    ap.add_argument("--also-content", action="append", default=[], help="同一批图也写入这些内容键（可重复）")
+    ap.add_argument("--for-name", help="按 coverage.json 内容名子串匹配，把同一批图写入所有匹配内容键")
     ap.add_argument("--find-url", help="按详情 URL 在审计/转种日志里反查内容键")
     ap.add_argument("--video", action="append", help="本地视频路径，可重复；不传则从 qB 找")
     ap.add_argument("--count", type=int, default=3, help="单条视频抽几帧（默认 3）")
@@ -232,6 +239,18 @@ def main() -> int:
     content = args.content or (resolve_content_key(args.find_url) if args.find_url else "")
     if not content:
         raise SystemExit("必须给 --content 或 --find-url")
+    targets = [content, *args.also_content]
+    if args.for_name:
+        idx = json.loads((BASE / "coverage.json").read_text(encoding="utf-8"))
+        matched = [
+            key
+            for key, entry in (idx.get("contents") or {}).items()
+            if args.for_name in str(entry.get("name", ""))
+        ]
+        if not matched:
+            raise SystemExit(f"coverage.json 里没有名字含「{args.for_name}」的内容键")
+        targets.extend(matched)
+    targets = list(dict.fromkeys(targets))
     videos = [Path(v) for v in args.video] if args.video else qb_videos(content)
     missing = [str(v) for v in videos if not v.is_file()]
     if missing:
@@ -278,7 +297,18 @@ def main() -> int:
     for p in shots:
         print(f"  {p} ({p.stat().st_size} 字节)", file=sys.stderr)
     if args.dry_run:
-        print(json.dumps({"ok": True, "dry_run": True, "content": content, "local": [str(p) for p in shots]}, ensure_ascii=False))
+        print(
+            json.dumps(
+                {
+                    "ok": True,
+                    "dry_run": True,
+                    "content": content,
+                    "contents": targets,
+                    "local": [str(p) for p in shots],
+                },
+                ensure_ascii=False,
+            )
+        )
         return 0
 
     urls = [upload(p, args.uploader) for p in shots]
@@ -293,9 +323,21 @@ def main() -> int:
             old = json.loads(out.read_text(encoding="utf-8"))
         except json.JSONDecodeError as e:
             raise SystemExit(f"{out} 不是合法 JSON，拒绝覆盖：{e}")
-    old[content] = urls
+    for key in targets:
+        old[key] = urls
     out.write_text(json.dumps(old, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print(json.dumps({"ok": True, "content": content, "images": urls, "manifest": str(out)}, ensure_ascii=False))
+    print(
+        json.dumps(
+            {
+                "ok": True,
+                "content": content,
+                "contents": targets,
+                "images": urls,
+                "manifest": str(out),
+            },
+            ensure_ascii=False,
+        )
+    )
     return 0
 
 

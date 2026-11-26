@@ -6,6 +6,7 @@
   py -3 scripts/edit-seed.py --site panda --id 141276 --name "English Title" --descr-file new.txt --apply
   py -3 scripts/edit-seed.py --site qingwa --id 208692 --technical-info-file bdinfo.txt --audio-codec 7 --apply
   py -3 scripts/edit-seed.py --site qingwa --id 208575 --add-tag 8 --apply
+  py -3 scripts/edit-seed.py --site lajidui --id 85084 --processing 11 --source 7 --team 13 --append-image https://img3.pixhost.to/images/7476/815956238_m_36d02007e802163c-1.jpg --apply
 
 默认只读演练；`--apply` 才 POST takeedit.php。表单里除被指定的字段外，
 其余 input/textarea/select 原样回填，避免误改分类/媒介/标签。
@@ -98,8 +99,11 @@ def main() -> int:
     ap.add_argument("--remove-tag", action="append", default=[], metavar="VALUE", help="取消一个标签值，可重复")
     ap.add_argument("--audio-codec", help="audiocodec_sel[4] 的选项值，例如 qingwa 的 Other=7")
     ap.add_argument("--source", help="source_sel[4] 的选项值")
+    ap.add_argument("--processing", help="processing_sel[4] 的选项值，例如 lajidui 的 MP4=11")
+    ap.add_argument("--team", help="team_sel[4] 的选项值，例如 lajidui 的 Other=5")
     ap.add_argument("--codec", help="codec_sel[4] 的选项值")
     ap.add_argument("--standard", help="standard_sel[4] 的选项值")
+    ap.add_argument("--append-image", action="append", default=[], metavar="URL", help="把图片以 [img] 追加到简介末尾，可重复")
     ap.add_argument("--name")
     ap.add_argument("--subtitle")
     ap.add_argument("--apply", action="store_true")
@@ -143,6 +147,8 @@ def main() -> int:
     for label, prefix, value in (
         ("音频编码", "audiocodec_sel", args.audio_codec),
         ("片源类型", "source_sel", args.source),
+        ("处理格式", "processing_sel", args.processing),
+        ("制作组", "team_sel", args.team),
         ("视频编码", "codec_sel", args.codec),
         ("分辨率", "standard_sel", args.standard),
     ):
@@ -188,6 +194,24 @@ def main() -> int:
             if "technical_info" in key:
                 data[key] = ""
                 changed.append(f"清空 {key}")
+    if args.append_image:
+        field = next((f for f in DESCR_FIELDS if f in data), None)
+        if not field:
+            print("没有简介字段，无法追加图片")
+            return 1
+        cur = str(data.get(field, ""))
+        added = []
+        for url in (u.strip() for u in args.append_image):
+            if not url or url in cur:
+                continue
+            sep = "" if not cur or cur.endswith("\n") else "\n"
+            cur += f"{sep}[img]{url}[/img]\n"
+            added.append(url)
+        if added:
+            data[field] = cur
+            changed.append(f"{field} 追加图片 {len(added)} 张")
+        else:
+            print("追加图片全部已在简介里，未改动")
 
     print("将修改：" + ", ".join(changed))
     print(f"简介长度：{len(data.get('descr', ''))} 字节")
