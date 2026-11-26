@@ -182,10 +182,15 @@ impl CoverageReport {
                 if let Some(cell) = entry.coverage.get(&site.id) {
                     if matches!(
                         cell.status,
-                        CoverageStatus::Skipped
+                        CoverageStatus::Seeding
+                            | CoverageStatus::Assisted
+                            | CoverageStatus::Reseeded
+                            | CoverageStatus::Skipped
                             | CoverageStatus::Rejected
                             | CoverageStatus::SameHashSkip
                             | CoverageStatus::Verifying
+                            // 目标站已有同片其他版本：再排一次只会重复撞版本
+                            | CoverageStatus::OtherVersion
                             // 站点要人走候选入口：再排一次只会再被同一规则挡住
                             | CoverageStatus::PendingOffers
                             // 等站点审核 / 审核没过 / 站上已找不到：种子在站上（或曾经在），
@@ -1020,6 +1025,24 @@ mod tests {
             r.derive_qb_gap_drafts_from_index(&idx, &sites, &allowed, &limits),
             2
         );
+        // 覆盖记录已写 b=Seeding：即使索引里的 tracker 还没刷新，也不能再排 b，
+        // 否则 `reseed --draft` 会撞上 hdbao 54657 这类已经在做种的种子。
+        idx.contents.get_mut("m:1").unwrap().coverage.insert(
+            "b".into(),
+            crate::index::SiteCoverage {
+                status: CoverageStatus::Seeding,
+                at: 1,
+                url: Some("https://b.example/details.php?id=1".into()),
+                note: None,
+                verify_hash: None,
+            },
+        );
+        assert_eq!(
+            r.derive_qb_gap_drafts_from_index(&idx, &sites, &allowed, &limits),
+            1,
+            "b 已在做种，只应保留 a 的缺口"
+        );
+        assert_eq!(r.drafts[0].target_site, "a");
     }
 
     #[test]

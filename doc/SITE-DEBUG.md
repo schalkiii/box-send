@@ -261,8 +261,14 @@ luckpt 的候选规则（**还没有写进 `boxsend.json`**）：
 - **ptlgs 的 `cover` / `screenshots` 是独立必填字段**：上传页有 `cover`、`screenshots`，页面写“至少需要 3 张原始截图”；实际详情页 `115117`、`115313` 的 `ktorrentcover` 是 `<img src=''/>`，简介 0 张图，说明旧代码没填独立字段。Rust 已补 `posterField` / `screenshotField`：从最终简介按顺序抽图，第一张填海报，其余一行一个填截图；字段不存在就不硬塞，简介没图时清空。ptlgs 总图数按 4 张进 `gates::image_floor`。2026-11-25 真发《苦月亮》`115350` 做字段复测：详情页 `ktorrentcover` 有海报，`ktorrentscreenshots` 有 3 张截图，qB 校验 100%；站点仍标“未审”，等审核结果。
 - **为什么先剪死图再抽字段**：`apply_site_rules` 会先剪死图、转 BBCode，再重新抽一次独立字段；否则简介剪掉了死图，独立字段还留着死链，审核端仍会退回。
 
+### 6.16 2026-11-26 挂回别名、审核判定与青蛙 BDInfo
+
+- **qilin 480763 挂回失败不是种子坏了**：站点下载种子的 tracker 是 `www.hdkylin.top`，程序内置别名只有 `tracker.hdkyl.in`，`ensure_trackers_on_site` 把它判成“非目标站 tracker”后中止。`extra_announce_hosts("qilin")` 补上两个 host 后重跑 `bsend pull`，返回“下载器里已有同 hash、只挂目标站 tracker”，覆盖状态从 `review_pending` 变 `seeding`。
+- **审核页同时有“拒绝”和“待审队列”时按拒绝算**：青蛙拒绝页会在“审核不通过，原因：…”后面补一句“修改完成后会自动进入待审队列”。旧判定先扫待审词，把已拒绝的种子误记成待审；现在先判硬拒绝词，`208692`、`208575` 已由 `bsend followup` 写回 `review_rejected`，没有发私信或复审请求。
+- **青蛙蓝光原盘要 BDInfo，不是 MediaInfo**：`208692` 的站内信明确要求 BDInfo、音频编码选 Other。源页 `1ptba 89950` 有完整 BDInfo，已写入 `technical_info`；`audiocodec_sel[4]` 选 7（Other），补“原生原盘”标签。代码在 `prepare_released` 对青蛙蓝光优先取源页 BDInfo，本地 MediaInfo 生成对这类型号跳过；预检再硬拦一次，防止又交 MediaInfo。
+- **图片全剪光要在提交前拦住**：白色巨塔、伪装者曾被剪掉全部图片后仍过预检。`apply_site_rules` 现在记录剪前/剪后张数，剪后 0 张写入 `required_gaps`；审阅把它计入预检阻断，`run_reseed` 在 `--yes` 前再检查一次，不把空图种子 POST 出去。单测 `all_images_pruned_sets_required_gap` 覆盖这条路径。
+
 ```powershell
-# 1) 新站第一次接入：只读表单检查
 .\target\release\bsend.exe --config "$env:LOCALAPPDATA\BoxSend\boxsend.json" formcheck --sites <site>
 
 # 2) 审阅一条，不发布
@@ -274,7 +280,7 @@ luckpt 的候选规则（**还没有写进 `boxsend.json`**）：
 
 需要看原始表单时，带 Cookie 打开上传页，打印所有 `..._sel` 下拉的 value 和显示文字。不要把 Cookie 值写进文档、日志或截图。
 
-### 6.16 为什么早期发布没有立刻做种（2026-11-25 复核）
+### 6.17 为什么早期发布没有立刻做种（2026-11-25 复核）
 
 - **现场证据**：2026-11-22 熊猫 `10265` 的 `reseed-log.jsonl` 一行是 `result=posted`、`cell_status=same_hash_skip`、`seeded=false`。上传确实成功，但 qB 里同 `info hash` 的种子不是只挂熊猫 tracker；qB 不允许同 hash 存两条，程序按策略跳过。旧版把任何非 `Reseeded` 的结果都包成 `posted`，所以日志和界面看起来“发布完成”，实际没做种。
 - **原因一：早期上传没有目标站专属 `info.source`。** 2026-11-23 08:38 之前，`torrent_rewrite.rs` 还没接入上传链路；目标种 hash 往往等于 qB 里源种 hash，qB 只能保留一条，挂回必然走同 hash 跳过。现在 `run_reseed` 上传前会写 `info.source`、断言新旧 hash 不同，并检查新 hash 不在 qB。

@@ -324,6 +324,10 @@ fn wanted_tags(info: &ReleaseInfo) -> Vec<&'static str> {
     if title_hay.to_ascii_lowercase().contains("remux") {
         out.push("Remux");
     }
+    // 真蓝光原盘（不是 Remux/BDRip）勾「原生原盘」；站上没有这个标签就不勾。
+    if is_bluray_release(&title_hay) && !title_hay.to_ascii_lowercase().contains("remux") {
+        out.push("原生原盘");
+    }
     let has_cjk = title_hay
         .chars()
         .any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c));
@@ -347,20 +351,31 @@ pub fn preflight(
     info: &mut ReleaseInfo,
     tags: &[String],
     rules: &crate::gates::SiteRules,
+    site_id: &str,
 ) -> Preflight {
     let mut pf = Preflight::default();
 
     // ③ MediaInfo：站点规则明确不要（requireMediaInfo=false）时降为警告，
-    // 否则「门禁放行、预检仍阻断」会让自动发种永远发不出去
-    if info.mediainfo.trim().is_empty() {
-        let msg =
-            "MediaInfo 为空：源站详情页没有 MediaInfo/BDInfo 块，先在源站补齐或手动粘贴后再转种";
+    // 否则「门禁放行、预检仍阻断」会让自动发种永远发不出去。
+    // 除了判空，还要判结构：源页把「参数块」当 MediaInfo 时，站点仍会按错误退回。
+    if info.mediainfo.trim().is_empty() || !mediainfo_is_complete(&info.mediainfo) {
+        let msg = if info.mediainfo.trim().is_empty() {
+            "MediaInfo 为空：源站详情页没有 MediaInfo/BDInfo 块，先在源站补齐或手动粘贴后再转种"
+        } else {
+            "MediaInfo/BDInfo 不完整：缺 General 时长、Video 宽高或 BDInfo 的 Playlist/Video 段，先补齐再转种"
+        };
         if rules.require_mediainfo() {
             pf.errors.push(msg.into());
         } else {
             pf.warnings
                 .push(format!("{msg}（站点规则不要 MediaInfo，已放宽）"));
         }
+    }
+    // 青蛙蓝光/原盘只收 BDInfo。MediaInfo 看着完整也会被判“工具使用错误”。
+    if site_id == "qingwa" && is_bluray_release(&info.name) && !is_bdinfo_block(&info.mediainfo) {
+        pf.errors.push(
+            "青蛙蓝光/原盘必须填 BDInfo（Disc Label / Playlist / Video / Audio / Subtitle），不能交 MediaInfo；源页没有就先补 BDInfo".into(),
+        );
     }
 
     // ② 链接：有 id 就自动补进简介；三个 id 都缺时按站点规则决定阻断/警告
@@ -407,6 +422,12 @@ fn normalize_release_title(name: &str) -> String {
         // 只靠 6 字符窗口会把 p 当成英文段开头，标题只剩「p HDTV…」。
         if chars[i].is_ascii_alphabetic()
             && (i == 0 || !chars[i - 1].is_ascii_digit())
+            // `S01-S07` 里的第二个 S 前面是连字符：它是季范围的后半段，不是英文标题开头。
+            // 不排除会把前缀截成「广告狂人S01-」，范围只剩 S07。
+            && !(i > 0
+                && chars[i - 1] == '-'
+                && matches!(chars[i], 'S' | 'E')
+                && chars.get(i + 1).is_some_and(|c| c.is_ascii_digit()))
             && chars[i..chars.len().min(i + 6)]
                 .windows(2)
                 .any(|w| w[0].is_ascii_alphabetic() && w[1].is_ascii_alphabetic())
@@ -440,10 +461,66 @@ fn normalize_release_title(name: &str) -> String {
     if suffix.chars().filter(|c| c.is_ascii_alphanumeric()).count() >= 8
         && suffix.chars().any(|c| c.is_ascii_digit())
     {
-        suffix.to_string()
+        // 中文前缀里常带合集季范围（「广告狂人S01-S07.Mad.Men…」）。
+        // 裁掉中文名时要把这段范围搬进英文标题，否则会从 S01-S07 掉成 S07。
+        let suffix = match season_range(&prefix) {
+            Some(range) if season_range(suffix).as_deref() != Some(range.as_str()) => {
+                insert_season_range(suffix, &range)
+            }
+            _ => suffix.to_string(),
+        };
+        suffix
     } else {
         name.to_string()
     }
+}
+
+/// 提取 `S01-S07` / `E01-E21` 这种连续范围（不是单个 S01）。
+fn season_range(name: &str) -> Option<String> {
+    let bytes = name.as_bytes();
+    let mut i = 0;
+    while i + 4 < bytes.len() {
+        if (bytes[i] == b'S' || bytes[i] == b'E') && bytes[i + 1].is_ascii_digit() {
+            let mut j = i + 1;
+            while j < bytes.len() && bytes[j].is_ascii_digit() {
+                j += 1;
+            }
+            if bytes.get(j) == Some(&b'-')
+                && matches!(bytes.get(j + 1), Some(b'S') | Some(b'E'))
+                && bytes.get(j + 2).is_some_and(|b| b.is_ascii_digit())
+            {
+                let mut k = j + 2;
+                while k < bytes.len() && bytes[k].is_ascii_digit() {
+                    k += 1;
+                }
+                return Some(name[i..k].to_string());
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// 把季范围插到英文名和年份/技术参数之间：`Mad.Men.2007...` → `Mad.Men.S01-S07.2007...`。
+fn insert_season_range(suffix: &str, range: &str) -> String {
+    let sep = if suffix.contains('.') { '.' } else { ' ' };
+    let parts: Vec<&str> = suffix.split(sep).collect();
+    let at = parts
+        .iter()
+        .position(|t| {
+            let low = t.to_ascii_lowercase();
+            tech_rank(t).is_some()
+                || (low.len() == 4 && low.chars().all(|c| c.is_ascii_digit()))
+                || low
+                    .split('-')
+                    .next()
+                    .is_some_and(|y| y.len() == 4 && y.chars().all(|c| c.is_ascii_digit()))
+        })
+        .unwrap_or(parts.len());
+    let mut out: Vec<&str> = parts[..at].to_vec();
+    out.push(range);
+    out.extend_from_slice(&parts[at..]);
+    out.join(&sep.to_string())
 }
 
 /// 标题技术参数的固定顺序：分辨率 → 帧率/HDR → 片源 → 视频编码 → 位深 → 音频 → 压制组。
@@ -766,14 +843,60 @@ fn extract_mediainfo(html: &str, descr: &str) -> String {
     String::new()
 }
 
+/// 青蛙蓝光/原盘只认 BDInfo；从源页里单独捞 Disc Label/Playlist 那一段。
+/// 不能复用 `extract_mediainfo`：同一页可能先出现 MediaInfo，先到先得会选错。
+fn extract_bdinfo(html: &str, descr: &str) -> String {
+    let mut blocks: Vec<String> = Vec::new();
+    collect_tag_blocks(html, "pre", &mut blocks);
+    collect_tag_blocks(html, "fieldset", &mut blocks);
+    collect_tag_blocks(html, "code", &mut blocks);
+    collect_tag_blocks(html, "textarea", &mut blocks);
+    for b in blocks {
+        let text = strip_tags(&b);
+        if is_bdinfo_block(&text) {
+            return text.trim().to_string();
+        }
+    }
+    let text = strip_tags(descr);
+    if is_bdinfo_block(&text) {
+        return text.trim().to_string();
+    }
+    String::new()
+}
+
+fn is_bdinfo_block(text: &str) -> bool {
+    let has_disc = text.contains("Disc Label") || text.contains("DISC INFO");
+    let has_playlist = text.contains("Playlist:");
+    let has_video = text.contains("Video:");
+    let lines = text.lines().filter(|l| !l.trim().is_empty()).count();
+    lines >= 5 && has_disc && has_playlist && has_video
+}
+
+/// 蓝光原盘/Remux 资源：青蛙这类站要求交 BDInfo，而不是 MediaInfo。
+/// 不把 `BDRip` 算进来：BDRip 是重编码，MediaInfo 才合适。
+fn is_bluray_release(name: &str) -> bool {
+    let low = name.to_ascii_lowercase();
+    low.contains("blu-ray")
+        || low.contains("bluray")
+        || low.contains("remux")
+        || low.contains("bd25")
+        || low.contains("bd50")
+        || low.contains("bd66")
+        || low.contains("bd100")
+}
+
 fn is_mediainfo_block(text: &str) -> bool {
-    const KEYS: [&str; 6] = [
+    if is_bdinfo_block(text) {
+        return true;
+    }
+    const KEYS: [&str; 7] = [
         "Unique ID",
         "Format",
         "Bit rate",
         "Width",
         "DISC INFO",
         "VIDEO:",
+        "Video:",
     ];
     let hits = KEYS.iter().filter(|k| text.contains(**k)).count();
     let lines = text.lines().filter(|l| !l.trim().is_empty()).count();
@@ -1575,7 +1698,15 @@ pub fn build_upload_fields_for_site(
     // 审核要求改成 `BluRay`，而且改写后仍要用同一份标题匹配下拉/标签。
     let mut site_info = info.clone();
     site_info.name = normalize_title_for_site(&site_info.name, site_id);
-    let (mut fields, picked, notes) = build_upload_fields(&site_info, page, tags_wanted);
+    let (mut fields, picked, mut notes) = build_upload_fields(&site_info, page, tags_wanted);
+    if site_id == "qingwa" && is_bdinfo_block(&site_info.mediainfo) {
+        // 青蛙站规：蓝光原盘/DIY 交 BDInfo 时，音频下拉要选 Other；具体音轨信息让审核看 BDInfo。
+        if let Some((field, label)) =
+            force_select_label(&mut fields, page, "audiocodec_sel", &["Other", "其他"])
+        {
+            notes.push(format!("{field}：按青蛙蓝光规则选「{label}」"));
+        }
+    }
     if site_id == "tjupt" {
         fill_tjupt_series_fields(&mut fields, &site_info, page);
     }
@@ -2168,6 +2299,28 @@ fn select_field_names(fields: &[Field], prefix: &str) -> Vec<String> {
         .filter(|n| *n == prefix || (n.starts_with(prefix) && n[prefix.len()..].starts_with('[')))
         .cloned()
         .collect()
+}
+
+/// 按页面真实选项文案强制改下拉：用于站点规则明确要求的“Other/其他”。
+/// 文案匹配不区分大小写；选项不存在就不写，返回 None（不硬造值）。
+fn force_select_label(
+    fields: &mut Vec<Field>,
+    page: &str,
+    prefix: &str,
+    labels: &[&str],
+) -> Option<(String, String)> {
+    for name in select_field_names(fields, prefix) {
+        for (value, label) in select_options(page, &name) {
+            if labels
+                .iter()
+                .any(|want| label.trim().eq_ignore_ascii_case(want))
+            {
+                set_field(fields, &name, value.clone());
+                return Some((name, label));
+            }
+        }
+    }
+    None
 }
 
 /// 发布组：名尾 `-GROUP`（`x264-JING` → JING）；常见非组词缀剔除
@@ -3276,12 +3429,20 @@ pub fn apply_site_rules(prep: &mut PreparedUpload, rules: &crate::gates::SiteRul
         .copied()
     {
         let cur = field_lookup(&prep.fields, field).unwrap_or("").to_string();
+        let before_images = crate::gates::image_count(&cur);
         let (next, removed) = prune_dead_images(&cur, &prep.form_url);
         if removed > 0 {
+            let after_images = crate::gates::image_count(&next);
             set_field(&mut prep.fields, field, next);
             prep.select_notes.push(format!(
-                "简介剪掉 {removed} 张不可用图片（逐图探测 + 已知失效图床，硬规则）"
+                "简介剪掉 {removed} 张不可用图片（{before_images}→{after_images}；逐图探测 + 已知失效图床，硬规则）"
             ));
+            // 剪前有图、剪后 0 张：即使站点没配图数门槛也不能发。
+            // 2026-11-26 实测白色巨塔 #100 和 Disguiser #54 都被剪成 0 图仍过预检。
+            if before_images > 0 && after_images == 0 {
+                prep.required_gaps
+                    .push("简介图片全被剪掉（0 张可用）：先补可达的海报/截图再发布".into());
+            }
         }
     }
     apply_site_rules_tail(prep, rules);
@@ -3947,7 +4108,7 @@ pub fn review_reseed(
             bail!("审阅预算用完（源站定位），本轮跳过该草稿");
         }
     }
-    let rel = prepare_released(cfg, req, log)?;
+    let mut rel = prepare_released(cfg, req, log)?;
     if let Some(t) = throttle {
         if !t.acquire(&req.target_site, BudgetKind::Search) {
             bail!("审阅预算用完（目标站上传页），本轮跳过该草稿");
@@ -3957,6 +4118,10 @@ pub fn review_reseed(
     let mut prepared = prepare_upload(&rel.tgt, &rel.info)?;
     let rules = cfg.coverage.rules_for(&req.target_site);
     apply_site_rules(&mut prepared, &rules);
+    // 必填缺口 / 图片全剪这类本地硬阻断要计入预检结论，不能只在字段列表下面提示。
+    for gap in &prepared.required_gaps {
+        rel.preflight.errors.push(gap.clone());
+    }
     log(&format!(
         "审阅完成：{} 个字段 → {}（未提交）",
         prepared.fields.len(),
@@ -5423,7 +5588,11 @@ fn normalize_mediainfo(text: &str) -> String {
 }
 
 /// MediaInfo 是否满足站点预审的最低结构：General 有 Duration、Video 有 Width/Height。
+/// BDInfo 是另一套格式，有 Disc Label/Playlist/Video 就算完整，不能拿 MediaInfo 的字段硬套。
 fn mediainfo_is_complete(text: &str) -> bool {
+    if is_bdinfo_block(text) {
+        return true;
+    }
     let mut section = String::new();
     let mut has_duration = false;
     let mut has_width = false;
@@ -5528,6 +5697,17 @@ fn prepare_released(
     if info.name.is_empty() {
         info.name = req.name.clone();
     }
+    // 源站详情页可能只指向合集里的某一季（Mad Men 页 h1 是 S07），但索引里的
+    // 内容名写着 S01-S07。用合集范围修正标题，避免把整包发成单季。
+    if let Some(range) = season_range(&req.name) {
+        if !info.name.to_ascii_uppercase().contains(&range) {
+            let candidate = normalize_release_title(&req.name);
+            if !candidate.is_empty() && season_range(&candidate).is_some() {
+                log(&format!("标题按合集范围修正：{} → {}", info.name, candidate));
+                info.name = candidate;
+            }
+        }
+    }
     // 目标站标题规范先落地，后续预检、审计和提交字段看到的是同一版标题。
     info.name = normalize_title_for_site(&info.name, &req.target_site);
     // 源页图片不足时，读取程序化截图清单（key → 公网图片 URL），注入简介。
@@ -5549,8 +5729,25 @@ fn prepare_released(
         info.douban
     ));
 
+    // ---- 1.2 青蛙蓝光/原盘：技术栏要用源页 BDInfo，不能沿用 MediaInfo ----
+    if req.target_site == "qingwa" && is_bluray_release(&info.name) {
+        let bdinfo = extract_bdinfo(&html, &info.descr);
+        if !bdinfo.is_empty() && !is_bdinfo_block(&info.mediainfo) {
+            info.mediainfo = bdinfo;
+            log(&format!(
+                "青蛙蓝光：技术栏改用源页 BDInfo（{} 字节）",
+                info.mediainfo.len()
+            ));
+        }
+    }
+
     // ---- 1.5 源站没有 MediaInfo 时，从本地文件生成（luckpt 等站发种硬性要求）----
-    if info.mediainfo.trim().is_empty() || !mediainfo_is_complete(&info.mediainfo) {
+    // 青蛙蓝光/原盘不生成 MediaInfo：那里要 BDInfo，生成本地 MediaInfo 只会把错误格式
+    // 送上去；源页没有 BDInfo 就交给预检拦下。
+    let local_media_ok = !(req.target_site == "qingwa" && is_bluray_release(&info.name));
+    if local_media_ok
+        && (info.mediainfo.trim().is_empty() || !mediainfo_is_complete(&info.mediainfo))
+    {
         if let Ok(Some(mi)) = disk_mediainfo(cfg, req, log) {
             info.mediainfo = mi;
             log(&format!(
@@ -5566,7 +5763,7 @@ fn prepare_released(
         .map(|s| s.to_string())
         .collect();
     let site_rules = cfg.coverage.rules_for(&req.target_site);
-    let pf = preflight(&mut info, &tags, &site_rules);
+    let pf = preflight(&mut info, &tags, &site_rules, &req.target_site);
     for f in &pf.fixes {
         log(&format!("预检·已自动补：{f}"));
     }
@@ -6008,6 +6205,15 @@ fn run_reseed_inner(
             prep
         }
     };
+
+    // 本地规则缺口（例如简介图片被剪成 0 张）必须在真提交前硬拦；
+    // 审阅页会显示，但 `--yes`/自动发种如果只看预检就会漏过去。
+    if !prep.required_gaps.is_empty() {
+        bail!(
+            "本地规则阻断，未上传：{}",
+            prep.required_gaps.join("；")
+        );
+    }
 
     // ---- 4 从 qB 导出源种 → 单 tracker 改写 → 上传目标站 ----
     let entry = index
@@ -7104,7 +7310,12 @@ Frame rate : 25</pre>
             mediainfo: String::new(),
             ..Default::default()
         };
-        let pf = preflight(&mut info, &[], &crate::gates::SiteRules::default());
+        let pf = preflight(
+            &mut info,
+            &[],
+            &crate::gates::SiteRules::default(),
+            "luckpt",
+        );
         assert!(!pf.ok());
         assert!(pf.errors.iter().any(|e| e.contains("MediaInfo")));
     }
@@ -7114,12 +7325,17 @@ Frame rate : 25</pre>
         let mut info = ReleaseInfo {
             name: "x 中字".into(),
             descr: "简介没有链接".into(),
-            mediainfo: "Format : AVC\nUnique ID : 1\nBit rate : 1\nWidth : 1\nHeight : 1".into(),
+            mediainfo: "General\nDuration : 1h\nVideo\nWidth : 1920\nHeight : 1080".into(),
             imdb: Some("tt4823720".into()),
             ..Default::default()
         };
         let tags = vec!["中字".to_string()];
-        let pf = preflight(&mut info, &tags, &crate::gates::SiteRules::default());
+        let pf = preflight(
+            &mut info,
+            &tags,
+            &crate::gates::SiteRules::default(),
+            "luckpt",
+        );
         assert!(pf.ok(), "{:?}", pf.errors);
         assert!(info.descr.contains("imdb.com"));
         assert!(!pf.fixes.is_empty());
@@ -7138,7 +7354,7 @@ Frame rate : 25</pre>
             require_mediainfo: Some(false),
             ..Default::default()
         };
-        let pf = preflight(&mut info, &[], &rules);
+        let pf = preflight(&mut info, &[], &rules, "luckpt");
         assert!(
             pf.ok(),
             "requireMediaInfo=false 时不应阻断：{:?}",
@@ -8243,6 +8459,19 @@ Language : English"
             ),
             "Agatha Christies Poirot S01-S13 Collection 1080p Bluray x265 10bit MNHD-FRDS"
         );
+        // 中文前缀里的合集季范围不能丢：Mad Men 合集曾从 S01-S07 掉成 S07
+        assert_eq!(
+            normalize_release_title_for(
+                "广告狂人S01-S07.Mad.Men.2007-2014.1080p.Blu-ray.x265.AC3￡cXcY@FRDS",
+                true
+            ),
+            "Mad.Men.S01-S07.2007-2014.1080p.Blu-ray.x265.AC3￡cXcY@FRDS"
+        );
+        assert_eq!(
+            season_range("广告狂人S01-S07.Mad.Men"),
+            Some("S01-S07".to_string())
+        );
+        assert_eq!(season_range("Mad.Men.S07"), None);
         // 技术词之后的末段整体保留在最后，不要被挪到标题主体前面
         assert_eq!(
             normalize_release_title_for(
@@ -8448,6 +8677,57 @@ Language : Chinese"
         };
         let (fs, _p, _n) = build_upload_fields(&info, form, &[]);
         assert_eq!(field_lookup(&fs, "medium_sel"), Some("1"));
+    }
+
+    #[test]
+    fn qingwa_bluray_requires_bdinfo_and_picks_other() {
+        const BDINFO: &str = "Disc Label: Bitter Moon 1992 1080p ESP Blu-ray AVC DTS-HD MA 2.0\n\
+Disc Size: 40,338,327,962 bytes\n\
+Playlist: 00001.MPLS\n\
+Video: MPEG-4 AVC Video / 33841 kbps / 1080p / 23.976 fps\n\
+Audio: Spanish / Dolby Digital Audio / 2.0 / 48 kHz / 192 kbps\n\
+Subtitle: Spanish / Portuguese / Italian / English";
+        let html = format!("<pre>{BDINFO}</pre>");
+        assert!(is_bdinfo_block(BDINFO));
+        assert_eq!(extract_bdinfo(&html, ""), BDINFO);
+        assert!(mediainfo_is_complete(BDINFO));
+
+        let mi = "General\nDuration : 2h 19m\nVideo\nWidth : 1920\nHeight : 1080";
+        let mut bad = ReleaseInfo {
+            name: "Bitter Moon 1992 1080p Blu-ray AVC DTS-HD MA 2.0".into(),
+            descr: "IMDb: https://www.imdb.com/title/tt0104777/".into(),
+            mediainfo: mi.into(),
+            ..Default::default()
+        };
+        let pf = preflight(&mut bad, &[], &crate::gates::SiteRules::default(), "qingwa");
+        assert!(
+            pf.errors.iter().any(|e| e.contains("BDInfo")),
+            "{:?}",
+            pf.errors
+        );
+
+        let form = r#"<form action="takeupload.php">
+<input type="text" name="name" value="">
+<input type="text" name="small_descr" value="">
+<textarea name="descr"></textarea>
+<textarea name="technical_info"></textarea>
+<select name="audiocodec_sel[4]"><option value="0">请选择</option><option value="10">DTS-HD MA</option><option value="7">Other</option></select>
+<select name="source_sel[4]"><option value="0">请选择</option><option value="8">Blu-ray</option></select>
+<input type="checkbox" name="tags[4][]" value="10"> 原生原盘
+<input type="checkbox" name="tags[4][]" value="6"> 特效字幕
+<input type="checkbox" name="tags[4][]" value="8"> 完结
+<input type="checkbox" name="tags[4][]" value="14"> 系列合集
+</form>"#;
+        let info = ReleaseInfo {
+            name: "Bitter Moon 1992 1080p Blu-ray AVC DTS-HD MA 2.0".into(),
+            mediainfo: BDINFO.into(),
+            ..Default::default()
+        };
+        let tags = wanted_tags(&info);
+        assert!(tags.contains(&"原生原盘"), "{tags:?}");
+        let (fs, picked, _notes) = build_upload_fields_for_site(&info, form, &tags, "qingwa");
+        assert_eq!(field_lookup(&fs, "audiocodec_sel[4]"), Some("7"));
+        assert!(picked.contains(&"10".to_string()), "{picked:?}");
     }
 
     #[test]
@@ -9091,6 +9371,32 @@ Language : Chinese"));
         assert_eq!(
             prep.required_gaps,
             vec!["必填缺失：style_sel[4][]（配置标签未命中：中字/国语）".to_string()]
+        );
+    }
+
+    #[test]
+    fn all_images_pruned_sets_required_gap() {
+        // 剪前有图、剪后 0 张：即使站点没配图数门槛，也必须留下阻断缺口。
+        let mut prep = PreparedUpload {
+            action: "https://x/takeupload.php".into(),
+            form_url: "https://cangbao.ge/upload.php".into(),
+            fields: vec![(
+                "descr".into(),
+                r#"<img src="https://i.imgur.com/a.jpg"><img src="https://i.imgur.com/b.jpg"><img src="https://hdsky.me/c.jpg">"#
+                    .into(),
+            )],
+            picked_tags: vec![],
+            tag_warn: None,
+            select_notes: vec![],
+            required_gaps: vec![],
+            form_html: "<html><body><form></form></body></html>".into(),
+            poster_field: None,
+            screenshot_field: None,
+        };
+        apply_site_rules(&mut prep, &crate::gates::SiteRules::default());
+        assert_eq!(
+            prep.required_gaps,
+            vec!["简介图片全被剪掉（0 张可用）：先补可达的海报/截图再发布".to_string()]
         );
     }
 

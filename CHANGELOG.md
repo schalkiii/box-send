@@ -7,6 +7,12 @@
 
 ### Changed
 
+- 麒麟（qilin）下载种子的 tracker 实际是 `www.hdkylin.top`，程序原先只认 `tracker.hdkyl.in`，挂回时把本站种子判成“非目标站 tracker”后中止。两个 host 都加入别名；`480763` 重跑挂回后返回“下载器里已有同 hash、只挂目标站 tracker”，覆盖状态从 `review_pending` 变 `seeding`。
+- 站点审核标记改为“硬拒绝优先”：页面同时写“审核不通过”和“修改后自动进入待审队列”时，先判拒绝，不再把已拒绝的种子误记成待审。`bsend followup --sites qingwa` 已把 `208692`、`208575` 正确写回 `review_rejected`。
+- 青蛙（qingwa）蓝光原盘/DIY 资源改用源页 BDInfo，不再拿本地 MediaInfo 顶替；音频下拉按页面选项选“Other/其他”，真原盘补“原生原盘”标签，Remux 不补。`208692` 的技术栏已换成 692 字节 BDInfo，简介去掉 MediaInfo 参数块。
+- 简介图片硬规则补最后一道：剪前有图、剪后 0 张时写入本地阻断缺口，审阅预检显示阻断，`--yes`/自动发种在提交前直接拒绝；白色巨塔、伪装者的“图片全剪光仍能发”路径已堵住。
+- 合集标题保留季范围：中文前缀里的 `S01-S07`/`E01-E21` 不再被裁掉，Mad Men 合集审阅标题从 `S07` 恢复为 `S01-S07`。
+
 - 青蛙（qingwa）Remux 资源标题按站点规范把 `Blu-ray` 写成 `BluRay`，并在表单有「Remux」复选框时自动勾选；2026-11-26 `208804` 已按此改好，站内信 `643794` 确认审核通过，qB 本来就在做种。
 
 - 源标题清洗修正两处：中文名后面直接跟 `1080p`/`HDTV`/`x265` 这类技术词时，不再把中文名裁掉；`[50%] (通过)` 这类“促销角标 + 审核提示”会一起从标题尾部剥掉，不再把角标带进发布名。白色巨塔、Liar Game 的转种审阅实测由错误标题恢复为正常标题。
@@ -37,6 +43,7 @@
 - 上传页独立海报/截图字段：`sourceSites[].overrides.posterField` / `screenshotField` 指定字段名后，程序从最终简介（剪死图、转 BBCode 之后）按出现顺序抽图，第一张填海报，其余一行一个填截图；表单没有该字段不硬塞，简介没图时清空，避免提交死链。ptlgs 的 `cover` / `screenshots` 是首个实测站，总图数按 4 张进 `image_floor`；2026-11-25 真发《苦月亮》`115350`，详情页海报和截图区块都有图，qB 校验 100%。
 
 - `scripts/edit-seed.py --clear-technical-info`：清空 `technical_info` 字段，配合 `--descr-file` 处理不收 MediaInfo 的站点（财神 260049/260050 实测）。
+- `scripts/edit-seed.py` 扩展：`--technical-info-file`（别名 `--bdinfo-file`）写技术栏，空文件拒绝提交；`--add-tag`/`--remove-tag` 按页面真实字段（`tags[]`/`tags[4][]`）增删标签并保留原有勾选；音频/片源/编码/分辨率按字段前缀定位，写入前校验 option value 存在；只改简介/技术信息时不会再清空标签。
 - `scripts/seed-images.py`：源站简介没有图时，按内容键从本地视频抽帧（默认 3 张，可多条视频各取一帧），可选 `--douban` 自动取豆瓣条目海报或 `--poster-url` 传图，上传 pixhost/imgbox 后写 `screenshot-overrides.json`；发布时自动追加进简介。
 - `scripts/seed-images.py` 默认用 pixhost，避免 UBITS 的 imgbox 黑名单；`--dry-run` 只抽帧不上传。
 - “等站点审核”做成机器可跟踪：新增覆盖状态 `pending_review`（等站点审核）、`review_rejected`（站点审核没过）、`gone_from_site`（站上已找不到）和审计词 `pending_review` / `review_rejected`。发种时站点收下了但不给下载（“尚未通过审核”等）或页面标着未审 / 不通过，就落对应的格子，不算失败、不重发；自动发种每轮开头和新命令 `bsend followup` 会回访详情页，审完了自动把站点种子下回来挂进 qB。页面标记只认明写的字样（tey `title="未审"`、麒麟“审核不通过，原因：…”、藏宝阁 `title="通过"`、熊猫“没有该ID的种子”都是实测样本）。

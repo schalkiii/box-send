@@ -1663,6 +1663,7 @@ fn reseed_site_server(torrent: Arc<Vec<u8>>) -> MockServer {
 <pre>General
 Unique ID : 1
 Format : Matroska
+Duration : 1 h 30 min
 File size : 100 MiB
 Bit rate : 1000 kb/s
 

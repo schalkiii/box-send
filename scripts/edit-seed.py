@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""编辑 NexusPHP 已发布种子的标题/简介（只改表单，不动种子文件）。
+"""编辑 NexusPHP 已发布种子的标题/简介/技术信息/标签（只改表单，不动种子文件）。
 
 用法：
   py -3 scripts/edit-seed.py --site cangbao --id 43994 --descr-file new.txt
   py -3 scripts/edit-seed.py --site panda --id 141276 --name "English Title" --descr-file new.txt --apply
+  py -3 scripts/edit-seed.py --site qingwa --id 208692 --technical-info-file bdinfo.txt --audio-codec 7 --apply
+  py -3 scripts/edit-seed.py --site qingwa --id 208575 --add-tag 8 --apply
 
 默认只读演练；`--apply` 才 POST takeedit.php。表单里除被指定的字段外，
 其余 input/textarea/select 原样回填，避免误改分类/媒介/标签。
@@ -52,12 +54,52 @@ def session_for(host: str) -> requests.Session:
     return s
 
 
+def one_field(data: dict[str, str], prefix: str) -> str | None:
+    """找前缀字段，优先 [4]（NexusPHP 影视分类）；找不到返回 None。"""
+    exact = [k for k in data if k == prefix or k.startswith(prefix + "[")]
+    if not exact:
+        return None
+    preferred = f"{prefix}[4]"
+    return preferred if preferred in exact else exact[0]
+
+
+def option_exists(page: str, field: str, value: str) -> bool:
+    """确认下拉里真有这个 value，防把无效值写进表单。"""
+    for block in re.findall(
+        rf'<select[^>]*name="{re.escape(field)}"[^>]*>.*?</select>', page, re.I | re.S
+    ):
+        if re.search(rf'<option[^>]*value="{re.escape(str(value))}"', block, re.I):
+            return True
+    return False
+
+
+def find_tag_field(page: str) -> str | None:
+    """不同站标签字段名不一样（tags[] / tags[4][]），按实际表单字段写。"""
+    for tag in re.findall(r"<input[^>]*>", page, re.I):
+        m = re.search(r'name=["\']([^"\']*tags[^"\']*)["\']', tag, re.I)
+        if m:
+            return m.group(1)
+    return None
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--site", required=True)
     ap.add_argument("--id", required=True)
     ap.add_argument("--descr-file")
+    ap.add_argument(
+        "--technical-info-file",
+        "--bdinfo-file",
+        dest="technical_info_file",
+        help="写入 technical_info（站点显示为 MediaInfo/BDInfo 栏）；--bdinfo-file 是同一字段的别名",
+    )
     ap.add_argument("--clear-technical-info", action="store_true", help="清空 technical_info 字段（有些站不收 MediaInfo）")
+    ap.add_argument("--add-tag", action="append", default=[], metavar="VALUE", help="勾选一个标签值，可重复")
+    ap.add_argument("--remove-tag", action="append", default=[], metavar="VALUE", help="取消一个标签值，可重复")
+    ap.add_argument("--audio-codec", help="audiocodec_sel[4] 的选项值，例如 qingwa 的 Other=7")
+    ap.add_argument("--source", help="source_sel[4] 的选项值")
+    ap.add_argument("--codec", help="codec_sel[4] 的选项值")
+    ap.add_argument("--standard", help="standard_sel[4] 的选项值")
     ap.add_argument("--name")
     ap.add_argument("--subtitle")
     ap.add_argument("--apply", action="store_true")
@@ -80,10 +122,40 @@ def main() -> int:
         print("没有 takeedit 表单（可能无编辑权限）")
         return 1
     data = dict(form.data)
-    if form.tags:
-        data["tags[4][]"] = form.tags
-
     changed = []
+    tag_field = find_tag_field(r.text)
+    tags = list(form.tags)
+    for tag in args.add_tag:
+        if tag not in tags:
+            tags.append(tag)
+    for tag in args.remove_tag:
+        if tag in tags:
+            tags.remove(tag)
+    # 始终回填已勾选的标签：否则只改简介/技术信息时，标签字段会从 POST 里消失。
+    if tag_field and (form.tags or args.add_tag or args.remove_tag):
+        data[tag_field] = tags
+        if args.add_tag or args.remove_tag:
+            changed.append(tag_field)
+    if (args.add_tag or args.remove_tag) and not tag_field:
+        print("编辑表单里没有标签复选框字段，无法改标签")
+        return 1
+
+    for label, prefix, value in (
+        ("音频编码", "audiocodec_sel", args.audio_codec),
+        ("片源类型", "source_sel", args.source),
+        ("视频编码", "codec_sel", args.codec),
+        ("分辨率", "standard_sel", args.standard),
+    ):
+        if value is not None:
+            key = one_field(data, prefix)
+            if not key:
+                print(f"编辑表单里没有 {label} 字段 {prefix}")
+                return 1
+            if not option_exists(r.text, key, value):
+                print(f"{label} 字段 {key} 没有 value={value} 的选项，拒绝写入")
+                return 1
+            data[key] = value
+            changed.append(f"{label}={value}")
     if args.name is not None:
         data["name"] = args.name
         changed.append("name")
@@ -98,7 +170,20 @@ def main() -> int:
             return 1
         data[field] = new_descr
         changed.append(field)
-    if args.clear_technical_info:
+    if args.technical_info_file:
+        field = one_field(data, "technical_info") or next(
+            (f for f in data if "technical_info" in f), None
+        )
+        if not field:
+            print("没有 technical_info 字段")
+            return 1
+        tech = Path(args.technical_info_file).read_text(encoding="utf-8")
+        if not tech.strip():
+            print("技术信息文件是空的：不能把空 MediaInfo/BDInfo 提交上去")
+            return 1
+        data[field] = tech
+        changed.append(field)
+    elif args.clear_technical_info:
         for key in list(data):
             if "technical_info" in key:
                 data[key] = ""
@@ -106,6 +191,10 @@ def main() -> int:
 
     print("将修改：" + ", ".join(changed))
     print(f"简介长度：{len(data.get('descr', ''))} 字节")
+    tech_len = next(
+        (len(v) for k, v in data.items() if "technical_info" in k), 0
+    )
+    print(f"技术信息长度：{tech_len} 字节")
     if not args.apply:
         print("只读演练完成；加 --apply 才提交")
         return 0

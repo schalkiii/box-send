@@ -81,8 +81,9 @@ pub fn extra_announce_hosts(site_id: &str) -> &'static [&'static str] {
     match site_id {
         "luckpt" => &["tracker.luckpt.de"],
         "chdbits" => &["chdbits.xyz", "chdbits.co"],
-        // 页面在 www.hdkyl.in，announce 在 tracker.hdkyl.in；不补别名 qB 真值会漏判。
-        "qilin" => &["tracker.hdkyl.in"],
+        // 页面在 www.hdkyl.in；站上种子实际用 tracker.hdkyl.in，部分种子用 www.hdkylin.top。
+        // 两个都认，否则挂回时会把本站种子当成「非目标站 tracker」直接中止。
+        "qilin" => &["tracker.hdkyl.in", "www.hdkylin.top"],
         "baozi" => &["tracker.t-baozi.cc"],
         "novahd" => &["tracker.novahd.top"],
         "xingyunge" => &["tracker.xingyungept.org"],
@@ -1297,6 +1298,7 @@ mod tests {
         assert!(extra_announce_hosts("luckpt").contains(&"tracker.luckpt.de"));
         assert!(extra_announce_hosts("chdbits").contains(&"chdbits.xyz"));
         assert!(extra_announce_hosts("qilin").contains(&"tracker.hdkyl.in"));
+        assert!(extra_announce_hosts("qilin").contains(&"www.hdkylin.top"));
         assert!(extra_announce_hosts("baozi").contains(&"tracker.t-baozi.cc"));
         assert!(extra_announce_hosts("novahd").contains(&"tracker.novahd.top"));
         assert!(extra_announce_hosts("xingyunge").contains(&"tracker.xingyungept.org"));

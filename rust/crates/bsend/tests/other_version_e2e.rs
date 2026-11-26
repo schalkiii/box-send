@@ -272,6 +272,7 @@ fn src_server(torrent: Arc<Vec<u8>>) -> MockSite {
 <pre>General
 Unique ID : 1
 Format : Matroska
+Duration : 1 h 30 min
 File size : 100 MiB
 
 Video
@@ -309,6 +310,9 @@ fn tgt_server(torrent: Arc<Vec<u8>>, uploads: CapturedRequests) -> MockSite {
 <div id="kdescr">简介 https://www.imdb.com/title/tt1234567/</div>
 <pre>General
 Format : Matroska
+Duration : 1 h 30 min
+
+Video
 Width : 1920
 Height : 1080</pre>
 <a href="download.php?id=1002">下载种子</a></body></html>"#

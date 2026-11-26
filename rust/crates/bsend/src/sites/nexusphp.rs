@@ -2090,19 +2090,20 @@ pub fn review_mark_in(text: &str) -> Option<(ReviewMark, String)> {
     // 角标属性可能把汉字写成 `&#26410;&#23457;`，先解码再找（后面的偏移都在解码后的文本里算）
     let text: &str = &decode_entities(text);
     let visible = collapse_spaces(&strip_tags(text));
-    // 1. 明写的“还没审完”
-    if let Some(m) = REVIEW_PENDING_MARKS.iter().find(|m| text.contains(**m)) {
-        return Some((ReviewMark::Pending, (*m).to_string()));
-    }
-    let find_mark = |m: &'static str| text.find(m).map(|i| (i, m));
-    // 2. 明写的“没过”。“未通过审核”留到第 3 步单独看：它带“请稍后再试”时多半是还没审
+    // 1. 明写的“审核不通过”先判。拒绝页常同时带一句“修改后会自动进入待审队列”，
+    //    如果先扫“待审”就会把已经拒绝的种子误判成还在审。
+    let hard_reject = |m: &'static str| text.find(m).map(|i| (i, m));
     if let Some((i, m)) = REVIEW_REJECTED_MARKS
         .iter()
         .copied()
         .filter(|m| *m != "未通过审核")
-        .find_map(find_mark)
+        .find_map(hard_reject)
     {
         return Some((ReviewMark::Rejected, rejected_reason(text, &visible, i, m)));
+    }
+    // 2. 明写的“还没审完”
+    if let Some(m) = REVIEW_PENDING_MARKS.iter().find(|m| text.contains(**m)) {
+        return Some((ReviewMark::Pending, (*m).to_string()));
     }
     // 3. 含糊的“还没定”：请稍后再试 / 审核中（导航项“审核中心”不算）。
     //    “稍后”只在很短的一句话里才算数——详情页那一段里随便一个“稍后”不该推翻结论。
@@ -2111,7 +2112,7 @@ pub fn review_mark_in(text: &str) -> Option<(ReviewMark, String)> {
     if in_progress && visible.contains("审核") {
         return Some((ReviewMark::Pending, "审核中".to_string()));
     }
-    if let Some((i, m)) = find_mark("未通过审核") {
+    if let Some((i, m)) = hard_reject("未通过审核") {
         return Some((ReviewMark::Rejected, rejected_reason(text, &visible, i, m)));
     }
     if let Some(m) = REVIEW_REJECTED_ATTR_MARKS
@@ -2653,6 +2654,16 @@ mod tests {
             Some((
                 ReviewMark::Rejected,
                 "审核不通过，原因：缺少海报或截图（图片少于 2 张）".to_string()
+            ))
+        );
+        // 青蛙拒绝页同时说“修改完成后会自动进入待审队列”：拒绝要压过这句
+        assert_eq!(
+            review_mark_in(
+                "审核不通过，原因：MediaInfo 残缺，未检测到任何音频轨。修改完成后会自动进入待审队列，耐心等待即可。"
+            ),
+            Some((
+                ReviewMark::Rejected,
+                "审核不通过，原因：MediaInfo 残缺，未检测到任何音频轨".to_string()
             ))
         );
         // 导航项“审核中心”不是“审核中”

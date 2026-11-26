@@ -28,7 +28,7 @@ def main() -> int:
         print(f"找不到内容键 {key}")
         return 1
     j = raw.find(f'"{site}"', i)
-    if j < 0 or j > i + 20000:
+    if j < 0 or j > i + 200000:
         print(f"{key} 下找不到站点格 {site}")
         return 1
     k = raw.find('"note":', j)
