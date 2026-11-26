@@ -180,13 +180,35 @@ pwsh scripts/seeding-audit.ps1 -Json -OutFile audit.json
 - `bsend report`：看整体覆盖率。
 - `bsend autopost`：找缺口、生成待发、审阅、发布、挂回。
 - `seeding-audit.ps1`：看哪里卡住了。
-- `scripts/seed-images.py`：源站简介没有图时，按内容键从本地视频抽帧（默认 3 张，可多条视频各取一帧），也可用 `--douban <条目id>` 自动取豆瓣海报或传 `--poster-url`；上传 pixhost/imgbox 后写 `screenshot-overrides.json`；`--dry-run` 只抽帧不上传。
-- `scripts/imgbox-upload.py`：把本地海报/截图传到 imgbox，输出原图直链；匿名、无需 API key、单图 10MB。
-- `scripts/edit-seed.py`：只改已发布种子的标题/简介；默认演练，`--apply` 才提交，其余表单原样回填。
+- `scripts/seed-images.py`：源站简介没有图时，按内容键从本地视频抽帧（默认 3 张，可多条视频各取一帧），也可用 `--douban <条目id>` 自动取豆瓣海报或传 `--poster-url`；上传 pixhost 后写 `screenshot-overrides.json`；`--dry-run` 只抽帧不上传。同一部剧有多个内容键（如 HDTV 和 WEB-DL）时，用 `--also-content <内容键>` 逐个带齐，或 `--for-name <名称片段>` 在覆盖记录里找齐同名内容键；不要只补一个键。
+- `scripts/imgbox-upload.py`：把本地海报/截图传到 imgbox，输出原图直链；匿名、无需 API key、单图 10MB。当前常规图床是 pixhost，imgbox 只作历史兼容，UBits 会把 imgbox 当死图。
+- `scripts/edit-seed.py`：只改已发布种子的标题/简介；默认演练，`--apply` 才提交，其余表单原样回填。`--processing` 改文件容器（MP4/MKV）下拉，`--team` 改制作组下拉，`--append-image <url>` 在简介末尾追加一张图（已有同链接就跳过）。
+- `scripts/replay-reseed.py`：按草稿号跑一次 `bsend reseed --draft <N>`（不提交），用 `--expect` 断言必须出现的字段/图片数，用 `--reject` 断言旧问题不能回来；修完问题先跑这个，再谈上线。
 - `scripts/fetch-descr.py`：读已发布种子的编辑页，把简介字段原样落到 `%TEMP%\bsend-review\`，给换图/改简介做准备；只读，不提交。
 - `scripts/swap-descr-images.py`：按出现顺序把简介里的图片链接 1:1 换成新直链；BBCode 与 HTML 都支持，张数对不上直接报错不写文件。
 - `scripts/set-cell-note.py`：按内容键 + 站点改覆盖记录里那一格的说明（区间替换、保持原换行），改完自动备份并复核。
 - `healthcheck.ps1`：看运行健不健康。
+
+### 5.4 修复回放（2026-11-26 起）
+
+发现站点字段、图片、标题或挂回问题时，先改代码或仓库脚本。人工只做只读检查，以及已经发到站上的种子紧急纠错；常规修复不靠手点表单。
+
+改完后用同一个草稿做回放，不提交：
+
+```powershell
+python scripts\replay-reseed.py --draft 56 `
+  --expect 'source_sel[4] = 10' `
+  --expect 'processing_sel[4] = 11' `
+  --expect 'team_sel[4] = 5' `
+  --expect '注入本机视频截图 3 张' `
+  --reject 'source_sel[4] = 0'
+
+python scripts\replay-reseed.py --draft 85 --expect '注入本机视频截图 3 张' --expect '11→4' --reject '11→1'
+```
+
+回放只看“预检通过”不够，要看到会提交的具体字段、图片张数和标题。涉及已发种子时，再跑 `edit-seed.py` 的默认演练（不带 `--apply`），核对打印出的改动；确认后才加 `--apply`，提交后重新抓编辑页复核字段和图片数。
+
+修复要留两层证据：纯逻辑补单测（例如 lajidui 的 `lajidui_quality_fields_fill_region_container_and_team`、`lajidui_unknown_team_uses_other_and_mkv`），全链路用上面的草稿回放。下一轮遇到相同现场，先跑回放，不靠记忆判断。
 
 ## 6. 常用命令
 

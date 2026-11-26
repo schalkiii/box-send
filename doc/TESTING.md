@@ -43,6 +43,20 @@ cargo clippy --workspace --all-targets --exclude bsend-gui -- -D warnings
 cargo fmt --all -- --check
 ```
 
+## 2.1 故障修复后的回放
+
+改完代码或脚本，先用同一草稿跑一次不提交的回放，再谈上线：
+
+```powershell
+python scripts\replay-reseed.py --draft 31 --expect '注入本机视频截图 4 张' --expect '13→4' --reject '13→1'
+python scripts\replay-reseed.py --draft 85 --expect '注入本机视频截图 3 张' --expect '11→4' --reject '11→1'
+python scripts\replay-reseed.py --draft 56 --expect 'source_sel[4] = 10' --expect 'processing_sel[4] = 11' --expect 'team_sel[4] = 5'
+```
+
+回放脚本实际调用 `bsend reseed --draft <N>`，不传 `--yes`，不会提交。`--expect` 必须命中真实输出里的字段、图片张数或标题；`--reject` 用来挡住已经修掉的旧现象（例如“11→1”“source_sel[4] = 0”）。
+
+已发种子只能在紧急纠错时人工介入；改动仍先用 `scripts/edit-seed.py` 演练，确认后再 `--apply`，提交后重新抓编辑页复核。修复后按需要补单测或把现场加入回放用例，下一轮不能只靠人工记忆。
+
 ## 3. 现有假服务端
 
 - `coverage_e2e.rs`：假站点提供搜索页、详情页、上传页、`takeupload.php`、下载页；假 qB 提供登录、种子列表、文件清单、tracker、导出和添加。需要指定校验进度时用 `qb_server_for_reseed_with_progress`，默认包装器保持 100%。

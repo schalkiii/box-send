@@ -13,6 +13,8 @@
 - 简介图片硬规则补最后一道：剪前有图、剪后 0 张时写入本地阻断缺口，审阅预检显示阻断，`--yes`/自动发种在提交前直接拒绝；白色巨塔、伪装者的“图片全剪光仍能发”路径已堵住。
 - 合集标题保留季范围：中文前缀里的 `S01-S07`/`E01-E21` 不再被裁掉，Mad Men 合集审阅标题从 `S07` 恢复为 `S01-S07`。
 
+- 垃圾堆（lajidui）转种自动填三个下拉：`processing_sel` 按容器填 MP4/MKV，`source_sel` 按简介地区填大陆/香港/台湾/日本/韩国/欧美/Other，`team_sel` 先按名尾制作组匹配，匹配不到选 Other。2026-11-26 已发 [85084](https://pt.lajidui.top/details.php?id=85084)、[85085](https://pt.lajidui.top/details.php?id=85085)、[84999](https://pt.lajidui.top/details.php?id=84999)、[85000](https://pt.lajidui.top/details.php?id=85000) 用 `edit-seed.py` 先演练后提交：85084/85085 补到 4 图，84999 填 MP4/大陆/Other，85000 标题改为 `Mad Men S01-S07` 并填 MKV/欧美/FRDS；四条仍等站点审核。
+
 - 青蛙（qingwa）Remux 资源标题按站点规范把 `Blu-ray` 写成 `BluRay`，并在表单有「Remux」复选框时自动勾选；2026-11-26 `208804` 已按此改好，站内信 `643794` 确认审核通过，qB 本来就在做种。
 
 - 源标题清洗修正两处：中文名后面直接跟 `1080p`/`HDTV`/`x265` 这类技术词时，不再把中文名裁掉；`[50%] (通过)` 这类“促销角标 + 审核提示”会一起从标题尾部剥掉，不再把角标带进发布名。白色巨塔、Liar Game 的转种审阅实测由错误标题恢复为正常标题。
@@ -32,7 +34,7 @@
 - `bsend audit` 每天小计和合计都带“待跟进”一行（待走候选 / 等站点审核 / 站点审核没过）。
 - GUI 覆盖概览的状态图例补齐：“等走候选”“等站点审核”“审核没过”“站上已没有”各用自己的颜色和名字，不再落进“已跳过”的兜底；图例改为穷举全部状态，以后新增状态编译会报错。
 - **audiences 判重改走 Kimi WebBridge**：`NexusPhp` 对 audiences 不再用无头 HTTP 检索，改在用户已登录的真实浏览器里先打开种子列表页、等 Cloudflare Turnstile token，再同源 `fetch` 搜索 URL；token 未就绪时明确报“需要人工完成一次人机验证”，不把验证页当“站内没有”。2026-11-25 实测补上后台标签页诊断：`visibilityState=hidden` 时 Turnstile 不生成 iframe，程序单独报“标签页在后台”，提示切到前台后重试。
-- **源站简介没有图时自动补图**：新增 `scripts/seed-images.py`，用本机 ffmpeg 从视频抽帧，也可按豆瓣条目自动取海报（`--douban`）或传海报 URL，上传到 pixhost/imgbox，写入 `screenshot-overrides.json`；发布时程序自动把这些图追加到简介。波洛候选 carpt 532 已补 3 张，tey 预检从“0 图”变为“3 张 ≥ 3”；tey 仍未上传，是站点 `medium_sel` 没有 Bluray 选项，不是图床。
+- **源站简介没有图时自动补图**：新增 `scripts/seed-images.py`，用本机 ffmpeg 从视频抽帧，也可按豆瓣条目自动取海报（`--douban`）或传海报 URL，上传到 pixhost（imgbox 仅历史兼容），写入 `screenshot-overrides.json`；发布时程序自动把这些图追加到简介。波洛候选 carpt 532 已补 3 张，tey 预检从“0 图”变为“3 张 ≥ 3”；tey 仍未上传，是站点 `medium_sel` 没有 Bluray 选项，不是图床。
 - **图片门禁改成代码硬规则**：剪死图不再读配置，所有站点上传前无条件逐图探测、剪掉死图；要图的站有硬性最低图数（`gates::image_floor`：藏宝阁/优堡/太乙/麒麟 3 张，熊猫 4 张，ptlgs 4 张 = 1 张海报 + 3 张截图），配置里的 `pruneDeadImages` / `requireImages` 已删除、写了也会被覆盖。
 - **上传成功就立刻挂回 qB 改成硬步骤**：上传后立即下载站点 `.torrent`、核对分片并加入 qB；站点刚建种时的 `torrent not registered` 固定重试 4 轮、每轮 15 秒，仍拿不到才落待人工。所有站点、所有发种入口都走这条，没有配置开关。
 - **熊猫暂停发种**：`panda` 从 `assist.autoReseedSites` 摘掉并列入 `assist.reseedPausedSites`；站上 141276 是候选种子 24 小时没做种被系统删的，重发需先“上传→立刻挂回 qB 做种”。
@@ -40,6 +42,9 @@
 
 ### Added
 
+- `scripts/replay-reseed.py`：按草稿号跑 `bsend reseed --draft <N>` 且不提交，用 `--expect` 断言提交字段/图片数/标题，用 `--reject` 挡住旧问题回归；修完问题先回放，再执行提交。
+- `scripts/edit-seed.py` 新增 `--processing`（改 MP4/MKV 容器下拉）、`--team`（改制作组下拉）和 `--append-image`（按 `[img]` 追加图片，已有同链接就跳过）。
+- `scripts/seed-images.py` 新增 `--also-content`（同一剧多个内容键逐个补图）和 `--for-name`（按覆盖记录里的内容名子串找齐所有键）；仍默认上传 pixhost、默认 `--dry-run` 只抽帧不上传。
 - 上传页独立海报/截图字段：`sourceSites[].overrides.posterField` / `screenshotField` 指定字段名后，程序从最终简介（剪死图、转 BBCode 之后）按出现顺序抽图，第一张填海报，其余一行一个填截图；表单没有该字段不硬塞，简介没图时清空，避免提交死链。ptlgs 的 `cover` / `screenshots` 是首个实测站，总图数按 4 张进 `image_floor`；2026-11-25 真发《苦月亮》`115350`，详情页海报和截图区块都有图，qB 校验 100%。
 
 - `scripts/edit-seed.py --clear-technical-info`：清空 `technical_info` 字段，配合 `--descr-file` 处理不收 MediaInfo 的站点（财神 260049/260050 实测）。

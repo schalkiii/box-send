@@ -154,11 +154,11 @@ qB 没有 tracker，也不等于站上一定没发过。可能是站上已经有
 
 站点规范里仍按站配 `titleNoCjk`（主标题出现汉字即拦）、`descrOrder`（按给定标题标记检查顺序）、`requireLinks` / `requireMediainfo`。熊猫高清配 `titleNoCjk=true`，图数由硬规则给 4 张，并要求 `【转载出处】→【制作说明】→【海报】→【简介】→【info】→【截图】`；配置文件里的 `requireImages` 一律被覆盖。图片全部失效时不要绕过门禁，先把原图/海报/截图重传到可用图床，再改简介。
 
-图床选择：`imgbox.com` 匿名可用、无需 API key、单图 10MB，实测带藏宝阁/熊猫 Referer 都是 `200 image/jpeg`。仓库脚本 `scripts/imgbox-upload.py` 负责批量上传并输出原图直链；`scripts/edit-seed.py` 负责只改已发布种子的标题/简介，不动种子文件。imgbox 不承诺永久，重要图仍应自建或另存。
+图床选择：当前常规图床是 `pixhost.to`，`scripts/seed-images.py` 默认上传 pixhost；`imgbox.com` 只作历史兼容，UBits 会把 imgbox 当死图。图片清单写在 `screenshot-overrides.json`，按内容键区分；同一部剧有 HDTV/WEB-DL 等多个内容键时，用 `seed-images.py --also-content` 或 `--for-name` 一次写齐，不要只补一个键，也不要手写 JSON。发布时程序会把清单里的图追加到简介末尾；重要图仍应自建或另存。
 
 **独立海报/截图字段（2026-11-25 起）**：有些站的上传页把海报、截图放在独立字段（例如 ptlgs 的 `cover` / `screenshots`；其它站按上传页真实字段名配置）。配置写在 `sourceSites[].overrides.posterField` / `screenshotField`，`reseed::fill_image_fields` 从**最终简介**（剪死图、转 BBCode 之后）按出现顺序抽图：第一张填海报，其余一行一个填截图；页面没有这个字段就不硬塞，简介没图时把字段清掉，避免提交死链。独立字段不替代简介本身，简介仍要保留完整图文。ptlgs 站规是“海报 + 至少 3 张截图”，所以总图数按 4 张计入 `gates::image_floor`。
 
-`scripts/edit-seed.py` 默认只读演练，`--apply` 才 POST；除指定字段外其余表单原样回填，避免误改分类/媒介/标签。编辑已发布种子后，站点会重新进审核队列，是否通过以站点状态为准。
+`scripts/edit-seed.py` 默认只读演练，`--apply` 才 POST；除指定字段外其余表单原样回填，避免误改分类/媒介/标签。`--processing` 改文件容器下拉，`--team` 改制作组下拉，`--append-image` 在简介末尾追加图片并跳过已有链接。编辑已发布种子后，站点会重新进审核队列，是否通过以站点状态为准。
 
 ### 5.5.2 站内判重：audiences 走 Kimi WebBridge（2026-11-25 起）
 

@@ -114,7 +114,7 @@ xingyunge
 | dragonhd | 2 条已发布 | https://www.dragonhd.xyz/details.php?id=48987 | 知否、广告狂人；完结/中字标签缺复选框 |
 | dubhe | 2 条已发布 | https://dubhe.site/details.php?id=55718 | 波洛、广告狂人；新种页面已标“通过” |
 | hdbao | 2 条已发布 | https://hdbao.cc/details.php?id=54657 | 伪装者、Coraline；Coraline 标题已手工修正 |
-| lajidui | 2 条，等审核 | https://pt.lajidui.top/details.php?id=85000 | 知否、广告狂人 |
+| lajidui | 4 条，等审核 | https://pt.lajidui.top/details.php?id=85084 | 知否 84999、广告狂人 85000、人民的名义 85084、伪装者 85085；三项下拉和图片已核对 |
 | lemonhd | 2 条已发布 | https://lemonhd.net/details.php?id=49077 | 知否、广告狂人 |
 | city13 | 1 条已发布 | https://13city.org/details.php?id=88256 | 上传回 200 未识别，站内搜索确认已发出后补挂 |
 | novahd | 2 条已发布 | https://pt.novahd.top/details.php?id=227655 | 伪装者、人民的名义；4K 60fps 选档已修 |
@@ -177,7 +177,7 @@ xingyunge
 | hdtime | 默认 | 上传表单没有分辨率下拉，不要硬找分辨率字段 |
 | hdvideo | `region_sel=美国(2)`、`style_sel=剧情` 必填；标题 ≤200 | 不填会被通用“上传失败！”拒绝；发后定位按 id 配对，不能抓回包第一条旧种 |
 | kufei | 默认 | 没有独立 MediaInfo/IMDb 字段，内容并进简介；上传回包正文可能才带唯一详情链接 |
-| lajidui | 默认（无规则） | 常规发种；没有单独规则时按每日 2 条和默认必填执行 |
+| lajidui | `processing_sel`=文件容器（MP4/MKV）；`source_sel`=地区；`team_sel`=制作组 | 2026-11-26 起程序按容器、地区、名尾制作组自动填；制作组不在站点列表时选 Other，不冒充驻站组 |
 | lemonhd | 默认（无规则） | 站上会改写元信息，按 pieces + 文件清单核对（白名单仅日志）；回包可能不给详情链接，必要时下载目标种补挂 |
 | longpt | 默认 | 第一次抓到的 action 可能是 `bonusrain.php`，必须按真实上传页修正，不能提交到错误入口 |
 | luckpt | LuckAudit 官方预审；BDRip → `medium_sel=Encode(7)`；每日 20；链接 + MediaInfo | 预审 100/100 才发；截图不足先换图，不靠关图门禁；表单没有 BDRip 档 |
@@ -317,7 +317,7 @@ xingyunge
 | itzmx | Itz | pt.itzmx.com | NexusPHP | 是 | — | — | ok | team_sel 未选 | ok | 5 | 2026-11-23 首次实发 `13134`（`88e3103b…`）并补挂校验 100%；站点 torrent 文件上限 `266,240 bytes`，大合集/大剧包会被拒，改用小种《Liar Game》通过；站上改写 hash，已加入白名单 |
 | kelu | Kelu | our.kelu.one | NexusPHP | 是 | — | — | ok | type 未选 | 未测 | 1 |  |
 | kufei | 库非 | kufei.org | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 1 | 2026-11-25 核对《人民的名义》`142202`：站点种同 `info hash`，qB progress=1、只挂 kufei tracker，按 `bsend pull` 复核记 `seeding` |
-| lajidui | 垃圾堆 | pt.lajidui.top | NexusPHP | 是 | — | — | ok | processing_sel[4] 未选 | ok | 1 |  |
+| lajidui | 垃圾堆 | pt.lajidui.top | NexusPHP | 是 | — | — | ok | processing_sel[4] 未选 | ok | 1 | 2026-11-26 程序已自动填 MP4/MKV、大陆/日韩/欧美、制作组或 Other；表单检查显示“未选”是检查工具只读原表单，不是发种时留空 |
 | lemonhd | 柠檬不甜 | lemonhd.net | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 1 | 2026-11-23 首次实发 48970（`3c00cbb2…`）并补挂校验 100%；站上改写 hash，已加入白名单；savept.icu 同名 LemonHD（lemonhd.club）标注已关站 2026-03-13，本配置域名 lemonhd.net 实测存活 |
 | longpt | 龙 | longpt.org | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 3 |  |
 | luckpt | 幸运 | pt.luckpt.de | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 4 | 2026-11-24 晚《伪装者》`61102` 简介 9 张 `i13.tietuku.com` 死图已换 imgbox（复查 0 旧图 / 9 新图），回包 `edited=1&audit_pending=1`；2026-11-25 新发 A Touch of Zen `61704`、绿里奇迹 `61705`、The Intern `61706`、Black `61707`，均已审核结束、qB progress=1、只挂 luckpt tracker |

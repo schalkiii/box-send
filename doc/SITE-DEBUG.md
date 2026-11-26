@@ -296,6 +296,14 @@ luckpt 的候选规则（**还没有写进 `boxsend.json`**）：
 - **日志口径**：审核待定/审核不通过但 note 明写“已挂回 qB”的，`reseed-log.jsonl` 的 `seeded` 从这次修复后的新记录起记为 true；不再因为格子状态不是 `reseeded` 就写成没做种。`652794` 那行仍是修复前写的 `seeded=false`，属于历史记录，不回改。
 - **待跟进**：274GB 合集重试仍会空回包，要发得先拆小或换内容。失败冷却默认关闭，自动发种下一轮仍会再试；不想再等 5 分钟，得把它从本轮候选里摘掉。25GB 的 `652794` 等站点审核，审完由 `bsend followup` 收尾。
 
+### 6.18 2026-11-26 lajidui 选档、图片覆盖与修复回放
+
+- **lajidui 三个下拉不是通用字段**：`processing_sel` 是文件容器（MP4/MKV），`source_sel` 是地区（大陆/香港/台湾/日本/韩国/欧美/Other），`team_sel` 是制作组；通用选档只看标题，三项都会留空。四条种子 [85084](https://pt.lajidui.top/details.php?id=85084)、[85085](https://pt.lajidui.top/details.php?id=85085)、[84999](https://pt.lajidui.top/details.php?id=84999)、[85000](https://pt.lajidui.top/details.php?id=85000) 都出现过三项未选。`reseed.rs` 的 `fill_lajidui_quality_fields` 按简介/名称/MediaInfo 自动填，制作组匹配不到就选 Other；单测 `lajidui_quality_fields_fill_region_container_and_team`、`lajidui_unknown_team_uses_other_and_mkv` 覆盖。
+- **已发四条是脚本纠错，不是手点表单**：`edit-seed.py` 先默认演练、核对输出，再 `--apply`；四次 `takeedit` 回包都是 `edited=1`，提交后重新抓编辑页复核。85084 填 MP4/大陆/QHstudIo 并补到 4 图；85085 填 MP4/大陆/Other 并补到 4 图；84999 填 MP4/大陆/Other；85000 把 `S07 Mad Men` 改成 `Mad Men S01-S07`，填 MKV/欧美/FRDS。四条仍是 `pending_review`，页面仍“未审”；没有发复审请求或 PM。
+- **同一部剧的多个内容键不能只补一个**：白色巨塔 HDTV 是 `m:5a4dfe1d693cfb1b`，Fod WEB-DL 是 `m:b11ef7224f2fec09`；最初只补一个，`#85` 仍从 11 张剪到 1 张。`seed-images.py` 新增 `--also-content` 和 `--for-name` 后，按版本分别抽 3 张：b11 写 WEB-DL 帧，5a4 写 HDTV 帧；`#85` 变为 `11→4`，伪装者 `#31` 变为 `13→4`。源页 `https://carpt.net/details.php?id=13542`，伪装者源页 `https://hdsky.me/details.php?id=27637&hit=1`。
+- **回放是脚本，不是看一遍日志**：`scripts/replay-reseed.py` 实际调用 `bsend reseed --draft <N>`（不传 `--yes`），本轮用它断言 `#56` 的 `source_sel[4]=10`、`processing_sel[4]=11`、`team_sel[4]=5`，`#85` 的 `11→4`，`#31` 的 `13→4`；把 `11→1`、`source_sel[4]=0` 作为 `--reject`。修完先跑回放，再执行 `--apply`。
+- **补图都走脚本**：85084、Liar Game、白色巨塔 HDTV、白色巨塔 WEB-DL 的图由 `seed-images.py` 生成/上传；85085 复用 qingwa `208575` 的 4 张 pixhost 图，经 `edit-seed.py --append-image` 追加。本轮新增的 `m:667`、`m:5a4` 也用 `seed-images.py` 重写清单，不再手改 `screenshot-overrides.json`。所有新图 HEAD 200。
+
 ## 7. 调试期回归的检查顺序
 
 逐站再发时按这五步走，目的是不漏发，也不把同一条重复发出去：
