@@ -279,17 +279,21 @@ cargo build --release -p bsend-cli
 | 配置项 | 默认 | 说明 |
 | --- | --- | --- |
 | `assist.publishEnabled` | `false` | 总开关；关闭时只审不发 |
-| `assist.autoReseedSites` | 40 站（2026-11-25 实测配置） | 自动发种白名单。空的时候真实发布不会发出任何站；只在演练时会覆盖全部站点做发布检查预演 |
-| `assist.reseedPausedSites` | 空 | 只停发种，辅种照常 |
-| `assist.pausedSites` | 空 | 整站暂停 |
+| `assist.autoReseedSites` | 41 站（2026-11-26 加 agsvpt 后） | 自动发种白名单。空的时候真实发布不会发出任何站；只在演练时会覆盖全部站点做发布检查预演 |
+| `assist.reseedPausedSites` | 36 站 | 只停发种，辅种照常 |
+| `assist.pausedSites` | 8 站（2026-11-26 摘掉 gtk 与四个关站后） | 整站暂停 |
 | `assist.roundBudget` | 200 | 每轮每站最多处理多少条 |
 | `assist.uploadBudget` | 10 | 每轮最多真正发出多少次上传请求；发出请求就算一次，站点回“重复/已存在”也一样。日限额只管 `posted` 和 `posted_verifying`，两者分开算 |
 | `assist.allowOtherVersion` | `true` | 站上有同名其他版本时照样发 |
 | `assist.skipKeywords` | 16 个词 | 标题黑名单，命中不占额度 |
-| `assist.reseedRules` | 36 条 | 站点级字段映射和下拉选项覆盖 |
+| `assist.reseedRules` | 42 条 | 站点级字段映射和下拉选项覆盖 |
 | `assist.skipPostCheck` | `true` | 跳过发后自检；小批量验证时应关掉 |
 
 `targetSites` 是旧界面留下的字段，引擎不读。
+
+**让一个站真正参与自动发种，要同时做两件事**（2026-11-26 明确）：`sourceSites[]` 里把 `enabled` 改成 `true`，**并且**把站 id 加进 `assist.autoReseedSites`。只改前者只是进扫描范围，不进发种队列；只加后者而不启用也没用（配置加载阶段就过滤掉未启用站）。另外 `sourceSites[].managed` 是界面字段，引擎不读，改它不影响行为。
+
+`reseedRules.<site>.selectPicks` 是**兜底**不是强制：只有当那个字段当前为空/0 时才写入，已经匹配到合适选项的不会覆盖。所以给 `team_sel` 配 Other 不会把本来能匹配驻站组的种子改成 Other；反过来，同名多候选按页面文档顺序取首个（muxuege 两个 AAC），拿不准就留空，不硬填。
 
 `reseedRules.<site>.uploadTimeoutSec` 是上传请求的单独超时，缺省 120 秒。站点服务端解 torrent、查重特别慢时才放宽；2026-11-25 tjupt 的 25GB 单条能正常完成，274GB 合集放到 300 秒仍只回空正文，属于站点后端超时，不是超时值不够。
 
@@ -356,6 +360,14 @@ NexusPHP 的简介框是 BBCode 编辑器。源站简介里的 `<fieldset>`、`<
 4. `seeding-audit.ps1`：哪些记录卡住了，哪些发完没挂上。
 5. qB 里筛 `tag=Boxsend`：看进度和 tracker 数量；每份种子只能有一个 tracker。
 6. 最后才看站点：用标题、上传者、发布时间核对，不要信上传回包里的 id。
+
+**"请求没通"先分清三种情况（2026-11-26 补）**：
+
+- 站点真挂了：首页也连不上，浏览器同样打不开。
+- 只能过代理：这台机器系统代理开着（`127.0.0.1:7890`），浏览器走代理能开，而 `bsend` 按设计一律直连（PT 站 passkey 与账号 IP 绑定，走代理既可能连不上也算异常登录），所以报 `os error 10060 / 10054`。这不是站点问题，也不是配置问题；gtk 就是这类，已摘出暂停名单但没排进自动发种队列。
+- 人机验证拦住了：页面是 Cloudflare 挑战页或「Just a moment」，**不能当成站点关闭或没有表单**，要换真实浏览器、且标签页在前台。
+
+表单演练的结果现在会带失败类别（`formcheck.json` 的 `errorKind`）：无权限、登录失效、2FA 中间页、人机验证、单页应用走接口、无表单。看这个字段比看笼统的"没有可解析的静态上传表单"准确。`formcheck` 和 `gatecheck` 现在用同一套逐站规则，两边结论应该一致；不一致就是 bug。
 
 ## 9. 相关文档
 

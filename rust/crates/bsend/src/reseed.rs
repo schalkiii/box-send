@@ -33,6 +33,7 @@ use crate::sites::nexusphp::{
     search_names_match, sizes_close_with_slack, strip_tags, NexusPhp, ReviewMark, SearchOutcome,
     SiteNotice, TorrentPage,
 };
+use crate::sites::upload::{classify_upload_page, permission_keyword, UploadPageKind};
 use crate::throttle::{BudgetKind, SiteThrottle};
 use crate::torrent_rewrite;
 
@@ -1737,57 +1738,18 @@ pub fn build_upload_fields_for_site(
     (fields, picked, notes)
 }
 
-/// UBits 的 `source_sel`（地区）和 `team_sel`（制作组）没有默认值，
-/// 通用选档只填媒介/编码/音频/分辨率；不补这两项会被 takeupload 拒绝：
-/// “一个或多个质量区域未选择”。
-fn fill_ubits_quality_fields(fields: &mut Vec<Field>, info: &ReleaseInfo, _page: &str) {
-    let hay = format!("{} {} {}", info.subtitle, info.descr, info.name);
-    let region = if hay.contains("中国大陆") || hay.contains("大陆") {
-        "1"
-    } else if hay.contains("香港") {
-        "2"
-    } else if hay.contains("台湾") {
-        "3"
-    } else if hay.contains("日本") {
-        "5"
-    } else if hay.contains("韩国") {
-        "6"
-    } else if hay.contains("泰国") {
-        "7"
-    } else {
-        "11" // 其它
-    };
-    if fields.iter().any(|(n, _)| n == "source_sel[4]") {
-        set_field(fields, "source_sel[4]", region.to_string());
-    }
+/// UBits 的 `team_sel`（制作组）没有默认值：源组不是 UBits 自家组，按 Other 提交，
+/// 避免冒充驻站组。`source_sel`（地区）由通用地区匹配回填。
+fn fill_ubits_quality_fields(fields: &mut Vec<Field>, _info: &ReleaseInfo, _page: &str) {
     if fields.iter().any(|(n, _)| n == "team_sel[4]") {
-        // 源组不是 UBits 自家组，按 Other 提交，避免冒充驻站组。
         set_field(fields, "team_sel[4]", "5".to_string());
     }
 }
 
-/// lajidui 的 `processing_sel` 是文件容器（MP4/MKV），`source_sel` 是地区，
-/// `team_sel` 没有默认值；通用选档只看标题，三项都会留空。
+/// lajidui 的 `processing_sel` 是文件容器（MP4/MKV），`team_sel` 配不上落 Other；
+/// `source_sel`（地区）由通用地区匹配回填。
 /// 2026-11-26 两条误发种子（85084/85085）都卡在这三项。
 fn fill_lajidui_quality_fields(fields: &mut Vec<Field>, info: &ReleaseInfo, page: &str) {
-    let hay = format!("{} {} {}", info.subtitle, info.descr, info.name);
-    let region_label = if hay.contains("中国大陆") || hay.contains("大陆") {
-        "大陆"
-    } else if hay.contains("香港") {
-        "香港"
-    } else if hay.contains("台湾") {
-        "台湾"
-    } else if hay.contains("日本") {
-        "日本"
-    } else if hay.contains("韩国") {
-        "韩国"
-    } else if hay.contains("欧美") {
-        "欧美"
-    } else {
-        "Other"
-    };
-    fill_select_by_label(fields, page, "source_sel", region_label);
-
     let container_hay = format!("{} {}", info.name, info.mediainfo).to_ascii_lowercase();
     let container = if container_hay.contains(".mp4") || container_hay.contains("mpeg-4") {
         Some("MP4")
@@ -2161,6 +2123,130 @@ const STANDARD_KEYWORDS: &[&str] = &[
 const PROCESSING_KEYWORDS: &[&str] =
     &["REMUX", "REPACK", "PROPER", "INTERNAL", "UNCUT", "RESTORED"];
 
+/// 地区下拉：标题/简介里的地区线索词 → 选项标签同义词。
+/// 顺序即归类优先级，先命中先归；归不出再落 Other/其它。
+const REGION_GROUPS: &[(&[&str], &[&str])] = &[
+    (
+        &["国产", "大陆", "内地", "中国大陆"],
+        &["大陆", "内地", "中国大陆", "国产", "chn"],
+    ),
+    (&["香港", "港剧", "港片"], &["香港", "hkg", "hk"]),
+    (&["台湾", "台剧", "台片"], &["台湾", "twn", "tw"]),
+    (&["日本", "日剧", "日影", "日漫"], &["日本", "jpn"]),
+    (&["韩国", "韩剧", "韩影"], &["韩国", "kor"]),
+    (
+        &[
+            "欧美",
+            "美国",
+            "英国",
+            "美剧",
+            "英剧",
+            "法国",
+            "德国",
+            "加拿大",
+            "澳大利亚",
+        ],
+        &["欧美", "美国", "英国", "west", "usa", "uk"],
+    ),
+    (&["印度"], &["印度", "ind"]),
+    (&["俄国", "俄罗斯"], &["俄国", "俄罗斯", "rus"]),
+    (&["泰国", "泰剧"], &["泰国", "tha"]),
+];
+
+/// 选项标签属于哪一组地区；不属于任何地区组返回 None。
+fn label_region_group(label: &str) -> Option<usize> {
+    REGION_GROUPS
+        .iter()
+        .position(|(_, syns)| syns.iter().any(|s| label_relates(label, s)))
+}
+
+/// 选项集是不是地区下拉：至少一个选项对得上地区同义词，且没有媒介片源标签
+/// （单选项地区下拉也认；片源下拉的 Blu-ray/WEB-DL 一类不误判）。
+fn options_are_regions(options: &[(String, String)]) -> bool {
+    let real: Vec<&(String, String)> = options.iter().filter(|(v, _)| v != "0").collect();
+    if real.is_empty() {
+        return false;
+    }
+    let region_n = real
+        .iter()
+        .filter(|(_, l)| label_region_group(l).is_some())
+        .count();
+    let medium_n = real
+        .iter()
+        .filter(|(_, l)| MEDIUM_KEYWORDS.iter().any(|k| label_relates(l, k)))
+        .count();
+    region_n >= 1 && medium_n == 0
+}
+
+/// 从标题/简介线索判定属于哪一组地区；归不出返回 None。
+fn detect_region_group(hay: &str) -> Option<usize> {
+    let h = hay.to_ascii_lowercase();
+    REGION_GROUPS
+        .iter()
+        .position(|(clues, _)| clues.iter().any(|c| h.contains(&c.to_ascii_lowercase())))
+}
+
+/// 地区下拉配对：先按线索找同组选项；找不到同组就落 Other/其它；都没有留空。
+fn match_region_option(options: &[(String, String)], hay: &str) -> Option<(String, String)> {
+    if let Some(gi) = detect_region_group(hay) {
+        let syns = REGION_GROUPS[gi].1;
+        if let Some(hit) = options
+            .iter()
+            .find(|(_, l)| syns.iter().any(|s| label_relates(l, s)))
+        {
+            return Some(hit.clone());
+        }
+    }
+    options
+        .iter()
+        .find(|(_, l)| matches!(norm_token(l).as_str(), "other" | "其它" | "其他"))
+        .cloned()
+}
+
+/// 年代档选项标签：四位年份（19xx/20xx）或「xx 年代」一类。
+fn label_is_year_option(label: &str) -> bool {
+    let t = label.trim();
+    if t.contains("年代") {
+        return true;
+    }
+    t.len() == 4
+        && t.chars().all(|c| c.is_ascii_digit())
+        && (t.starts_with("19") || t.starts_with("20"))
+}
+
+/// 选项集是不是发行年代下拉：至少两个真实选项是年份/年代档。
+fn options_are_years(options: &[(String, String)]) -> bool {
+    let real: Vec<&(String, String)> = options.iter().filter(|(v, _)| v != "0").collect();
+    real.len() >= 2 && real.iter().filter(|(_, l)| label_is_year_option(l)).count() >= 2
+}
+
+/// 从一段文本里抽四位年份（19xx/20xx）；手动扫 ASCII 数字，不引正则。
+fn extract_year(text: &str) -> Option<u16> {
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i + 4 <= bytes.len() {
+        if bytes[i].is_ascii_digit()
+            && bytes[i + 1].is_ascii_digit()
+            && bytes[i + 2].is_ascii_digit()
+            && bytes[i + 3].is_ascii_digit()
+        {
+            let digits = &text[i..i + 4];
+            if digits.starts_with("19") || digits.starts_with("20") {
+                return digits.parse().ok();
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// 发行年份：按标题 → 副标题 → 简介 → MediaInfo 顺序抽，先命中为准。
+fn release_year(info: &ReleaseInfo) -> Option<u16> {
+    [&info.name, &info.subtitle, &info.descr, &info.mediainfo]
+        .into_iter()
+        .find_map(|hay| extract_year(hay))
+}
+
 /// 发布名里的词元：最长优先贪心去重叠，带词边界（大小写不敏感）
 fn find_keywords(hay: &str, keywords: &[&str]) -> Vec<String> {
     let h = hay.to_ascii_lowercase();
@@ -2232,7 +2318,9 @@ fn pair_option(options: &[(String, String)], token: &str) -> Pairing {
             return Pairing::Hit(exact[0].0.clone());
         }
         if exact.len() > 1 {
-            return Pairing::Ambiguous;
+            // 同名重复项按文档顺序取首个（muxuege 实测：普通 AAC 值 6 在普通编码组，
+            // 同名 AAC 值 14 在全景声同组；靠前的普通组才是无全景声音轨该选的档）。
+            return Pairing::Hit(exact[0].0.clone());
         }
     }
     // 分隔子串（中文词元没有 ASCII 边界概念，子串即命中）
@@ -2440,6 +2528,46 @@ fn select_options(page: &str, field: &str) -> Vec<(String, String)> {
             }
             rest = &after[end..];
         }
+    }
+    out
+}
+
+/// 分类联动隐藏行里的下拉名集合：`<tr class="mode_<分类id>" relation="mode_<分类id>">`
+/// 这类行按所选分类由页面 JS 显隐（xingtan 实测 328 行，只有当前分类那行可见）。
+/// 静态演练时其余分类行不可见，它们的空下拉不该记成缺口。
+fn hidden_mode_select_names(page: &str) -> std::collections::HashSet<String> {
+    let page = upload_form_block(page).unwrap_or(page);
+    let lower = page.to_ascii_lowercase();
+    let mut out = std::collections::HashSet::new();
+    let mut from = 0;
+    while let Some(p) = lower[from..].find("<tr") {
+        let start = from + p;
+        let tag_end = lower[start..]
+            .find('>')
+            .map(|j| start + j + 1)
+            .unwrap_or(page.len());
+        let tag = &page[start..tag_end];
+        let tag_l = tag.to_ascii_lowercase();
+        let is_mode_row = tag_l.contains("class=\"mode_") || tag_l.contains("relation=\"mode_");
+        let close = lower[start..]
+            .find("</tr>")
+            .map(|j| start + j)
+            .unwrap_or(page.len());
+        if is_mode_row {
+            let mut s = tag_end;
+            while let Some(q) = lower[s..close].find("<select") {
+                let sel_start = s + q;
+                let sel_end = lower[sel_start..]
+                    .find('>')
+                    .map(|j| sel_start + j + 1)
+                    .unwrap_or(close);
+                if let Some(name) = attr(&page[sel_start..sel_end], "name") {
+                    out.insert(name);
+                }
+                s = sel_end;
+            }
+        }
+        from = close;
     }
     out
 }
@@ -2817,6 +2945,8 @@ fn fill_selects(fields: &mut Vec<Field>, page: &str, info: &ReleaseInfo) -> Vec<
     let mut notes = Vec::new();
     let hay = format!("{} {}", info.name, info.subtitle);
     let audio_hay = format!("{} {}", hay, info.mediainfo);
+    // 地区线索常写在副标题/简介里（「国产剧」「中国大陆」），地区下拉单独带简介一起判
+    let region_hay = format!("{} {} {}", info.name, info.subtitle, info.descr);
     // source_sel 在不同站分别是来源媒介或地区，域无关的下拉自动跳过不误报
     let cats: &[(&str, &[&str])] = &[
         ("source_sel", MEDIUM_KEYWORDS),
@@ -2881,6 +3011,25 @@ fn fill_selects(fields: &mut Vec<Field>, page: &str, info: &ReleaseInfo) -> Vec<
             // 它的选项里也含 WEB-DL/Blu-ray 字样，按片源匹配会错填到「电影-WEB-DL」；
             // 这里先认出来跳过，等 type 选完再由 fill_secondary_category 按父子关系填。
             if *prefix == "source_sel" && looks_like_secondary_category(&options) {
+                continue;
+            }
+            // 地区下拉（iloli/ubits/lajidui 实测）：按标题/简介地区词配对，归不出落 Other。
+            if *prefix == "source_sel" && options_are_regions(&options) {
+                if let Some((v, _)) = match_region_option(&options, &region_hay) {
+                    set_field(fields, fname, v);
+                    filled_seen = true;
+                }
+                continue;
+            }
+            // 年代档下拉（muxuege 实测 processing_sel 是发行年代 2010=14…2015=19）：
+            // 从标题/简介抽年份配对；抽不到年份就留空，不按 REMUX/REPACK 这类处理标记硬填。
+            if *prefix == "processing_sel" && options_are_years(&options) {
+                if let Some(year) = release_year(info) {
+                    if let Some(v) = match_option(&options, &year.to_string()) {
+                        set_field(fields, fname, v);
+                        filled_seen = true;
+                    }
+                }
                 continue;
             }
             if !options_in_domain(&options, kws) {
@@ -3844,16 +3993,48 @@ fn detail_from_download(download_url: &str, base: &Url) -> Option<String> {
     Some(resolve_url(&format!("details.php?id={digits}"), base))
 }
 
+/// 上传页归类后的中止文案；静态表单返回 None，继续走字段构造。
+/// 前缀（`[no-permission]` 等）会被 drill_upload_form 解析成 error_kind。
+fn gate_error_message(
+    kind: UploadPageKind,
+    site_id: &str,
+    form_url: &str,
+    html: &str,
+) -> Option<String> {
+    match kind {
+        UploadPageKind::StaticForm => None,
+        UploadPageKind::NoPermission => {
+            let kw = permission_keyword(html).unwrap_or("权限不足");
+            Some(format!(
+                "[no-permission] 该账号在 {site_id} 无发布权限（页面提示含「{kw}」）；本站条目自动发种中止，待人工确认权限后再处理：{form_url}"
+            ))
+        }
+        UploadPageKind::LoginExpired => {
+            Some(format!("[login] 登录态失效（上传页是登录表单）：{form_url}"))
+        }
+        UploadPageKind::TwoFa => Some(format!(
+            "[two-fa] 站点要求先过二次验证（页面脚本跳到 2FA 中间页）：请在前台真实浏览器完成二次验证，会话带过来后再自动发种；纯 HTTP 复现不了 2FA：{form_url}"
+        )),
+        UploadPageKind::ChallengeGate => Some(format!(
+            "[challenge] 站点被人机验证/区域时段拦截：请在前台真实浏览器打开 {form_url} 人工过一次验证（标签页必须在前台，不能最小化或切到后台）；纯 HTTP 复现不了验证结果，当前不自动发种。"
+        )),
+        UploadPageKind::SpaApi => Some(format!(
+            "[spa] 站点上传界面是纯前端 SPA/JSON API（{form_url}）：表单控件由网页 JS 渲染，纯 HTTP 拿不到字段名与提交接口；自动发种暂不支持。缺：上传表单控件定义、提交接口地址、浏览器会话鉴权。"
+        )),
+        UploadPageKind::NoForm => Some(format!(
+            "[no-form] 目标站没有可解析的静态上传表单（JS/自定义上传界面，或 cookie 失效），v1 暂不支持：{form_url}"
+        )),
+    }
+}
+
 pub fn prepare_upload(target: &NexusPhp, info: &ReleaseInfo) -> Result<PreparedUpload> {
     let form_url = resolve_url("upload.php", &target.base);
     let form_html = target
         .fetch_html(&form_url, target.base.as_str())
         .context("抓目标站上传表单失败")?;
-    if upload_form_block(&form_html).is_none() {
-        if let Some(why) = upload_denied_reason(&form_html) {
-            bail!("{why}：{form_url}");
-        }
-        bail!("目标站没有可解析的静态上传表单（JS/自定义上传界面，或 cookie 失效），v1 暂不支持：{form_url}");
+    let kind = classify_upload_page(&form_html);
+    if let Some(msg) = gate_error_message(kind, &target.site_id, &form_url, &form_html) {
+        bail!("{msg}");
     }
     if let Some(notice) = crate::sites::nexusphp::block_notice(&form_html) {
         bail!("目标站限流（{notice}）：{form_url}");
@@ -4946,6 +5127,8 @@ pub struct FormDrill {
     pub site_name: String,
     /// 表单没拿到/构造失败的原因（登录墙、限流、无上传权限…）
     pub error: Option<String>,
+    /// 失败类别：`no-permission` / `login` / `challenge` / `spa` / `no-form` / `network`
+    pub error_kind: Option<String>,
     pub field_count: usize,
     pub select_count: usize,
     pub title_set: bool,
@@ -5033,65 +5216,42 @@ pub fn drill_release() -> ReleaseInfo {
     }
 }
 
-/// 逐站演练：与真实转种同一套字段构造（prepare_upload），但绝不 POST
+/// 逐站演练：与真实转种同一套字段构造（prepare_upload），但绝不 POST。
+/// 站点规则缺省时用空规则，行为与旧版一致。
 pub fn drill_upload_form(target: &NexusPhp) -> FormDrill {
+    drill_upload_form_with_rules(target, &crate::gates::SiteRules::default())
+}
+
+/// 逐站演练（带站点规则）：与 gatecheck 同一套——拉表单 → 分类附加字段 →
+/// 应用站点规则（选档回填/必填校验/剪死图/独立图片字段）→ 分析缺口。
+/// formcheck 与 gatecheck 走这同一套，两边缺口结论才不会打架。
+pub fn drill_upload_form_with_rules(
+    target: &NexusPhp,
+    rules: &crate::gates::SiteRules,
+) -> FormDrill {
     let info = drill_release();
     match prepare_upload(target, &info) {
         Ok(mut prep) => {
-            let _ = prepare_category_fields(
-                target,
-                &mut prep,
-                &info,
-                &crate::gates::SiteRules::default(),
-            );
+            let _ = prepare_category_fields(target, &mut prep, &info, rules);
+            apply_site_rules(&mut prep, rules);
             analyze_form(&target.site_id, &target.site_name, &prep, &info)
         }
-        Err(e) => FormDrill {
-            site_id: target.site_id.clone(),
-            site_name: target.site_name.clone(),
-            error: Some(format!("{e:#}")),
-            ..Default::default()
-        },
-    }
-}
-
-/// 上传页拿不到表单时的细分原因（权限/登录）；None = 看不出所以然
-fn upload_denied_reason(html: &str) -> Option<String> {
-    // 简繁都要：实测繁体站用「沒有發布種子的許可權」一类写法（許可權 ≠ 權限）
-    const DENIED: &[&str] = &[
-        "没有发布种子的权限",
-        "沒有發布種子的許可權",
-        "沒有發佈種子的許可權",
-        "没有发布权限",
-        "沒有發布權限",
-        "沒有發佈權限",
-        "没有上传权限",
-        "沒有上傳權限",
-        "没有发布",
-        "沒有發布",
-        "沒有發佈",
-        "上传权限不足",
-        "上傳權限不足",
-        "权限不足",
-        "權限不足",
-        "許可權不足",
-        "等级不足",
-        "等級不足",
-        "不允许上传",
-        "不允許上傳",
-        "禁止上传",
-        "禁止上傳",
-    ];
-    for kw in DENIED {
-        if html.contains(kw) {
-            return Some(format!("该账号无发布权限（页面提示含「{kw}」）"));
+        Err(e) => {
+            let msg = format!("{e:#}");
+            let kind = msg
+                .strip_prefix('[')
+                .and_then(|rest| rest.split(']').next())
+                .unwrap_or("network")
+                .to_string();
+            FormDrill {
+                site_id: target.site_id.clone(),
+                site_name: target.site_name.clone(),
+                error_kind: Some(kind),
+                error: Some(msg),
+                ..Default::default()
+            }
         }
     }
-    let lower = html.to_ascii_lowercase();
-    if lower.contains("type=\"password\"") || lower.contains("type='password'") {
-        return Some("登录态失效（上传页是登录表单）".into());
-    }
-    None
 }
 
 /// 供门禁/自动发种复用：按演练同一套逻辑分析「已构造好的上传字段」
@@ -5177,9 +5337,23 @@ fn analyze_form(
     d.audit_panel = pre_audit_supported(&prep.form_html);
     d.action = Some(prep.action.clone());
     d.select_options = drill_select_options(&prep.form_html);
+    // 只有页面没有 `type` 分类下拉、分类靠 JS 树/两级联动选的站（xingtan 实测 328 行），
+    // 才把 mode_ 隐藏行整批排除；有 `type` 下拉的站（iloli/muxuege 的 4/6 分支）
+    // 分支行仍按普通下拉校验，漏填要点名。
+    let hidden_mode = if form_has(&prep.form_html, "type") {
+        std::collections::HashSet::new()
+    } else {
+        hidden_mode_select_names(&prep.form_html)
+    };
+    let mut hidden_mode_n = 0usize;
     for name in select_names(&prep.form_html) {
         // BBCode 编辑器的 color/font/size 装饰下拉与发种完备性无关
         if matches!(name.as_str(), "color" | "font" | "size") {
+            continue;
+        }
+        // 分类联动隐藏行（mode_*）：按所选分类由页面 JS 显隐，静态演练不计缺口
+        if hidden_mode.contains(&name) {
+            hidden_mode_n += 1;
             continue;
         }
         let v = f(&name);
@@ -5191,6 +5365,11 @@ fn analyze_form(
                 .unwrap_or_else(|| v.clone());
             d.select_picks.push((name, label));
         }
+    }
+    if hidden_mode_n > 0 {
+        d.notes.push(format!(
+            "另有 {hidden_mode_n} 个分类联动行（mode_*）的下拉按所选分类生效，静态演练不计缺口"
+        ));
     }
     // 硬缺口下拉：域相关 + 前缀折叠（多组分类分支只要一组填上就不算）；
     // 垂直站分类与样本不适配不算表单缺口
@@ -8532,7 +8711,7 @@ Height : 1080</pre></div>"#;
             ..Default::default()
         };
         let (fs, _p, notes) = build_upload_fields(&info, form, &[]);
-        assert_eq!(field_lookup(&fs, "source_sel"), Some("0"), "{notes:?}");
+        assert_eq!(field_lookup(&fs, "source_sel"), Some("1"), "{notes:?}");
         assert!(
             !notes.iter().any(|n| n.contains("二级分类")),
             "地区下拉不该报二级分类：{notes:?}"
@@ -9264,11 +9443,64 @@ Language : Chinese"));
     }
 
     #[test]
+    fn gate_messages_name_the_blocker_not_missing_form() {
+        use crate::sites::upload::UploadPageKind;
+        let challenge = gate_error_message(
+            UploadPageKind::ChallengeGate,
+            "mypt",
+            "https://pt.mypt.cc/upload.php",
+            "",
+        )
+        .unwrap();
+        assert!(challenge.contains("前台") && challenge.contains("人工"));
+        // 人机验证页不能被报成「没有可解析的静态上传表单」
+        assert!(!challenge.contains("没有可解析的静态上传表单"));
+
+        let spa = gate_error_message(
+            UploadPageKind::SpaApi,
+            "rousi",
+            "https://rousi.pro/upload.php",
+            "",
+        )
+        .unwrap();
+        assert!(spa.contains("SPA/JSON API") && spa.contains("缺："));
+
+        let perm = gate_error_message(
+            UploadPageKind::NoPermission,
+            "ttg",
+            "https://totheglory.im/upload.php",
+            "您没有上传种子的权限",
+        )
+        .unwrap();
+        assert!(perm.contains("[no-permission]") && perm.contains("上传种子的权限"));
+
+        let twofa = gate_error_message(
+            UploadPageKind::TwoFa,
+            "hddolby",
+            "https://www.uhddolby.com/upload.php",
+            "",
+        )
+        .unwrap();
+        assert!(twofa.contains("[two-fa]") && twofa.contains("二次验证"));
+        assert!(!twofa.contains("没有可解析的静态上传表单"));
+
+        // 静态表单不中止，返回 None 走原字段构造路径
+        assert!(gate_error_message(UploadPageKind::StaticForm, "x", "u", "").is_none());
+    }
+
+    #[test]
     fn denial_reason_covers_traditional_chinese() {
+        use crate::sites::upload::UploadPageKind;
         let t = "對不起... 你沒有發布種子的許可權。如果你是普通會員，請到 候選區 提交你的發布請求";
-        assert!(upload_denied_reason(t).unwrap().contains("无发布权限"));
-        assert!(upload_denied_reason("对不起... 你没有发布种子的权限").is_some());
-        assert!(upload_denied_reason("<p>随便看看</p>").is_none());
+        assert_eq!(classify_upload_page(t), UploadPageKind::NoPermission);
+        assert_eq!(
+            classify_upload_page("对不起... 你没有发布种子的权限"),
+            UploadPageKind::NoPermission
+        );
+        assert_ne!(
+            classify_upload_page("<p>随便看看</p>"),
+            UploadPageKind::NoPermission
+        );
     }
 
     #[test]
@@ -9429,25 +9661,23 @@ Language : Chinese"));
     }
 
     #[test]
-    fn ambiguous_options_leave_note_not_guess() {
-        // muxuege 实测：两个同名 AAC 选项（value 6/14），不猜
+    fn duplicate_exact_options_pick_first() {
+        // muxuege 实测：两个同名 AAC（6 普通编码组 / 14 全景声同组），按文档顺序取首个普通组
         let form = r#"<select name="audiocodec_sel[4]"><option value="0">请选择一项</option><option value="6">AAC</option><option value="14">AAC</option></select>"#;
         let (fs, _p, notes) = build_upload_fields(&drill_release(), form, &[]);
-        assert_eq!(field_lookup(&fs, "audiocodec_sel").unwrap_or("0"), "0");
+        assert_eq!(field_lookup(&fs, "audiocodec_sel").unwrap_or("0"), "6");
         assert!(
-            notes
-                .iter()
-                .any(|n| n.contains("AAC") && n.contains("多个")),
-            "{notes:?}"
+            !notes.iter().any(|n| n.contains("多个")),
+            "同名首个已选中，不该再报歧义：{notes:?}"
         );
     }
 
     #[test]
-    fn region_selects_not_treated_as_quality() {
-        // aling/ubits 实测：source_sel 是地区下拉，HDTV 不往里配，也不点名「没配对」
+    fn region_selects_match_without_quality_note() {
+        // aling/ubits 实测：source_sel 是地区下拉，按地区词配对；HDTV 不往里配，也不点名「没配对」
         let form = r#"<select name="source_sel[4]"><option value="0">请选择一项</option><option value="1">内地</option><option value="2">香港</option></select>"#;
         let (fs, _p, notes) = build_upload_fields(&drill_release(), form, &[]);
-        assert_eq!(field_lookup(&fs, "source_sel").unwrap_or("0"), "0");
+        assert_eq!(field_lookup(&fs, "source_sel").unwrap_or("0"), "1");
         assert!(notes.is_empty(), "{notes:?}");
     }
 
@@ -10401,5 +10631,158 @@ Language : Chinese"));
         );
         assert!(fields.iter().all(|(n, _)| n != "cover"));
         assert!(fields.iter().all(|(n, _)| n != "screenshots"));
+    }
+
+    #[test]
+    fn region_dropdown_matches_chinese_japanese_and_falls_back_to_other() {
+        // iloli 实测地区下拉：大陆1/香港2/台湾3/欧美4/韩国5/日本6/印度7/俄国8/泰国11/其它13
+        let form = r#"<select name="source_sel[4]">
+<option value="0">请选择一项</option><option value="1">大陆 (CHN)</option><option value="2">香港 (HKG)</option>
+<option value="3">台湾 (TWN)</option><option value="4">欧美 (West)</option><option value="5">韩国 (KOR)</option>
+<option value="6">日本 (JPN)</option><option value="7">印度 (IND)</option><option value="8">俄国 (RUS)</option>
+<option value="11">泰国 (THA)</option><option value="13">其它 (Other)</option></select>"#;
+        let cn = ReleaseInfo {
+            name: "Guo Chan Ju 2024 1080p WEB-DL x264-GRP".into(),
+            subtitle: "国产剧 全40集".into(),
+            ..Default::default()
+        };
+        let (fs, _p, notes) = build_upload_fields(&cn, form, &[]);
+        assert_eq!(
+            field_lookup(&fs, "source_sel"),
+            Some("1"),
+            "国产 → 大陆：{notes:?}"
+        );
+
+        let jp = ReleaseInfo {
+            name: "Japanese Drama 2024 1080p WEB-DL-GRP".into(),
+            subtitle: "日剧 全10集".into(),
+            ..Default::default()
+        };
+        let (fs, _p, notes) = build_upload_fields(&jp, form, &[]);
+        assert_eq!(
+            field_lookup(&fs, "source_sel"),
+            Some("6"),
+            "日剧 → 日本：{notes:?}"
+        );
+
+        let unknown = ReleaseInfo {
+            name: "Movie.2024.1080p.BluRay.x264-GRP".into(),
+            subtitle: String::new(),
+            descr: String::new(),
+            ..Default::default()
+        };
+        let (fs, _p, notes) = build_upload_fields(&unknown, form, &[]);
+        assert_eq!(
+            field_lookup(&fs, "source_sel"),
+            Some("13"),
+            "归不出 → 其它：{notes:?}"
+        );
+    }
+
+    #[test]
+    fn processing_year_select_matches_release_year_or_leaves_empty() {
+        // muxuege 实测：processing_sel 是发行年代（2010=14 … 2015=19 … 2027=31）
+        let form = r#"<select name="processing_sel[4]">
+<option value="0">请选择一项</option><option value="14">2010</option><option value="19">2015</option>
+<option value="20">2016</option><option value="31">2027</option></select>"#;
+        let with_year = ReleaseInfo {
+            name: "Some Movie 2015 1080p BluRay AAC-GRP".into(),
+            ..Default::default()
+        };
+        let (fs, _p, notes) = build_upload_fields(&with_year, form, &[]);
+        assert_eq!(
+            field_lookup(&fs, "processing_sel"),
+            Some("19"),
+            "2015 → 年代档 19：{notes:?}"
+        );
+
+        let no_year = ReleaseInfo {
+            name: "Some Movie 1080p BluRay AAC-GRP".into(),
+            mediainfo: "General\nFormat : Matroska".into(),
+            ..Default::default()
+        };
+        let (fs, _p, notes) = build_upload_fields(&no_year, form, &[]);
+        assert_eq!(
+            field_lookup(&fs, "processing_sel").unwrap_or("0"),
+            "0",
+            "抽不到年份留空，不硬填：{notes:?}"
+        );
+    }
+
+    #[test]
+    fn formcheck_and_gatecheck_share_rules_and_conclusions() {
+        // formcheck 与 gatecheck 必须加载同一套站点规则：同一份构造结果两边缺口结论一致。
+        let form = r#"<form action="takeupload.php">
+<select name="type"><option value="0">请选择</option><option value="401">电影</option></select>
+<select name="region_sel[4]"><option value="0">请选择</option><option value="7">Other</option></select>
+</form>"#;
+        let mut picks = std::collections::BTreeMap::new();
+        picks.insert("region_sel".to_string(), "7".to_string());
+        let rules = crate::gates::SiteRules {
+            select_picks: picks,
+            required_fields: vec!["region_sel".into()],
+            ..Default::default()
+        };
+
+        let mut prep1 = prep_from_form(form);
+        apply_site_rules(&mut prep1, &rules);
+        let drill = analyze_form("x", "测试站", &prep1, &drill_release());
+
+        let mut prep2 = prep_from_form(form);
+        apply_site_rules(&mut prep2, &rules);
+        let gate = analyze_prepared("x", "测试站", &prep2, &drill_release());
+
+        assert_eq!(drill.core_gaps(), gate.core_gaps());
+        assert_eq!(drill.soft_gaps(), gate.soft_gaps());
+        assert!(
+            gate.core_gaps().iter().all(|g| !g.contains("region_sel")),
+            "规则回填后必填下拉不该再报缺口：{:?}",
+            gate.core_gaps()
+        );
+    }
+
+    #[test]
+    fn hidden_mode_rows_are_not_counted_as_gaps() {
+        // xingtan 实测：328 个 mode_<分类id> 隐藏行，只有当前分类那行可见；
+        // 静态演练只看可见行，隐藏行的空下拉不计缺口。
+        let form = r#"<form action="takeupload.php">
+<tr relation="mode_16" class="mode_16"><td><select name="source_sel[16]"><option value="0">请选择</option><option value="1">视频</option></select>
+<select name="processing_sel[16]"><option value="0">请选择</option><option value="14">2010</option></select></td></tr>
+<tr relation="mode_31" class="mode_31"><td><select name="source_sel[31]"><option value="0">请选择</option><option value="2">音频</option></select></td></tr>
+</form>"#;
+        let prep = PreparedUpload {
+            action: "https://xingtan.one/takeupload.php".into(),
+            form_url: "https://xingtan.one/upload.php".into(),
+            fields: vec![
+                ("type".into(), "0".into()),
+                ("source_sel[16]".into(), "0".into()),
+                ("processing_sel[16]".into(), "0".into()),
+                ("source_sel[31]".into(), "0".into()),
+            ],
+            picked_tags: vec![],
+            tag_warn: None,
+            select_notes: vec![],
+            required_gaps: vec![],
+            form_html: form.into(),
+            poster_field: None,
+            screenshot_field: None,
+        };
+        let d = analyze_form("xingtan", "星潭", &prep, &drill_release());
+        assert!(
+            !d.open_selects
+                .iter()
+                .any(|n| n.starts_with("source_sel[16]")
+                    || n.starts_with("processing_sel[16]")
+                    || n.starts_with("source_sel[31]")),
+            "隐藏分类行的下拉不该进缺口：{:?}",
+            d.open_selects
+        );
+        assert!(
+            d.notes
+                .iter()
+                .any(|n| n.contains("mode_") && n.contains("分类联动")),
+            "应提示隐藏行按分类生效：{:?}",
+            d.notes
+        );
     }
 }

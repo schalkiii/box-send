@@ -313,6 +313,26 @@ reseed/coverage_io.rs  覆盖记录读写
 11. **lajidui**：`SITES.md` 2.4 记 4 条等审核、三项下拉已核对；今日 85084、85085 是安全集外误发，候选范围失守问题文档未记。
 12. **qilin**：`SITES.md` 2.5 行只记缺图/换图等复审；今日 480763 挂回被非目标 tracker 拒（`posted_unresolved`），挂回 tracker 别名识别缺口未记。
 
+### 7.8 2026-11-26 复核后的修正（本节覆盖 7.3、7.6 里过时的说法）
+
+上一轮差距评估之后，把 47 个未启用站、13 个暂停站、6 个动态界面站、7 个表单缺口站全部实测了一遍，结论有变动：
+
+- **未启用 47 站里只有 agsvpt 真能启用，已经启用**：`sourceSites.enabled=true` + 进 `autoReseedSites` + `team_sel` 兜底 Other=22；`gatecheck` 全绿（17 字段 / 9 下拉 / 7 项检查）；qB 里 806 条该站 tracker 种子可抄 passkey（tracker 主机 `tracker.agsvpt.cn`）。它不再是"权限待实证"，而是"已启用、等 546963 复审"。
+- **剩下 46 个未启用站的原因收窄成四类**：差登录 3（azusa、tlf、generationfree）；校外被拦 1（byr，CERNET IPv6 + wengine 网关 403）；已关站 1（yinghua）；其余是**框架不支持**——Unit3D 13 / custom 8 / Gazelle 6 / XBTIT 5 / Blu 2 / Haidan 1 / YemaPT 1 / Discuz 1 / TNode 1。代码 `search_capable()` 只对 NexusPHP 为真，配置加载阶段就过滤，改 `enabled` 没用。要解锁这批等于新增框架适配器，属新能力，不是配置活。
+- **整站暂停从 13 降到 8**：保留 hudbt、hdclone（无发布权限）、freefarm（迁 farmm.cc 没带 cookie）、u2（登录墙 + 两步验证）、shadow（cookie 失效）、sunny（改版 SPA 走 JSON 接口）、piggo（WAF + 会话失效）、tu88（cookie 失效 + 图形验证码）；摘掉 gtk 与四个已关站（momentpt、movie52、ptlao、yinghua）。
+- **gtk 的新卡点不是站点，是本机网络**：站点实测可用（登录态有效、上传页 37 字段、共享 tracker `t.myaltbox.com` 有 170 条可抄 passkey，`overrides.announceURL` 已填），但本机直连被掐（系统代理开着 7890，引擎按设计 `.no_proxy()` 直连）。要真正恢复自动发种，得先解决"这台机器能不能直连该站"，或者做一个**按站代理开关**（默认仍直连，只有明确配置的站走代理）。这是新增配置能力，本轮没做。
+- **6 个"动态界面"站里只有 3 个真动态**：hddolby 其实标准静态表单（17 字段 / 9 下拉，只是要过 2FA）；hdcity 两段式（首段 5 字段，二段编辑页要真实上传后才拿得到）；mypt 时段禁传 + Cloudflare；rousi 是 SPA 需逆建种接口；ptt、ttg 是账号/板块没权限。
+- **7 个表单缺口站里 3 个已落地配置**：iloli（team Other=5）、muxuege（team Other=52 + 普通 AAC=6）、fenghuang（team other=1）；代码侧补了通用地区匹配、同名候选取首个、年代档匹配、分类联动行不计缺口。仍缺：xingtan 两级分类要浏览器驱动；haoxue（Next.js）、hdu（负载壳 + EASY-UPLOAD）是单页应用；aling 是源站自己 500，等恢复。
+- **熊猫仍暂停**：站上 141276 已删，qB 431 条该站种子全部 100%、另有 1 条 `3f8ed774…` 待清理；只读演练还缺图（0 < 4 张）、简介六段顺序、地区下拉、团队 Other 兜底。闭环最后一段（上传→下载站点种子→核对→挂回）必须真发一条才能验证，**要用户批准一条才动**。
+
+下一步优先级（在前面的 5 件之后）：
+
+1. **扩失败分类，别把"站侧阻塞"当失败**：`no_permission` / `two_fa` / `challenge_gate` / `spa_api` 这四类现在是 `review_failed`，配了 `backoffHours` 会白白冷却一轮；要单列并从冷却统计里排除。验收：这四类演练结果在 `bsend audit` 里单列，不进冷却。
+2. **按站代理开关**：解锁 gtk 这类"只有过代理才通"的站，默认直连不变。
+3. **hdcity 二段编辑页字段 + rousi 建种接口**：都要真实浏览器，前者真发一条后核对，后者从懒加载包逆。
+4. **xingtan 两级分类驱动**：接上 `ajaxCategoryModes/SubMap/Keywords` 或走浏览器点树。
+5. **熊猫闭环**：等批一条真发。
+
 ## 8. 相关文档
 
 - 为什么这样判断、怎么发一条种子：`ARCHITECTURE.md`

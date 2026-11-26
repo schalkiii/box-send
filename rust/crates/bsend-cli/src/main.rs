@@ -928,6 +928,7 @@ fn formcheck_fact(
         "core": core,
         "soft": soft,
         "error": d.error,
+        "errorKind": d.error_kind,
         "action": d.action,
         "selectOptions": serde_json::Value::Object(select_options),
         "at": bsend::coverage::now_unix(),
@@ -949,7 +950,8 @@ fn cmd_formcheck(cfg: &Config, sites: Option<Vec<String>>) -> Result<()> {
     let mut fail_n = 0usize;
     let mut facts: Vec<serde_json::Value> = Vec::new();
     for a in &adapters {
-        let d = bsend::reseed::drill_upload_form(a);
+        let site_rules = cfg.coverage.rules_for(&a.site_id);
+        let d = bsend::reseed::drill_upload_form_with_rules(a, &site_rules);
         let core = d.core_gaps();
         let soft = d.soft_gaps();
         let icon = if d.error.is_some() {

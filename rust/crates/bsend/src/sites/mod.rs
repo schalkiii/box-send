@@ -3,6 +3,7 @@
 //! 界面上只会显示用户配置里添加过的站，这里给的是识别与默认参数。
 
 pub mod nexusphp;
+pub mod upload;
 
 use serde::{Deserialize, Serialize};
 
