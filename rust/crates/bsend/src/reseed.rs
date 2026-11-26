@@ -5703,7 +5703,10 @@ fn prepare_released(
         if !info.name.to_ascii_uppercase().contains(&range) {
             let candidate = normalize_release_title(&req.name);
             if !candidate.is_empty() && season_range(&candidate).is_some() {
-                log(&format!("标题按合集范围修正：{} → {}", info.name, candidate));
+                log(&format!(
+                    "标题按合集范围修正：{} → {}",
+                    info.name, candidate
+                ));
                 info.name = candidate;
             }
         }
@@ -6209,10 +6212,7 @@ fn run_reseed_inner(
     // 本地规则缺口（例如简介图片被剪成 0 张）必须在真提交前硬拦；
     // 审阅页会显示，但 `--yes`/自动发种如果只看预检就会漏过去。
     if !prep.required_gaps.is_empty() {
-        bail!(
-            "本地规则阻断，未上传：{}",
-            prep.required_gaps.join("；")
-        );
+        bail!("本地规则阻断，未上传：{}", prep.required_gaps.join("；"));
     }
 
     // ---- 4 从 qB 导出源种 → 单 tracker 改写 → 上传目标站 ----
