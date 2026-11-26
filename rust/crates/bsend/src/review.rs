@@ -352,6 +352,7 @@ pub fn recheck_reviews(
                 continue;
             }
         };
+        tgt.log_proxy(log);
         if !throttle.acquire(&site, BudgetKind::Search) {
             log(&format!("{site}：这一轮没领到请求额度，下次再看（{name}）"));
             summary.no_budget += 1;

@@ -1251,7 +1251,9 @@ pub fn build_adapters(
         adapter.upload_timeout_sec = cfg.coverage.rules_for(&s.id).upload_timeout_sec();
         adapter = adapter
             .with_announce_hosts(s.announce_hosts.clone())
-            .with_announce_url(s.announce_url.clone());
+            .with_announce_url(s.announce_url.clone())
+            .with_proxy(s.proxy.as_deref())
+            .with_context(|| format!("站点 {id} 代理配置不合法", id = s.id))?;
         out.push(std::sync::Arc::new(adapter));
     }
     if out.is_empty() {

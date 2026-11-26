@@ -420,18 +420,48 @@ pub fn run_autopost_with(
         let rep = match reviewer(cfg, &req, &mut log, Some(&throttle)) {
             Ok(r) => r,
             Err(e) => {
-                append_audit(
-                    &audit_path,
-                    serde_json::json!({"at": now, "site": site, "key": d.content_key,
-                        "result": "review_failed", "error": format!("{e:#}")}),
-                )?;
-                emit(AutopostEvent::Outcome {
-                    key: d.content_key.clone(),
-                    site: site.clone(),
-                    result: "review_failed",
-                    url: None,
-                    error: Some(format!("{e:#}")),
-                });
+                let msg = format!("{e:#}");
+                if let Some(kind) = reseed::site_block_kind(&msg) {
+                    // 站侧条件（无发布权限 / 要过 2FA / 人机验证拦截 / 纯前端界面）：
+                    // 不是我们发错了。记独立审计分类，不进失败冷却；覆盖记录落中性终态，
+                    // 程序不自动重发。其余错误仍走原来的 review_failed 失败路径。
+                    append_audit(
+                        &audit_path,
+                        serde_json::json!({"at": now, "site": site, "key": d.content_key,
+                            "result": kind, "error": msg}),
+                    )?;
+                    if !opts.dry_run {
+                        reseed::write_cell(
+                            &mut index,
+                            &d.content_key,
+                            site,
+                            CoverageStatus::Skipped,
+                            None,
+                            &format!("站侧阻塞（{kind}）：待人工处理，程序不自动重发"),
+                        );
+                        index.save()?;
+                    }
+                    emit(AutopostEvent::Outcome {
+                        key: d.content_key.clone(),
+                        site: site.clone(),
+                        result: kind,
+                        url: None,
+                        error: Some(msg),
+                    });
+                } else {
+                    append_audit(
+                        &audit_path,
+                        serde_json::json!({"at": now, "site": site, "key": d.content_key,
+                            "result": "review_failed", "error": msg}),
+                    )?;
+                    emit(AutopostEvent::Outcome {
+                        key: d.content_key.clone(),
+                        site: site.clone(),
+                        result: "review_failed",
+                        url: None,
+                        error: Some(msg),
+                    });
+                }
                 continue;
             }
         };
@@ -570,18 +600,46 @@ pub fn run_autopost_with(
                 });
             }
             Err(e) => {
-                append_audit(
-                    &audit_path,
-                    serde_json::json!({"at": now, "site": site, "key": d.content_key,
-                        "result": "failed", "error": format!("{e:#}"), "gates": gate_json}),
-                )?;
-                emit(AutopostEvent::Outcome {
-                    key: d.content_key.clone(),
-                    site: site.clone(),
-                    result: "failed",
-                    url: None,
-                    error: Some(format!("{e:#}")),
-                });
+                let msg = format!("{e:#}");
+                if let Some(kind) = reseed::site_block_kind(&msg) {
+                    // 与审阅路径同一套站侧阻塞口径：独立分类、不进冷却、不落 failed、不自动重发。
+                    append_audit(
+                        &audit_path,
+                        serde_json::json!({"at": now, "site": site, "key": d.content_key,
+                            "result": kind, "error": msg, "gates": gate_json}),
+                    )?;
+                    if !opts.dry_run {
+                        reseed::write_cell(
+                            &mut index,
+                            &d.content_key,
+                            site,
+                            CoverageStatus::Skipped,
+                            None,
+                            &format!("站侧阻塞（{kind}）：待人工处理，程序不自动重发"),
+                        );
+                        index.save()?;
+                    }
+                    emit(AutopostEvent::Outcome {
+                        key: d.content_key.clone(),
+                        site: site.clone(),
+                        result: kind,
+                        url: None,
+                        error: Some(msg),
+                    });
+                } else {
+                    append_audit(
+                        &audit_path,
+                        serde_json::json!({"at": now, "site": site, "key": d.content_key,
+                            "result": "failed", "error": msg, "gates": gate_json}),
+                    )?;
+                    emit(AutopostEvent::Outcome {
+                        key: d.content_key.clone(),
+                        site: site.clone(),
+                        result: "failed",
+                        url: None,
+                        error: Some(msg),
+                    });
+                }
             }
         }
     }
@@ -623,6 +681,9 @@ pub fn parse_audit(text: &str, now: i64) -> (PostedToday, LastBad) {
                     *posted_today.entry(s.to_string()).or_insert(0) += 1;
                 }
             }
+            // 只有门禁拦截 / 真实失败 / 审阅失败进冷却表。站侧阻塞四类
+            // （`no_permission` / `two_fa` / `challenge_gate` / `spa_api`）
+            // 是站点侧条件，不是发错了：不进冷却，下面的匹配词表里也不含它们。
             if matches!(result, "blocked" | "failed" | "review_failed") {
                 if let (Some(k), Some(s)) = (
                     v.get("key").and_then(|s| s.as_str()),
@@ -844,6 +905,7 @@ mod tests {
                 announce_url: None,
                 poster_field: None,
                 screenshot_field: None,
+                proxy: None,
             }],
             coverage: crate::config::CoverageSettings {
                 auto_reseed_sites: vec!["sbpt".into()],
@@ -1558,5 +1620,137 @@ mod tests {
             .unwrap();
         assert_eq!(cell.status, CoverageStatus::Skipped);
         assert!(cell.note.as_deref().unwrap().contains("draft"));
+    }
+
+    #[test]
+    fn site_blocked_review_error_records_neutral_audit() {
+        // 站侧阻塞（无权限 / 2FA / 人机验证 / 纯前端）：不是发错了。审计记独立分类，
+        // 不进失败冷却；覆盖记录落中性终态，程序不自动重发；发布器不被调用。
+        let dir = temp_dir("blocked-review");
+        let cfg = cfg_with_drafts(&dir, 2, 1);
+        let mut runner_called = 0usize;
+        let mut runner = |_: &Config,
+                          _: &reseed::ReseedRequest,
+                          _: &mut ContentIndex,
+                          _: &mut dyn FnMut(&str),
+                          _: Option<&crate::throttle::SiteThrottle>,
+                          _: Option<reseed::ReviewReport>| {
+            runner_called += 1;
+            Ok(reseed::ReseedOutcome::Posted("u".into()))
+        };
+        let mut logs = Vec::new();
+        let summary = run_autopost_with(
+            &cfg,
+            &AutopostOptions {
+                dry_run: false,
+                ..Default::default()
+            },
+            None,
+            &mut collect_logs(&mut logs),
+            &mut |_: &Config,
+                  _: &reseed::ReseedRequest,
+                  _: &mut dyn FnMut(&str),
+                  _: Option<&crate::throttle::SiteThrottle>| {
+                anyhow::bail!(
+                    "[no_permission] 该账号在 sbpt 无发布权限；本站条目自动发种中止，待人工处理"
+                )
+            },
+            &mut runner,
+        )
+        .unwrap();
+        assert_eq!(summary.posted, 0);
+        assert_eq!(runner_called, 0, "站侧阻塞不能调用发布器");
+
+        let audit = std::fs::read_to_string(audit_path_of(&cfg)).unwrap();
+        let row = audit
+            .lines()
+            .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+            .find(|v| v["result"] == "no_permission")
+            .expect("审计要记 no_permission 分类");
+        assert_eq!(row["site"], "sbpt");
+        assert!(row["error"].as_str().unwrap().contains("无发布权限"));
+
+        // 不进失败冷却：冷却表里不能有这条
+        let (_, bad) = parse_audit(&audit, now_unix());
+        assert!(bad.is_empty(), "站侧阻塞不进失败冷却");
+
+        // 覆盖记录不落 failed：落 Skipped 中性终态，note 写明站侧阻塞
+        let idx = ContentIndex::load(&cfg.coverage_state_path());
+        let cell = idx
+            .contents
+            .get("m:test0000000000000000")
+            .unwrap()
+            .coverage
+            .get("sbpt")
+            .unwrap();
+        assert_eq!(cell.status, CoverageStatus::Skipped);
+        assert!(cell.note.as_deref().unwrap().contains("站侧阻塞"));
+    }
+
+    #[test]
+    fn blocked_kinds_do_not_enter_cooldown_but_real_failure_does() {
+        // 四类站侧阻塞都不进冷却；真实 failed / review_failed 仍进。
+        let now = now_unix();
+        let text = format!(
+            concat!(
+                "{{\"at\":{},\"site\":\"sbpt\",\"key\":\"m:1\",\"result\":\"no_permission\"}}\n",
+                "{{\"at\":{},\"site\":\"sbpt\",\"key\":\"m:2\",\"result\":\"two_fa\"}}\n",
+                "{{\"at\":{},\"site\":\"sbpt\",\"key\":\"m:3\",\"result\":\"challenge_gate\"}}\n",
+                "{{\"at\":{},\"site\":\"sbpt\",\"key\":\"m:4\",\"result\":\"spa_api\"}}\n",
+                "{{\"at\":{},\"site\":\"sbpt\",\"key\":\"m:5\",\"result\":\"failed\"}}\n",
+                "{{\"at\":{},\"site\":\"sbpt\",\"key\":\"m:6\",\"result\":\"review_failed\"}}\n"
+            ),
+            now - 10,
+            now - 10,
+            now - 10,
+            now - 10,
+            now - 10,
+            now - 10,
+        );
+        let (_, bad) = parse_audit(&text, now);
+        let blocked: Vec<_> = bad.keys().cloned().collect();
+        assert_eq!(blocked.len(), 2, "只有两条真实失败进冷却");
+        assert!(bad.contains_key(&("m:5".into(), "sbpt".into())));
+        assert!(bad.contains_key(&("m:6".into(), "sbpt".into())));
+    }
+
+    #[test]
+    fn review_failed_path_still_records_failure_and_cooldown() {
+        // 旧路径不能被改没：站点真实拒绝 / 审阅炸了仍记 review_failed 并进冷却。
+        let dir = temp_dir("review-failed");
+        let cfg = cfg_with_drafts(&dir, 2, 1);
+        let mut runner_called = 0usize;
+        let mut runner = |_: &Config,
+                          _: &reseed::ReseedRequest,
+                          _: &mut ContentIndex,
+                          _: &mut dyn FnMut(&str),
+                          _: Option<&crate::throttle::SiteThrottle>,
+                          _: Option<reseed::ReviewReport>| {
+            runner_called += 1;
+            Ok(reseed::ReseedOutcome::Posted("u".into()))
+        };
+        let mut logs = Vec::new();
+        let _ = run_autopost_with(
+            &cfg,
+            &AutopostOptions {
+                dry_run: false,
+                ..Default::default()
+            },
+            None,
+            &mut collect_logs(&mut logs),
+            &mut |_: &Config,
+                  _: &reseed::ReseedRequest,
+                  _: &mut dyn FnMut(&str),
+                  _: Option<&crate::throttle::SiteThrottle>| {
+                anyhow::bail!("审阅阶段真实失败：字段解析炸了")
+            },
+            &mut runner,
+        )
+        .unwrap();
+        assert_eq!(runner_called, 0);
+        let audit = std::fs::read_to_string(audit_path_of(&cfg)).unwrap();
+        assert!(audit.lines().any(|l| l.contains("\"review_failed\"")));
+        let (_, bad) = parse_audit(&audit, now_unix());
+        assert!(!bad.is_empty(), "review_failed 必须仍进失败冷却");
     }
 }

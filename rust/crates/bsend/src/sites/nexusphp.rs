@@ -50,7 +50,34 @@ pub struct NexusPhp {
     /// 上传 POST 的单独超时（秒）：默认 120，可由 `assist.reseedRules.<site>.uploadTimeoutSec` 放宽
     pub upload_timeout_sec: u64,
     pub user_agent: String,
+    /// 该站代理的 host:port（配了 `overrides.proxy` 才有）；None = 直连。
+    /// 只用于日志和测试断言，不回显带账号口令的完整代理地址。
+    pub proxy_endpoint: Option<String>,
     client: Client,
+}
+
+/// 构造站点 HTTP 客户端。`proxy_url` 为 None 时维持原来的直连行为（`.no_proxy()`，
+/// 不读系统代理）；填了代理地址时只给这一个站的客户端挂代理。
+fn build_site_client(proxy_url: Option<&str>) -> Result<Client> {
+    let mut builder = Client::builder()
+        .timeout(Duration::from_secs(30))
+        // 只走 HTTP/1.1：非浏览器客户端的 HTTP/2 指纹易被 WAF 误伤，
+        // 这里是防御性收窄（API POST 曾被「网站防火墙」拦过，见 reseed 官方预审注释）
+        .http1_only();
+    match proxy_url {
+        Some(raw) => {
+            let proxy =
+                reqwest::Proxy::all(raw).with_context(|| format!("站点代理地址不合法：{raw}"))?;
+            builder = builder.proxy(proxy);
+        }
+        None => {
+            // PT 站请求一律直连：passkey 与账号 IP 绑定，走代理既可能连不上也都算异常登录；
+            // 另外 Windows 上「系统代理已停用但注册表仍留着 ProxyServer」会让 reqwest
+            // 去连一个不存在的 SOCKS，每次请求卡满超时（实机踩到过）。
+            builder = builder.no_proxy();
+        }
+    }
+    builder.build().context("构建 HTTP 客户端失败")
 }
 
 /// 检索命中：站内已有这条种子的详情页
@@ -141,17 +168,7 @@ impl NexusPhp {
         cookie: Option<&str>,
     ) -> Result<Self> {
         let base = Url::parse(base_url).with_context(|| format!("站点 URL 不合法：{base_url}"))?;
-        let client = Client::builder()
-            .timeout(Duration::from_secs(30))
-            // PT 站请求一律直连：passkey 与账号 IP 绑定，走代理既可能连不上也都算异常登录；
-            // 另外 Windows 上「系统代理已停用但注册表仍留着 ProxyServer」会让 reqwest
-            // 去连一个不存在的 SOCKS，每次请求卡满超时（实机踩到过）。
-            .no_proxy()
-            // 只走 HTTP/1.1：非浏览器客户端的 HTTP/2 指纹易被 WAF 误伤，
-            // 这里是防御性收窄（API POST 曾被「网站防火墙」拦过，见 reseed 官方预审注释）
-            .http1_only()
-            .build()
-            .context("构建 HTTP 客户端失败")?;
+        let client = build_site_client(None)?;
         let announce_hosts = base
             .host_str()
             .map(|h| vec![h.to_lowercase()])
@@ -170,8 +187,42 @@ impl NexusPhp {
                 .map(|s| s.to_string()),
             cookie: cookie.filter(|s| !s.is_empty()).map(|s| s.to_string()),
             user_agent: DEFAULT_UA.to_string(),
+            proxy_endpoint: None,
             client,
         })
+    }
+
+    /// 给该站单独挂代理。传 None / 空串 = 保持直连。只影响这一个适配器的客户端，
+    /// qB、CookieCloud 和其他站的客户端都不走这里。
+    pub fn with_proxy(mut self, proxy_url: Option<&str>) -> Result<Self> {
+        let raw = proxy_url
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        match raw.as_deref() {
+            Some(url) => {
+                self.client = build_site_client(Some(url))?;
+                // 日志/断言只用 host:port，不带账号口令
+                self.proxy_endpoint = Url::parse(url).ok().and_then(|u| {
+                    u.host_str().map(|h| match u.port() {
+                        Some(p) => format!("{h}:{p}"),
+                        None => h.to_string(),
+                    })
+                });
+            }
+            None => {
+                self.client = build_site_client(None)?;
+                self.proxy_endpoint = None;
+            }
+        }
+        Ok(self)
+    }
+
+    /// 配了代理时按日志回调记一行「本站走代理 host:port」；直连不记。
+    pub fn log_proxy(&self, log: &mut dyn FnMut(&str)) {
+        if let Some(ep) = &self.proxy_endpoint {
+            log(&format!("本站走代理 {ep}"));
+        }
     }
 
     /// 设置该站完整 announce 地址（含 passkey）。第一次在该站发种前必须提供，
@@ -2193,6 +2244,37 @@ mod tests {
         assert!(a.uses_kimi_search());
         let b = NexusPhp::new("luckpt", "LuckPT", "https://pt.luckpt.de/", None, None).unwrap();
         assert!(!b.uses_kimi_search());
+    }
+
+    #[test]
+    fn adapter_proxy_defaults_direct_and_only_attaches_when_configured() {
+        // 不配代理：直连（proxy_endpoint 为 None），行为与原来一致。
+        let direct = NexusPhp::new("plain", "Plain", "https://plain.example/", None, None).unwrap();
+        assert_eq!(direct.proxy_endpoint, None);
+
+        // 配了代理：该站客户端挂代理；endpoint 只留 host:port，不带账号口令。
+        let proxied = NexusPhp::new("gtk", "GTK", "https://pt.gtkpw.xyz/", None, None)
+            .unwrap()
+            .with_proxy(Some("http://127.0.0.1:7890"))
+            .unwrap();
+        assert_eq!(proxied.proxy_endpoint.as_deref(), Some("127.0.0.1:7890"));
+
+        // 显式传 None / 空串：回到直连。
+        let back = proxied.with_proxy(None).unwrap();
+        assert_eq!(back.proxy_endpoint, None);
+        let back_empty = NexusPhp::new("e", "E", "https://e.example/", None, None)
+            .unwrap()
+            .with_proxy(Some("   "))
+            .unwrap();
+        assert_eq!(back_empty.proxy_endpoint, None);
+
+        // 代理地址不合法：构造直接报错，不静默退回直连。
+        assert!(
+            NexusPhp::new("bad", "Bad", "https://bad.example/", None, None)
+                .unwrap()
+                .with_proxy(Some("not a url"))
+                .is_err()
+        );
     }
 
     #[test]

@@ -1405,6 +1405,13 @@ fn cmd_audit(cfg: &Config, days: usize, site: Option<String>, as_json: bool) -> 
         "待跟进：待走候选入口 {}｜等站点审核 {}｜站点审核没过 {}｜站上已发未挂回 {}（等回访或人工处理，不算失败、不重试）",
         t.pending_offers, t.pending_review, t.review_rejected, t.posted_unresolved
     );
+    let blocked_total = t.no_permission + t.two_fa + t.challenge_gate + t.spa_api;
+    if blocked_total > 0 {
+        println!(
+            "站侧阻塞（不是失败、不进冷却）：无权限 {}｜2FA {}｜人机验证 {}｜单页应用 {}",
+            t.no_permission, t.two_fa, t.challenge_gate, t.spa_api
+        );
+    }
     println!(
         "计入记录 {} 条；畸形行 {} 条（跳过未计入）。",
         t.records, t.malformed
@@ -1878,6 +1885,22 @@ fn cmd_autopost(
                 "   → 站点审核没过：已记入待跟进，要人改简介或种子后在站上处理；程序不重发\n      {}\n",
                 error.unwrap_or_default()
             ),
+            "no_permission" => println!(
+                "   → 站侧阻塞：账号在该站无发布权限，待人工确认后再处理；不算失败、程序不自动重发\n      {}\n",
+                error.unwrap_or_default()
+            ),
+            "two_fa" => println!(
+                "   → 站侧阻塞：站点要求先过二次验证，待在前台浏览器完成后再处理；不算失败、程序不自动重发\n      {}\n",
+                error.unwrap_or_default()
+            ),
+            "challenge_gate" => println!(
+                "   → 站侧阻塞：被人机验证拦截，待在前台浏览器过一次验证后再处理；不算失败、程序不自动重发\n      {}\n",
+                error.unwrap_or_default()
+            ),
+            "spa_api" => println!(
+                "   → 站侧阻塞：上传界面是纯前端/接口，程序暂不支持；不算失败、程序不自动重发\n      {}\n",
+                error.unwrap_or_default()
+            ),
             "failed" => println!("   → 发布失败：{}\n", error.unwrap_or_default()),
             _ => {}
         },
@@ -1956,7 +1979,7 @@ fn cmd_gatecheck(cfg: &Config, sites: Option<Vec<String>>, as_json: bool) -> Res
                 continue;
             }
         };
-        bsend::reseed::apply_site_rules(&mut prep, &site_rules);
+        bsend::reseed::apply_site_rules(&mut prep, &site_rules, None);
         let drill = bsend::reseed::analyze_prepared(&a.site_id, &a.site_name, &prep, &info);
         let core = drill.core_gaps();
         let type_label = drill

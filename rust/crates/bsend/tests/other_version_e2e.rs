@@ -394,6 +394,7 @@ fn test_config(
                 announce_url: Some(format!("http://127.0.0.1:{src_port}/announce?passkey=test")),
                 poster_field: None,
                 screenshot_field: None,
+                proxy: None,
             },
             SiteConf {
                 id: "hdsky".into(),
@@ -406,6 +407,7 @@ fn test_config(
                 announce_url: Some(format!("http://localhost:{tgt_port}/announce?passkey=test")),
                 poster_field: None,
                 screenshot_field: None,
+                proxy: None,
             },
         ],
         coverage: CoverageSettings {

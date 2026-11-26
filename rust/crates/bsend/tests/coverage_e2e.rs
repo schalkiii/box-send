@@ -413,6 +413,7 @@ fn test_config(qb_port: u16, pter_port: u16, hdsky_port: u16, dir: &std::path::P
                 )),
                 poster_field: None,
                 screenshot_field: None,
+                proxy: None,
             },
             SiteConf {
                 id: "hdsky".into(),
@@ -427,6 +428,7 @@ fn test_config(qb_port: u16, pter_port: u16, hdsky_port: u16, dir: &std::path::P
                 )),
                 poster_field: None,
                 screenshot_field: None,
+                proxy: None,
             },
         ],
         coverage: CoverageSettings {

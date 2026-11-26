@@ -42,6 +42,9 @@ pub struct SiteConf {
     /// 上传页把截图放在独立字段时，字段名（如 ptlgs 的 `screenshots`）。
     /// 提交值一行一个 URL，不能只靠简介里的图。
     pub screenshot_field: Option<String>,
+    /// 该站专用代理地址（形如 `http://127.0.0.1:7890`）；不填或留空 = 直连，行为不变。
+    /// 只影响这一个站的 HTTP 客户端，不影响 qB、CookieCloud 和其他站。
+    pub proxy: Option<String>,
 }
 
 impl SiteConf {
@@ -514,7 +517,13 @@ impl Config {
                 .get("overrides")
                 .and_then(|o| v_str(o, "searchURL"))
                 .filter(|u| !u.is_empty());
-            // 页面 host + 内置别名 + 配置里追加的 overrides.announceHosts
+            let announce_url = s
+                .get("overrides")
+                .and_then(|o| v_str(o, "announceURL"))
+                .filter(|u| !u.is_empty());
+            // 页面 host + 内置别名 + 配置里追加的 overrides.announceHosts + announceURL 自带主机。
+            // 配了 announceURL 时把它自己的 host 一并并入清单：独立主机的 tracker（如 iloli 的
+            // a.x-anime.cc）不会再被守卫误拦，已在做种的种子也不会被算成缺口。
             let mut announce_hosts: Vec<String> = vec![url_host(&url).unwrap_or_default()];
             announce_hosts.extend(extra_announce_hosts(&id).iter().map(|h| h.to_string()));
             if let Some(list) = s
@@ -528,12 +537,11 @@ impl Config {
                         .map(|x| x.to_lowercase()),
                 );
             }
+            if let Some(h) = announce_url.as_deref().and_then(url_host) {
+                announce_hosts.push(h);
+            }
             announce_hosts.retain(|h| !h.is_empty());
             announce_hosts.dedup();
-            let announce_url = s
-                .get("overrides")
-                .and_then(|o| v_str(o, "announceURL"))
-                .filter(|u| !u.is_empty());
             let poster_field = s
                 .get("overrides")
                 .and_then(|o| v_str(o, "posterField"))
@@ -542,11 +550,17 @@ impl Config {
                 .get("overrides")
                 .and_then(|o| v_str(o, "screenshotField"))
                 .filter(|v| !v.is_empty());
+            let proxy = s
+                .get("overrides")
+                .and_then(|o| v_str(o, "proxy"))
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty());
             sites.push(SiteConf {
                 announce_hosts,
                 announce_url,
                 poster_field,
                 screenshot_field,
+                proxy,
                 id,
                 name: v_str(s, "name").unwrap_or_default(),
                 url,
@@ -793,6 +807,33 @@ mod tests {
     }
 
     #[test]
+    fn proxy_override_parses_or_stays_direct() {
+        let json = r#"{
+          "dataDir": "/tmp/bsend-proxy",
+          "sourceSites": [
+            {"id": "gtk", "name": "GTK", "url": "https://pt.gtkpw.xyz/", "framework": "NexusPHP", "enabled": true,
+             "overrides": {"proxy": "http://127.0.0.1:7890"}},
+            {"id": "empty", "name": "空", "url": "https://empty.example/", "framework": "NexusPHP", "enabled": true,
+             "overrides": {"proxy": "  "}},
+            {"id": "plain", "name": "直连", "url": "https://plain.example/", "framework": "NexusPHP", "enabled": true}
+          ],
+          "downloader": {"id": "main", "type": "qbittorrent", "url": "http://127.0.0.1:8080",
+                         "username": "u", "password": "p", "skipChecking": true},
+          "assist": {"siteIDs": ["gtk", "empty", "plain"]}
+        }"#;
+        let p = write_temp("boxsend-proxy.json", json);
+        let cfg = Config::load(&p).unwrap();
+        let by: std::collections::HashMap<_, _> = cfg
+            .sites
+            .iter()
+            .map(|s| (s.id.as_str(), s.proxy.as_deref()))
+            .collect();
+        assert_eq!(by["gtk"], Some("http://127.0.0.1:7890"));
+        assert_eq!(by["empty"], None, "空串/纯空白按直连处理");
+        assert_eq!(by["plain"], None, "没配 proxy 保持直连");
+    }
+
+    #[test]
     fn cookie_header_matching() {
         // cookies.json 与 boxsend.json 同目录（write_temp 已经写到同一个测试目录）
         let p = write_temp("boxsend2.json", BOXSEND);
@@ -926,6 +967,73 @@ mod tests {
         // 没配的站保持空，运行时才会回退到从 qB 现有 tracker 里找
         let pter = cfg.sites.iter().find(|s| s.id == "pter").unwrap();
         assert!(pter.announce_url.is_none());
+    }
+
+    #[test]
+    fn announce_url_host_merged_into_allowed_hosts() {
+        // 配了 announceURL 且主机与页面域名不同：页面 host 和 announce host 都进清单，
+        // 上传守卫能放行，已在做种的种子也不会被算成缺口。
+        let p = write_temp_isolated(
+            "announce-host-merge",
+            "boxsend.json",
+            r#"{
+          "sourceSites": [
+            {"id": "iloli", "name": "萝莉", "url": "https://mua.xloli.cc/", "framework": "NexusPHP", "enabled": true,
+             "overrides": {"announceURL": "https://a.x-anime.cc/announce?passkey=abc"}}
+          ],
+          "downloader": {"url": "http://x"}
+        }"#,
+        );
+        let cfg = Config::load(&p).unwrap();
+        let s = cfg.sites.iter().find(|x| x.id == "iloli").unwrap();
+        assert_eq!(
+            s.announce_hosts,
+            vec!["mua.xloli.cc".to_string(), "a.x-anime.cc".to_string()]
+        );
+        assert!(s.matches_tracker("a.x-anime.cc"));
+        assert!(s.matches_tracker("mua.xloli.cc"));
+        assert!(!s.matches_tracker("evil.example"));
+    }
+
+    #[test]
+    fn announce_hosts_unchanged_without_announce_url() {
+        // 没配 announceURL：清单与改动前逐项一致（该 id 无内置别名，只有页面 host）。
+        let p = write_temp_isolated(
+            "announce-host-plain",
+            "boxsend.json",
+            r#"{
+          "sourceSites": [
+            {"id": "hdsky", "name": "天空", "url": "https://hdsky.me/", "framework": "NexusPHP", "enabled": true}
+          ],
+          "downloader": {"url": "http://x"}
+        }"#,
+        );
+        let cfg = Config::load(&p).unwrap();
+        let s = cfg.sites.iter().find(|x| x.id == "hdsky").unwrap();
+        assert_eq!(s.announce_hosts, vec!["hdsky.me".to_string()]);
+        assert!(s.announce_url.is_none());
+    }
+
+    #[test]
+    fn announce_url_manual_hosts_and_aliases_merge_without_dup() {
+        // announceURL + 手写 announceHosts + 内置别名：三份合并、重复项只留一条。
+        let p = write_temp_isolated(
+            "announce-host-three-way",
+            "boxsend.json",
+            r#"{
+          "sourceSites": [
+            {"id": "multi", "name": "合并", "url": "https://m.example/", "framework": "NexusPHP", "enabled": true,
+             "overrides": {"announceURL": "https://a.example/announce?passkey=x", "announceHosts": ["b.example", "c.example", "a.example"]}}
+          ],
+          "downloader": {"url": "http://x"}
+        }"#,
+        );
+        let cfg = Config::load(&p).unwrap();
+        let s = cfg.sites.iter().find(|x| x.id == "multi").unwrap();
+        assert_eq!(
+            s.announce_hosts,
+            vec!["m.example", "b.example", "c.example", "a.example"]
+        );
     }
 
     #[test]

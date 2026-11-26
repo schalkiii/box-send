@@ -74,7 +74,7 @@
 - **图片类的审核退回已处理（2026-11-24 深夜）**：ubits 379266 站内信判“海报与截图均无法访问”，简介 9 张图全是已失效的 `i13.tietuku.com`；同一条内容的 tey 623 带着同样的死图、只是还在“未审”；麒麟 479362 判“缺少海报或截图”，实际 7 张图全不可达（豆瓣海报防盗链 418 + `img.pterclub.com` TLS 失败）。三条都已换成 imgbox 新图并提交（ubits 1 海报 + 8 截图、tey 同一条 9 张、麒麟 1 海报 + 6 截图），详情页复查旧图站点 0 处、imgbox 张数对上；ubits/麒麟页面仍挂着“不通过”，站点没有用户侧重提入口，等管理复审，程序不重发、不私信。覆盖记录对应用 `scripts/set-cell-note.py` 写明了“已换图、等复审、别重发”，回访继续盯。
 - 死图重传现在是半自动流水：`scripts/fetch-descr.py`（取原简介）→ 本地备图（海报带豆瓣 Referer、截图用 cv2 从正片抓）→ `scripts/imgbox-upload.py`（传图拿直链）→ `scripts/swap-descr-images.py`（按出现顺序 1:1 换链接，BBCode/HTML 都支持）→ `scripts/edit-seed.py`（演练后提交）；发布前门禁会先剪死图/拦残图。尚未接成发布前自动重传（要能自动找海报才行）。
 - **图门禁改成代码硬规则（2026-11-24 晚）**：剪死图不再读配置，所有站点上传前无条件逐图探测、剪掉死图；要图的站有硬性最低图数（`gates::image_floor`：藏宝阁/优堡/太乙/麒麟 3 张，熊猫 4 张，2026-11-25 新增 ptlgs 4 张 = 1 张海报 + 3 张截图），配置里写 `requireImages` 也会被覆盖。真实配置里的 `pruneDeadImages` / `requireImages` 键已删。单测改成验证硬编码与配置不可覆盖。
-- **熊猫 141276 查清（2026-11-24）**：《星球大战9：天行者崛起》UHD BluRay 1080p 单文件 11.56G（https://pandapt.net/details.php?id=141276 ）。站内信两条：第一次被 NoCaps 判主标题含中文、简介顺序不合规；重提的那版被系统当“候选种子”，24 小时内没做种自动删除——不是审核不过被删。qB 里那条还挂着（tracker 报 `torrent not registered`）。**2026-11-24 晚已暂停熊猫发种**：从 `autoReseedSites` 摘掉、列入 `reseedPausedSites`，避免频繁提交引起管理员反感；以后要重发必须先做到“上传 → 立刻挂回 qB 做种”。
+- **熊猫 141276 查清（2026-11-24）**：《星球大战9：天行者崛起》UHD BluRay 1080p 单文件 11.56G（https://pandapt.net/details.php?id=141276 ）。站内信两条：第一次被 NoCaps 判主标题含中文、简介顺序不合规；重提的那版被系统当“候选种子”，24 小时内没做种自动删除——不是审核不过被删。qB 里那条还挂着（tracker 报 `torrent not registered`）。2026-11-24 晚曾暂停熊猫发种；**2026-11-27 已闭环跑通并恢复**：141840 真发一条、挂回 qB 校验 100%，见 7.9。
 - **上传后立刻挂回改成硬步骤（2026-11-24 晚）**：上传成功后立即下载站点 `.torrent` / 核对分片 / 挂进 qB，站点刚建种时常见的 `torrent not registered` 固定重试 4 轮、每轮 15 秒，仍失败才落待人工；这条没有配置开关，适用于所有站点。
 
 ### 3.2 文档里的站点数据
@@ -154,8 +154,8 @@ reseed/coverage_io.rs  覆盖记录读写
 - **luckpt**：截图和 BDRip 选档还没完全过。豆瓣图床防盗链补 `Referer` 已解决；`img.pterclub.com` 在本机 TLS 连不上，截图数量仍不足。BDRip 的媒介档已确认是 `Encode(7)`。
 - **qingwa**：未覆盖的是成人合集和多片合集，属于内容黑名单范围，不是适配器故障。
 - **haitang**：只有曲艺、有声书类目，和影视范围不匹配，已移出白名单。
-- **haoxue**：Next.js/Flux 单页应用，静态上传页拿不到，需要按前端接口重做，已移出白名单。
-- **agsvpt**：2026-11-23 当时提交域和登录域不一致，返回“你没有该权限”，已 disable 并移出自动发种白名单。2026-11-26 复核：GET `upload.php` 返回完整上传表单、没有权限拒绝字样，旧“无发布权限”结论可能已过时，但还没实证（真发一条才能定论）；适配缺口见 `SITES.md` 第 3 节该站行。
+- **haoxue**：Next.js/Flux 单页应用，静态上传页拿不到，需要按前端接口重做，已移出白名单。2026-11-27 走站点接口真发一条 23943（待审，见 7.9）；长期维护浏览器流程还是每次人工，待决定。
+- **agsvpt**：2026-11-23 当时提交域和登录域不一致，返回“你没有该权限”；2026-11-26 复核上传页表单完整、无权限拒绝字样，2026-11-27 已启用并进白名单（`team_sel` 兜底 Other=22）；546963 仍等复审。
 - **ptba / cspt / dubhe / ptsbao / crabpt / hdbao / tey / oshen / ptfans / itzmx / railgun / lemonhd**：2026-11-23 首次实发（hdbao 2 条，其余各 1 条）并挂回成功；十二站都会改写种子元信息，站上 hash 与构造 hash 不同，已加入 hash 改写白名单。cspt 另有 `tracker.cspt.cc` 别名，tey 另有 `tracker.tey.cc` 别名；dubhe 判重搜索偶发 30 秒超时；ptsbao 的 `source_sel` 是二级分类，已按 type 父类 + 标题自动填；crabpt 此前候选源站 `hdfans` 502，被失败冷却挡住，改走 `hdsky` 源后成功；hdbao 的 `autopost --limit` 计数缺陷已修；tey 表单没有 Blu-ray 媒介档，蓝光/Remux 源会被门禁拦，HDTV/WEB-DL 可发；oshen 前两次站点抖动，第三次才恢复；ptfans 此前上传页/判重超时，恢复后一次通过；railgun、lemonhd 上传回包都没给详情链接，按详情页补挂成功。
 - **itzmx**：站点 torrent 文件上限 `266,240 bytes`，大合集/大剧包会被拒；改用 `ubits` 源的《Liar Game》小种（源种 96,934 bytes）首次实发 `13134` 并挂回，qB 校验 100%。后续给该站选种先看 `.torrent` 文件大小，不要只看内容体积；详情页没有“完结/中字”标签，发布后人工补。
 - **pthome / nanyang / ubits**：2026-11-24 首次上传成功（`284701` / `226159` / `379266`），站上 hash 与构造的不同，三站已加入 hash 改写白名单，把站点种子下回来挂进 qB，校验 100%。ubits 的 `source_sel[4]`、`team_sel[4]` 不补会被拒，现已自动填。
@@ -186,9 +186,11 @@ reseed/coverage_io.rs  覆盖记录读写
 - 证据：`bsend-batch-2026-11-26.md`（74 次真实上传尝试、覆盖 37 站）、当天 `auto-audit.jsonl` 与 `reseed-log.jsonl`、`boxsend.json` 的白名单/暂停名单、`SITES.md` 历史记录。本轮没有再跑会写覆盖记录的命令，结论只对上述只读材料负责。
 - **"能全自动"必须有完整链路证据**：上传成功 → 从站点把种子下载回来 → 按 pieces 指纹和文件清单核对 → 挂进 qB 校验 100%。页面还标"未审"的算 `pending_review`，由 `bsend followup` 机器回访收尾，不算人工兜底。
 - 没有本轮或历史完整链路证据的，一律标"未验证"，不按"代码看起来支持"推断。
-- 配置现状：白名单 `autoReseedSites` 40 站；`sourceSites` 里启用扫描 100 站；其余是源站、暂停站、无权限站、动态表单站、连不通站、类目不符站、关站站和还没接适配器的外文站。
+- 配置现状（2026-11-27）：白名单 `autoReseedSites` 45 站；`sourceSites` 里启用扫描 101 站；其余是源站、暂停站、无权限站、动态表单站、连不通站、类目不符站、关站站和还没接适配器的外文站。
 
-### 7.2 白名单 40 站逐站矩阵
+### 7.2 白名单 45 站逐站矩阵
+
+> 下面这张表是 2026-11-26 批次的逐站结论；2026-11-27 新进白名单的 panda、iloli、muxuege、fenghuang 见 7.9，agsvpt 见 7.8。
 
 判定分四档：**能全自动**（链路已打通）、**需补适配**（代码/配置缺口，修了能发）、**站点侧限制**（程序改不了，只能半自动或人工兜底）、**未验证**（没有完整链路证据）。
 
@@ -235,20 +237,20 @@ reseed/coverage_io.rs  覆盖记录读写
 | tjupt | 2 次失败：大种子上传空回包 | 站点侧限制（体积门槛） | 历史 652794 https://www.tjupt.org/details.php?id=652794 25GB 单条发成并挂回；274GB 合集上传 5 分钟回 HTTP 200 空正文、站上无条目，重试仍空回包 |
 | hdfans | 1 条被 G2 拦（`medium_sel` 未选） | 未验证 | 本轮没有新上传成功证据；287791、287874 是原种挂目标站 tracker、progress=1，不算程序发布；选档缺口待补后再验证 |
 
-**矩阵小结**：白名单 40 站里，26 站本轮链路打通、1 站有历史完整链路证据（ptba）；7 站需补适配；5 站受站点侧限制；1 站未验证。
+**矩阵小结（2026-11-26 批次口径）**：当时白名单 40 站里，26 站本轮链路打通、1 站有历史完整链路证据（ptba）；7 站需补适配；5 站受站点侧限制；1 站未验证。2026-11-27 新增四站结论见 7.9。
 
 ### 7.3 白名单之外的站点（107 站，按没启用的原因分组）
 
 | 分组 | 站点 | 为什么没启用 / 能不能自动 |
 | --- | --- | --- |
 | 账号没有发布权限（站点侧，程序改不了） | btschool、carpt、chdbits、cmct、daxiangjiao、discfan、dstudio、ggpt、hdarea、hdhome、hdsky、hhanclub、hitpt、kamept、keepfrds、march、njtupt、okpt、playlet、pt52、pter、ptskit、siqi、tccf、tokyo、ultrahd、wtsakura、xingwan、zmpt | 上传页明示"没有发布种子的权限"；只有账号升级权限后才谈得上适配 |
-| 权限待实证（旧"无权限"结论可能过时） | agsvpt | 2026-11-26 GET `upload.php` 返回完整上传表单、没有权限拒绝字样；2026-11-23 的"无发布权限"结论可能已过时，但要真发一条才能定论，当前未实证；`sourceSites` 里 `enabled:false`、`managed:false` |
-| 动态/JS 上传界面，当前程序不支持 | hddolby、mypt、ptt、rousi、ttg、haoxue、hdcity、muxuege、aling、fenghuang、iloli、hdu、xingtan | 拿不到可解析的静态表单（自定义 JS、SPA、隐藏字段），或表单有小缺口（`medium_sel`/`audiocodec_sel`/`team_sel`/`source_sel`/`processing_sel` 未选）；haoxue 是 Next.js/Flux 单页应用，要按前端接口重做 |
-| 连不通 / 超时 / 403（网络或登录态） | freefarm、gtk、hdclone、hudbt、u2、shadow、sunny、piggo、tu88 | 域名、TLS、连接超时或跳登录页；整站暂停，不写"站上没有"的记录 |
-| 类目不符（不转影视） | haitang、kelu、vclib、nicept、ziran、soulvoice、musopia、dicmusic | 只有曲艺、有声书、音乐、电子书类目，影视内容不宜发 |
+| 权限待实证（旧"无权限"结论可能过时） | ~~agsvpt~~ | 2026-11-26 GET `upload.php` 返回完整上传表单、没有权限拒绝字样；2026-11-27 已启用并进白名单，见 7.8 |
+| 动态/JS 上传界面，当前程序不支持 | hddolby、mypt、ptt、rousi、ttg、haoxue、hdcity | 拿不到可解析的静态表单（自定义 JS、SPA、隐藏字段）；haoxue 是 Next.js/Flux 单页应用，要按前端接口重做。iloli、muxuege、fenghuang 2026-11-27 已落地并实发，见 7.9；aling 源站 500、hdu 全站过载、xingtan 类目不符，见下两组 |
+| 连不通 / 超时 / 403（网络或登录态） | freefarm、hdclone、hudbt、u2、shadow、sunny、piggo、tu88 | 域名、TLS、连接超时或跳登录页；整站暂停，不写"站上没有"的记录。gtk 已配按站代理、链路可达，尚未排队，见 7.9 |
+| 类目不符（不转影视） | haitang、kelu、vclib、nicept、ziran、soulvoice、musopia、dicmusic、xingtan | 只有曲艺、有声书、音乐、电子书类目；xingtan 是学术教材方向，影视无处归档 |
 | 已关站或换形态 | momentpt、ptlao、movie52、yinghua | 告别页、404 或域名解析失败 |
 | 其他站点程序，适配器未接入、未验证 | aither、alpharatio、animez、anthelion、azusa、beyondhd、bitporn、blutopia、brokenstones、byr、clearjav、empornium、exoticaz、fappaizuri、filelist、generationfree、gpw、haidan、happyfappy、hdspace、hdtorrents、huno、iptorrents、jpopsuki、lst、milkie、monika、mteam、myanonamouse、nebulance、oldtoons、opencd、orpheus、ourbits、ptneko、sjtu、sportscult、tlf、torrentleech、yemapt、yzyy、zhuque | Gazelle / Unit3D / Blu / XBTIT / custom / Discuz / TNode / YemaPT / Haidan 等程序，当前只有 NexusPHP 上传链路；未测过，不推断能不能发 |
-| 只停发种（暂停状态） | panda | 候选种子 24 小时没做种被系统删；站规严（主标题禁中文、简介六段顺序、至少 4 张图）；恢复前提是"上传→立刻挂回 qB 做种"闭环先跑通 |
+| 源站故障/过载 | aling、hdu | aling 全 500 空包（源站报错，非 WAF）；hdu 全站过载回 262 字节负载壳；待站点恢复后复测 |
 
 ### 7.4 "需补适配"站按缺口类型归类
 
@@ -291,10 +293,10 @@ reseed/coverage_io.rs  覆盖记录读写
 | tjupt（超大合集部分） | 站点后端处理大种子超时，空回包 | 25GB 左右单条能自动发；几百 GB 合集要拆小或换内容 |
 | qingwa（大合集） | `torrent_too_large`，站点要求走 `offers.php` 候选入口 | 记 `pending_offers`，候选表单不代填，等人去候选页提交 |
 | audiences | 判重依赖真实浏览器前台渲染 Turnstile；上传页是自定义 JS 表单 | 检索走 Kimi WebBridge；后台标签页明确报错，不盲发；表单选档未接 |
-| panda | 暂停发种；候选种子 24 小时未做种被系统删 | 等"上传→立刻挂回"闭环验证后再恢复 |
-| hddolby、mypt、ptt、rousi、ttg、haoxue 等动态表单站 | 静态表单拿不到，适配器形态不支持 | 只能记录站点形态，要按前端接口重做 |
-| 连不通站（freefarm、gtk、hdclone、hudbt、u2、shadow、sunny、piggo、tu88） | 网络/TLS/登录态不通 | 整站暂停，连通后再测 |
-| 类目不符站（haitang、kelu、vclib、nicept、ziran、soulvoice、musopia、dicmusic） | 没有影视类目 | 只做提示，不转种 |
+| panda | 2026-11-27 闭环已跑通并恢复发种 | 141840 上传后立刻挂回 qB 校验 100%、只挂单站 tracker，等站点审核；旧账 141276 已删，残留 `3f8ed774…` 待人工清理 |
+| hddolby、mypt、ptt、rousi、ttg、haoxue 等动态表单站 | 静态表单拿不到，适配器形态不支持 | 只能记录站点形态，要按前端接口重做；haoxue 2026-11-27 已走站点接口发一条，长期是否维护浏览器流程见 7.9 待办 |
+| 连不通站（freefarm、hdclone、hudbt、u2、shadow、sunny、piggo、tu88） | 网络/TLS/登录态不通 | 整站暂停，连通后再测；freefarm 迁 `farmm.cc`，是否切 URL 待人工（见 7.9） |
+| 类目不符站（haitang、kelu、vclib、nicept、ziran、soulvoice、musopia、dicmusic、xingtan） | 没有影视类目 | 只做提示，不转种 |
 | 已关站（momentpt、ptlao、movie52、yinghua） | 告别页/404/域名失效 | 暂停并记 `statusNote` |
 | 外文程序站（Gazelle/Unit3D/Blu/XBTIT/Discuz/TNode 等） | 适配器未接入 | 未验证，不在自动发种范围 |
 
@@ -308,7 +310,7 @@ reseed/coverage_io.rs  覆盖记录读写
 6. **itzmx**：`SITES.md` 2.1 标"可发（限小种）"；今日出现 HTTP 403（Coraline）和通用上传失败（War），403 是新现象，文档未记。
 7. **hdfans**：`SITES.md` 2.3 只记 287791、287874 已核实做种；今日 A Touch 被 G2 `medium_sel` 拦，选档缺口未记。
 8. **ptzone**：`SITES.md` 2.2 标"可发 190916"；今日详情页复核超时、`audiocodec_sel` 未选被拦，稳定性和选档缺口未记。
-9. **扫描站数**：`SITES.md` 第 1 节写"参与扫描 101 个"，配置实测 `enabled=true` 是 100 个。
+9. **扫描站数**：2026-11-27 配置实测 `enabled=true` 是 101 个，`SITES.md` 第 1 节已同步为 101。
 10. **cangbao 43994**：`SITES.md` 记审核图标已标"通过"；今日批次备注页面仍标"未审"，qB 已校验 100%。
 11. **lajidui**：`SITES.md` 2.4 记 4 条等审核、三项下拉已核对；今日 85084、85085 是安全集外误发，候选范围失守问题文档未记。
 12. **qilin**：`SITES.md` 2.5 行只记缺图/换图等复审；今日 480763 挂回被非目标 tracker 拒（`posted_unresolved`），挂回 tracker 别名识别缺口未记。
@@ -319,19 +321,35 @@ reseed/coverage_io.rs  覆盖记录读写
 
 - **未启用 47 站里只有 agsvpt 真能启用，已经启用**：`sourceSites.enabled=true` + 进 `autoReseedSites` + `team_sel` 兜底 Other=22；`gatecheck` 全绿（17 字段 / 9 下拉 / 7 项检查）；qB 里 806 条该站 tracker 种子可抄 passkey（tracker 主机 `tracker.agsvpt.cn`）。它不再是"权限待实证"，而是"已启用、等 546963 复审"。
 - **剩下 46 个未启用站的原因收窄成四类**：差登录 3（azusa、tlf、generationfree）；校外被拦 1（byr，CERNET IPv6 + wengine 网关 403）；已关站 1（yinghua）；其余是**框架不支持**——Unit3D 13 / custom 8 / Gazelle 6 / XBTIT 5 / Blu 2 / Haidan 1 / YemaPT 1 / Discuz 1 / TNode 1。代码 `search_capable()` 只对 NexusPHP 为真，配置加载阶段就过滤，改 `enabled` 没用。要解锁这批等于新增框架适配器，属新能力，不是配置活。
-- **整站暂停从 13 降到 8**：保留 hudbt、hdclone（无发布权限）、freefarm（迁 farmm.cc 没带 cookie）、u2（登录墙 + 两步验证）、shadow（cookie 失效）、sunny（改版 SPA 走 JSON 接口）、piggo（WAF + 会话失效）、tu88（cookie 失效 + 图形验证码）；摘掉 gtk 与四个已关站（momentpt、movie52、ptlao、yinghua）。
-- **gtk 的新卡点不是站点，是本机网络**：站点实测可用（登录态有效、上传页 37 字段、共享 tracker `t.myaltbox.com` 有 170 条可抄 passkey，`overrides.announceURL` 已填），但本机直连被掐（系统代理开着 7890，引擎按设计 `.no_proxy()` 直连）。要真正恢复自动发种，得先解决"这台机器能不能直连该站"，或者做一个**按站代理开关**（默认仍直连，只有明确配置的站走代理）。这是新增配置能力，本轮没做。
+- **整站暂停从 13 降到 8**：保留 hudbt、hdclone（无发布权限）、freefarm（迁 farmm.cc，域名是否切、cookie 怎么补待人工，见 7.9）、u2（登录墙 + 两步验证）、shadow（cookie 失效）、sunny（改版 SPA 走 JSON 接口）、piggo（WAF + 会话失效）、tu88（cookie 失效 + 图形验证码）；摘掉 gtk 与四个已关站（momentpt、movie52、ptlao、yinghua）。
+- **gtk 的卡点已用按站代理解决（2026-11-27）**：站点实测可用（登录态有效、共享 tracker `t.myaltbox.com` 有 170 条可抄 passkey，`overrides.announceURL` 已填）。配置 `overrides.proxy=http://127.0.0.1:7890` 后走代理链路可达，`gatecheck` 只剩内容侧阻断（MediaInfo 取不到、0 张可用图）；尚未排进自动发种队列。
 - **6 个"动态界面"站里只有 3 个真动态**：hddolby 其实标准静态表单（17 字段 / 9 下拉，只是要过 2FA）；hdcity 两段式（首段 5 字段，二段编辑页要真实上传后才拿得到）；mypt 时段禁传 + Cloudflare；rousi 是 SPA 需逆建种接口；ptt、ttg 是账号/板块没权限。
-- **7 个表单缺口站里 3 个已落地配置**：iloli（team Other=5）、muxuege（team Other=52 + 普通 AAC=6）、fenghuang（team other=1）；代码侧补了通用地区匹配、同名候选取首个、年代档匹配、分类联动行不计缺口。仍缺：xingtan 两级分类要浏览器驱动；haoxue（Next.js）、hdu（负载壳 + EASY-UPLOAD）是单页应用；aling 是源站自己 500，等恢复。
-- **熊猫仍暂停**：站上 141276 已删，qB 431 条该站种子全部 100%、另有 1 条 `3f8ed774…` 待清理；只读演练还缺图（0 < 4 张）、简介六段顺序、地区下拉、团队 Other 兜底。闭环最后一段（上传→下载站点种子→核对→挂回）必须真发一条才能验证，**要用户批准一条才动**。
+- **7 个表单缺口站里 3 个已落地配置并实发**：iloli（team Other=5）、muxuege（team Other=52 + 普通 AAC=6）、fenghuang（team other=1）；代码侧补了通用地区匹配、同名候选取首个、年代档匹配、分类联动行不计缺口。2026-11-27 复核：xingtan 无影视类目移出；haoxue 单页应用走站点接口发一条；hdu 全站过载；aling 源站 500。
+- **熊猫已闭环并恢复（2026-11-27）**：141840《Liar Game S01 2007 2160p WEB-DL》上传后立刻挂回 qB 校验 100%、只挂单站 tracker，7 图逐张 200、简介六段齐全，`pending_review` 等审核；已从 `reseedPausedSites` 移出并留在白名单。旧账 141276 已删，残留 `3f8ed774…` 待人工清理。
 
 下一步优先级（在前面的 5 件之后）：
 
-1. **扩失败分类，别把"站侧阻塞"当失败**：`no_permission` / `two_fa` / `challenge_gate` / `spa_api` 这四类现在是 `review_failed`，配了 `backoffHours` 会白白冷却一轮；要单列并从冷却统计里排除。验收：这四类演练结果在 `bsend audit` 里单列，不进冷却。
-2. **按站代理开关**：解锁 gtk 这类"只有过代理才通"的站，默认直连不变。
+1. ~~**扩失败分类，别把"站侧阻塞"当失败**~~（2026-11-27 已完成）：`no_permission` / `two_fa` / `challenge_gate` / `spa_api` 单列审计分类，不进失败冷却，覆盖记录落 `skipped` 中性终态，`bsend audit` 合计单列"站侧阻塞"行。
+2. ~~**按站代理开关**~~（2026-11-27 已完成）：`sourceSites[].overrides.proxy`，空/缺省直连行为不变，填了只有该站客户端走代理；gtk 已用上。
 3. **hdcity 二段编辑页字段 + rousi 建种接口**：都要真实浏览器，前者真发一条后核对，后者从懒加载包逆。
-4. **xingtan 两级分类驱动**：接上 `ajaxCategoryModes/SubMap/Keywords` 或走浏览器点树。
-5. **熊猫闭环**：等批一条真发。
+4. ~~**xingtan 两级分类驱动**~~（2026-11-27 复核取消）：该站无电影/剧集类目，影视无处归档，已移出白名单，不再投入适配。
+5. ~~**熊猫闭环**~~（2026-11-27 已完成）：141840 真发一条并挂回校验 100%，等站点审核收尾。
+
+### 7.9 2026-11-27 实测结论与新增待办
+
+**本轮实发四条**（详情页与 hash 见 `SITES.md` 2.8）：panda 141840、muxuege 59990、fenghuang 39168 由引擎发并挂回 qB 100%；haoxue 23943 走站点接口发，待审期下载接口 404，没挂回，审核通过后由回访挂回。
+
+**代码能力与口径变化**：
+
+- 发种前按 `descrOrder` 自动装配简介分段（只在配了该规则的站生效；源简介六段齐就逐字节不动；装配后自查段序、图数下限、MediaInfo，缺任一项阻断）。
+- 按站代理 `overrides.proxy`；站侧阻塞四类从失败口径拆出；`announceURL` 主机自动并入允许清单；上传被拒又解析不出原因时把回包正文落临时目录（已落地并有单测，还没有真实拒绝回包做实样核对，见 `OPERATIONS.md` 4.1）。
+
+**待办（还没决定怎么做）**：
+
+1. **手动发布要不要进审计**：手动 `bsend reseed --yes` 只往 `reseed-log.jsonl` 记，不往 `auto-audit.jsonl` 追加；按日限额、失败冷却的判定因此看不到这批手动发布。需要决定是否统一写进审计。
+2. **iloli 的 AC3 同名候选**：audiocodec_sel 里 AC3 有多个同名候选（`DD/AC3`、`DD/AC-3`、`AC3` 这类），引擎判歧义留空不猜，被 G2 拦。先读表单真实 value，在 `reseedRules.selectPicks` 钉住普通 AC3 档，或在代码里补音频选档映射。
+3. **望雪这类"引擎走不了、只能走站点接口/浏览器"的站**：要长期维护一套浏览器提交流程，还是每次人工处理，待决定。
+4. **freefarm 域名切换**：站点已迁 `farmm.cc`，新旧域名都能登录；是否把配置里的站点 URL 从 `pt.0ff.cc` 切到 `farmm.cc` 并补该域 cookie，待人工看两域名是否共享会话后决定。
 
 ## 8. 相关文档
 

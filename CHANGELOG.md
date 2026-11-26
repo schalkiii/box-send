@@ -7,12 +7,20 @@
 
 ### Changed
 
+- **2026-11-27 实发四条**：熊猫 [141840](https://pandapt.net/details.php?id=141840)（《Liar Game S01 2007 2160p WEB-DL》，源 ubits 187730，37.31GB / 13 文件，7 图逐张 200、简介六段齐全，qB hash `d60643d0b6eb0d1759ae0f6c318d72e3647a1ada`，本地构造 hash `2d562e251808618560714b9955986951cf407605`）；慕雪阁 [59990](https://pt.muxuege.org/details.php?id=59990)（《知否知否》4K WEB-DL H265 60fps，源 soulvoice 54682，119.58GB / 73 文件，源简介只剩 1 张豆瓣海报、抽帧补 3 张 pixhost 截图，qB hash 前缀 `76692871e8c0`）；凤凰 [39168](https://pt.521.best/details.php?id=39168)（《广告狂人 Mad Men S01-S07》，源 ptba 5565，95.10GB / 107 文件，简介 10 图，qB hash 前缀 `f8a8abe66511`）。熊猫、慕雪阁已挂回 qB 校验 100%、只挂目标站一个 tracker，当前 `pending_review` 等审核；凤凰已挂回 qB 做种（`reseeded`）。望雪 [23943](https://www.hxpt.org/torrent/23943)（《知否知否》）走站点接口真发，不是引擎发的；站点 info_hash `85edbcb1738078e8e9b71c7fe9728e3b53d6be5a`，pieces 指纹 `5804349c90ee57d3886f0c01d7b27f96bb6c9001`（与本地一致），73 个 mp4 / 128,401,739,986 字节，4 张 pixhost 图加独立海报；待审期下载接口回 404，当次没挂回 qB，审核通过后由回访挂回。
+- **发种前按 `descrOrder` 自动装配简介分段**：只在站点规则配了 `descrOrder` 时触发，没配的站简介一字不动。源简介六段齐全且顺序正确时原样保留；否则按规则顺序拼段（转载出处 / 制作说明 / 海报 / 简介 / info / 截图），装配后自查段序、图数下限、MediaInfo，缺任一项阻断不提交。熊猫 141840 是首条实测；历史 141276 那版是发到站上之后手工重排的。
+- **按站代理**：`sourceSites[].overrides.proxy` 填了代理地址后，只有这一个站的 HTTP 客户端走代理；空/缺省维持直连，行为不变。qB 下载器、CookieCloud、其他站仍直连；日志只记代理 host:port。gtk 已配 `http://127.0.0.1:7890`，走代理后只剩内容侧阻断，尚未排进自动发种队列。
+- **站侧阻塞四类从失败口径拆出**：`no_permission` / `two_fa` / `challenge_gate` / `spa_api` 独立审计分类，不进失败冷却，覆盖记录落 `skipped` 中性终态并在备注写“站侧阻塞 + 分类”，`bsend audit` 合计单列“站侧阻塞”行；老的 `review_failed` / `failed` 路径不变、仍进冷却。
+- **`announceURL` 主机自动并入允许清单**：配置填了 `overrides.announceURL` 后，该地址主机和页面域名、内置别名、手写 `announceHosts` 合并去重；识别已有做种和上传守卫两处消费同一份清单，没填 announceURL 的站行为不变。修的是 iloli 这类 announce 用独立域（`a.x-anime.cc`）的站：旧逻辑按站点域名匹配，既认不出已有做种，上传守卫又把配置主机当别站拦下。
+- **上传被拒又解析不出原因时，回包正文落临时目录**（已落地，单测覆盖；还没有用站点的真实拒绝回包核对过，首批实样等下一轮遇到）：写到系统临时目录 `bsend-upload-<站点id>-<时间戳>.html`，错误信息带路径和剥标签后的可见文字；能解析出具体原因的失败不写临时文件。
+- **配置名单更新（2026-11-27）**：自动发种白名单 45 站（新进 panda、iloli、muxuege、fenghuang；hdu、aling、xingtan、haoxue 复核后移出）；只停发种 35 站，熊猫已撤销发种暂停并留在白名单；整站暂停 8 站（hudbt、freefarm、hdclone、u2、shadow、sunny、piggo、tu88）。
+
 - **上传页先分类，再谈缺什么字段**：新增上传页类型分类器，把抓到的页面归成七类——静态表单 / 无权限 / 登录失效 / 2FA 中间页 / 人机验证拦截 / 单页应用走接口 / 无表单；判定顺序是登录墙 → 权限 → 静态表单 → 2FA → 验证拦截 → 单页应用 → 兜底，**静态表单优先**（页面挂了 WAF 探测脚本但真有表单的站不会被误判）。演练结果落盘到 `formcheck.json` 的 `errorKind`，中止报错带前缀并点名阻塞原因，人机验证/2FA 明确要求"前台真实浏览器、标签页不能最小化"，不再统一糊成"没有可解析的静态上传表单"。2026-11-26 实测 6 站：hddolby 静态表单（17 字段 / 9 下拉，只是要过 2FA）、hdcity 两段式、mypt 时段禁传 + Cloudflare、rousi 单页应用、ptt 与 ttg 是无发布权限。
 - **`formcheck` 和 `gatecheck` 用同一套逐站规则**：原先只有 `gatecheck` 加载 `reseedRules` 并跑 `selectPicks`，`formcheck` 不加载，同一个站两边结论打架（演练说 team 没选、门禁说已选）。现在两条链路共用一套规则，单测锁住结论一致。
 - **地区下拉、年代档、同名候选都有通用处理**：`source_sel` 在部分站是**地区**不是画质，通用填充按标题/副标题/简介里的地区词配对，配不上落其它；ubits、lajidui 原来写死在站点函数里的地区映射迁到这一层（行为不变）。`processing_sel` 遇到年份语义（如 2015=19）从标题→副标题→简介→MediaInfo 抽发行年份，抽不到留空不硬填。同名全等选项（muxuege 两个 AAC）按页面文档顺序取首个，不再一律判歧义留空。
 - **分类联动行不再误报缺口**：xingtan 这类按分类渲染 `mode_<分类id>` 隐藏行的站，隐藏行的空下拉不记缺口（实测 326 条不再误报）；但页面带 `type` 分类下拉的站（iloli、muxuege）不启用这条排除，分支行照常校验。
 - **启用 agsvpt（末日）**：`sourceSites.enabled=true` + 进 `autoReseedSites` + `team_sel` 兜底 Other=22。2026-11-26 浏览器实测上传页 200、登录身份 Schalkiii、表单完整无权限拒绝字样，`gatecheck` 全绿（17 字段 / 9 下拉 / 7 项检查）；qB 里 806 条该站 tracker 种子可抄 passkey，不用手填 announce。
-- **整站暂停从 13 站降到 8 站**：摘掉 gtk（实测可恢复：登录态有效、上传页 37 字段、共享 tracker `t.myaltbox.com` 有 170 条可抄 passkey，`overrides.announceURL` 已填）和四个已关站 momentpt、movie52、ptlao、yinghua。gtk 因本机直连不通（系统代理开着 7890 而引擎按设计直连）暂未排进自动发种队列。
+- **整站暂停从 13 站降到 8 站**：摘掉 gtk（实测可恢复：登录态有效、上传页 37 字段、共享 tracker `t.myaltbox.com` 有 170 条可抄 passkey，`overrides.announceURL` 已填）和四个已关站 momentpt、movie52、ptlao、yinghua。gtk 2026-11-27 配了按站代理后链路可达，只剩内容侧阻断，尚未排进自动发种队列（见上“按站代理”一条）。
 - **3 个表单缺口站配置落地**：iloli `team_sel`=Other 5、muxuege `team_sel`=Other 52 + 普通 AAC=6、fenghuang `team_sel`=other 1；xingtan 隐藏行修掉后不再报缺口；haoxue、hdu 确认是单页应用，aling 是源站自己回 500（不是 WAF），都只记形态不填假字段。
 
 - **站点可以声明“上传必须勾的标签”，没勾上就在提交前拦下**：原先标签只做能填就填、不检查必填；现在站点配置可以写必须勾选的标签（字段名、标签值、说明文案），构造完成后缺哪个就提交前拦下并点名缺哪个；代码层不预设任何站点“一律勾某标签”，AGSVPT 要用就在配置里声明 `tags[4][]` + `52`。2026-11-26 AGSVPT [546963](https://www.agsvpt.com/details.php?id=546963) 因“方舟计划种子未选方舟标签、缺少海报或截图”被拒，按此口径修复。标签值同时纠正：方舟是 **52**；**13 是杜比、51 是合并**，之前代码注释和记录把 13 当方舟，已改正。

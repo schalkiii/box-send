@@ -52,7 +52,7 @@ cargo build --release -p bsend-cli
 | `doc/ARCHITECTURE.md` | 为什么以 qB 为准、一条种子怎么发、辅种怎么判 |
 | `doc/OPERATIONS.md` | 数据文件、命令、巡检、排障顺序 |
 | `doc/TESTING.md` | 测试分层、跑法、假服务端和新用例放哪里 |
-| `doc/SITES.md` | 147 个站的清单、40 站白名单、卡住的站 |
+| `doc/SITES.md` | 147 个站的清单、45 站自动发种白名单、卡住的站 |
 | `doc/SITE-DEBUG.md` | 新站怎么接、上传被拒怎么查、单站结论 |
 | `doc/ROADMAP.md` | 已经做完什么、还在做什么、有什么风险 |
 | `CHANGELOG.md` | 用户能感觉到的变化 |

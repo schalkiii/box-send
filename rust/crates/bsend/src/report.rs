@@ -564,6 +564,11 @@ pub struct SiteAuditCounts {
     pub review_rejected: usize,
     /// 站上已发布、但下载/挂回 qB 失败（`posted_unresolved`）：待人工补挂，不是失败
     pub posted_unresolved: usize,
+    /// 站侧阻塞四类（不是失败，不进冷却）：无发布权限 / 要过 2FA / 人机验证 / 纯前端界面
+    pub no_permission: usize,
+    pub two_fa: usize,
+    pub challenge_gate: usize,
+    pub spa_api: usize,
     /// Latest record timestamp (Unix sec) for this site/day; 0 when empty.
     pub last_at: i64,
 }
@@ -595,6 +600,11 @@ pub struct AuditTotals {
     pub review_rejected: usize,
     /// 站上已发布、但 qB 没挂回（`posted_unresolved`）
     pub posted_unresolved: usize,
+    /// 站侧阻塞四类（不是失败，不进冷却）：无发布权限 / 要过 2FA / 人机验证 / 纯前端界面
+    pub no_permission: usize,
+    pub two_fa: usize,
+    pub challenge_gate: usize,
+    pub spa_api: usize,
     /// Records parsed and counted into the buckets above.
     pub records: usize,
     /// Lines that failed to parse or missed required fields.
@@ -620,6 +630,8 @@ pub struct AuditReport {
 /// - `pending_offers` → 待走候选入口（等人工提交候选）
 /// - `pending_review` / `review_rejected` → 等站点审核 / 审核不通过（等回访或人工处理）
 /// - `posted_unresolved` → 站上已发、qB 没挂回（等人工补挂）
+/// - `no_permission` / `two_fa` / `challenge_gate` / `spa_api` → 站侧阻塞（站点侧条件，
+///   不是失败、不进冷却；合计里单列一行，不混进失败率）
 /// - anything else → `other`
 fn audit_bucket(result: &str) -> &'static str {
     match result {
@@ -632,6 +644,7 @@ fn audit_bucket(result: &str) -> &'static str {
         "pending_review" => "pending_review",
         "review_rejected" => "review_rejected",
         "posted_unresolved" => "posted_unresolved",
+        "no_permission" | "two_fa" | "challenge_gate" | "spa_api" => "site_blocked",
         _ => "other",
     }
 }
@@ -717,6 +730,13 @@ pub fn audit_daily(text: &str, now: i64, days: usize, site: Option<&str>) -> Aud
             "pending_review" => counts.pending_review += 1,
             "review_rejected" => counts.review_rejected += 1,
             "posted_unresolved" => counts.posted_unresolved += 1,
+            "site_blocked" => match result {
+                "no_permission" => counts.no_permission += 1,
+                "two_fa" => counts.two_fa += 1,
+                "challenge_gate" => counts.challenge_gate += 1,
+                "spa_api" => counts.spa_api += 1,
+                _ => {}
+            },
             _ => counts.other += 1,
         }
         if at > counts.last_at {
@@ -732,6 +752,13 @@ pub fn audit_daily(text: &str, now: i64, days: usize, site: Option<&str>) -> Aud
             "pending_review" => totals.pending_review += 1,
             "review_rejected" => totals.review_rejected += 1,
             "posted_unresolved" => totals.posted_unresolved += 1,
+            "site_blocked" => match result {
+                "no_permission" => totals.no_permission += 1,
+                "two_fa" => totals.two_fa += 1,
+                "challenge_gate" => totals.challenge_gate += 1,
+                "spa_api" => totals.spa_api += 1,
+                _ => {}
+            },
             _ => totals.other += 1,
         }
         totals.records += 1;
@@ -762,6 +789,7 @@ mod tests {
             announce_url: None,
             poster_field: None,
             screenshot_field: None,
+            proxy: None,
         }
     }
 
@@ -1196,6 +1224,34 @@ mod tests {
         assert_eq!(c.other, 1, "gone_from_site 暂不在日审计桶里，不能丢");
         assert_eq!(r.totals.records, 14);
         assert_eq!(r.totals.posted_unresolved, 1);
+    }
+
+    #[test]
+    fn audit_blocked_kinds_are_counted_separately_not_as_failure() {
+        // 站侧阻塞四类单列计数，不混进失败桶；真实 failed / review_failed 仍记失败。
+        let now = 1_763_890_000;
+        let text = [
+            audit_line(now, "a", "no_permission"),
+            audit_line(now, "a", "two_fa"),
+            audit_line(now, "a", "challenge_gate"),
+            audit_line(now, "a", "spa_api"),
+            audit_line(now, "a", "failed"),
+            audit_line(now, "a", "review_failed"),
+        ]
+        .join("\n");
+        let r = audit_daily(&text, now, 7, None);
+        let c = &r.days[0].by_site["a"];
+        assert_eq!(c.no_permission, 1);
+        assert_eq!(c.two_fa, 1);
+        assert_eq!(c.challenge_gate, 1);
+        assert_eq!(c.spa_api, 1);
+        assert_eq!(c.failed, 2, "只有真实失败进失败桶");
+        assert_eq!(r.totals.no_permission, 1);
+        assert_eq!(r.totals.two_fa, 1);
+        assert_eq!(r.totals.challenge_gate, 1);
+        assert_eq!(r.totals.spa_api, 1);
+        assert_eq!(r.totals.failed, 2);
+        assert_eq!(r.totals.records, 6);
     }
 
     #[test]

@@ -2038,6 +2038,7 @@ mod tests {
                     announce_url: None,
                     poster_field: None,
                     screenshot_field: None,
+                    proxy: None,
                 },
                 crate::config::SiteConf {
                     id: "cyanbug".into(),
@@ -2050,6 +2051,7 @@ mod tests {
                     announce_url: None,
                     poster_field: None,
                     screenshot_field: None,
+                    proxy: None,
                 },
             ],
             coverage: crate::config::CoverageSettings::default(),

@@ -15,7 +15,7 @@
 //! 逐站 overrides（quality 下拉/mode 字段/两步上传）不在 v1 范围，遇到特殊站会
 //! 在预检里报「表单不认识的必填项」而不是硬着头皮提交。
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
 
@@ -1473,6 +1473,42 @@ fn div_inner(html: &str, id: &str) -> Option<String> {
 /// 字节序列 ASCII 大小写不敏感前缀匹配（i 必须在字符边界上：只在 ASCII 标签位调用）
 fn tag_at(b: &[u8], i: usize, pat: &[u8]) -> bool {
     i + pat.len() <= b.len() && b[i..i + pat.len()].eq_ignore_ascii_case(pat)
+}
+
+/// 找 `<div>` 上 `id` 或 `class` 等于 `key` 的元素内层 HTML。
+/// NexusPHP 错误框有的站写 id、有的写 class，两种都认；认不出返回 None。
+fn div_inner_by_key(html: &str, key: &str) -> Option<String> {
+    div_inner(html, key).or_else(|| div_class_inner(html, key))
+}
+
+/// 按 `class="key"` / `class='key'` 定位 `<div>` 并取内层 HTML。
+fn div_class_inner(html: &str, key: &str) -> Option<String> {
+    let lower = html.to_ascii_lowercase();
+    for pat in [format!("class=\"{key}\""), format!("class='{key}'")] {
+        let Some(p) = lower.find(&pat.to_ascii_lowercase()) else {
+            continue;
+        };
+        let open_start = html[..p].rfind("<div")?;
+        let content_start = html[open_start..].find('>').map(|i| open_start + i + 1)?;
+        let b = html.as_bytes();
+        let mut depth = 1usize;
+        let mut i = content_start;
+        while i < b.len() {
+            if tag_at(b, i, b"<div") {
+                depth += 1;
+                i += 4;
+            } else if tag_at(b, i, b"</div>") {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(html[content_start..i].to_string());
+                }
+                i += 6;
+            } else {
+                i += 1;
+            }
+        }
+    }
+    None
 }
 
 // ---------------- 目标站上传表单 ----------------
@@ -3485,6 +3521,20 @@ pub fn submitted_descr<'a>(prep: &'a PreparedUpload, fallback: &'a str) -> &'a s
     fallback
 }
 
+/// 按站点 `descrOrder` 装配简介所需的源站上下文。
+/// 只有规则配了分段顺序的站才用得到；其余站传 `None`，简介与旧版逐字节一致。
+#[derive(Debug, Clone)]
+pub struct DescrOrderCtx {
+    /// 源站名（【转载出处】段正文）
+    pub source_label: String,
+    /// 源详情页 URL
+    pub source_url: String,
+    /// 目标站名（制作说明取不到组名时兜底）
+    pub target_label: String,
+    /// 发布要素（标题/简介/MediaInfo 等）
+    pub info: ReleaseInfo,
+}
+
 /// 已知在站点侧打不开的图床：本机探测可能 200，但站点服务器会判死图。
 /// 这些域名即使探测可达也直接剪掉，避免“本机预检通过、站点审核退回”。
 fn blocked_image_host(src: &str, site_url: &str) -> bool {
@@ -3760,7 +3810,11 @@ fn prefix_selected(fields: &[Field], page: &str, prefix: &str) -> bool {
 /// 且 value 必须是该站表单真实存在的选项（防旧规则在新版表单上写无效值）。
 /// `multiPicks` 按页面标签勾选复选框/多选组；`requiredFields` 校验必填前缀，
 /// 未选即记 `required_gaps`，由门禁拒绝发布（不带空值 POST）。
-pub fn apply_site_rules(prep: &mut PreparedUpload, rules: &crate::gates::SiteRules) {
+pub fn apply_site_rules(
+    prep: &mut PreparedUpload,
+    rules: &crate::gates::SiteRules,
+    ctx: Option<&DescrOrderCtx>,
+) {
     // 剪死图是硬规则：不分站点、不看配置。站点官方预审逐图校验，死链会直接退回整条种子。
     if let Some(field) = ["descr", "release_desc", "description", "content"]
         .iter()
@@ -3785,6 +3839,8 @@ pub fn apply_site_rules(prep: &mut PreparedUpload, rules: &crate::gates::SiteRul
         }
     }
     apply_site_rules_tail(prep, rules);
+    // 配了 descrOrder 的站：按站点段标题装配简介（没配的站这里直接返回，一字不动）。
+    assemble_descr_by_order(prep, rules, ctx);
     // 剪死图 / 转 BBCode 之后再抽一次独立图片字段：尽量只提交最终简介里真正留下的图。
     let descr = submitted_descr(prep, "").to_string();
     fill_image_fields(
@@ -3914,6 +3970,231 @@ fn apply_site_rules_tail(prep: &mut PreparedUpload, rules: &crate::gates::SiteRu
     }
 }
 
+/// 站点规则配了 `descrOrder` 时，把简介按站点要求的段标题重新装配。
+/// 没配该规则、或上下文缺失时直接返回，简介一字不动。
+/// 装配前死图已经在 `apply_site_rules` 开头剪掉；这里只复用留下的可用图。
+fn assemble_descr_by_order(
+    prep: &mut PreparedUpload,
+    rules: &crate::gates::SiteRules,
+    ctx: Option<&DescrOrderCtx>,
+) {
+    if rules.descr_order.is_empty() {
+        return;
+    }
+    let Some(ctx) = ctx else {
+        return;
+    };
+    let Some(field) = ["descr", "release_desc", "description", "content"]
+        .iter()
+        .find(|f| field_lookup(&prep.fields, f).is_some())
+        .copied()
+    else {
+        return;
+    };
+    let original = field_lookup(&prep.fields, field).unwrap_or("").to_string();
+
+    // 源简介已经六段齐全且顺序正确：原样保留，不重复包段（幂等）。
+    let (missing, ooo) = crate::gates::descr_order_gaps(&original, &rules.descr_order);
+    if missing.is_empty() && ooo.is_empty() {
+        return;
+    }
+
+    // 图片在剪死图之后收集：装配不往段里塞死图。
+    let images = image_urls_from_descr(&original);
+    let poster = prep
+        .poster_field
+        .as_deref()
+        .and_then(|f| field_lookup(&prep.fields, f))
+        .filter(|v| !v.trim().is_empty())
+        .map(str::to_string)
+        .or_else(|| images.first().cloned());
+    let shots: Vec<String> = match poster.as_deref() {
+        Some(p) => images.iter().filter(|u| u.as_str() != p).cloned().collect(),
+        None => images.clone(),
+    };
+
+    let plain = descr_plain_text(&original, &rules.descr_order);
+    let intro = if plain.is_empty() {
+        ctx.info.name.clone()
+    } else {
+        plain
+    };
+
+    let media = prep
+        .fields
+        .iter()
+        .find(|(n, _)| {
+            ["technical_info", "media_info", "media_bdinfo", "mediainfo"].contains(&n.as_str())
+        })
+        .map(|(_, v)| v.clone())
+        .unwrap_or_else(|| ctx.info.mediainfo.clone());
+
+    // 发布组从标题末尾取；取不到就写目标站名，不留空段。
+    let group =
+        release_group_from_title(&ctx.info.name).unwrap_or_else(|| ctx.target_label.clone());
+
+    // 输出格式跟随原简介：源是 HTML 就用 `<img>`，否则用 BBCode `[img]`。
+    let html_like = original.to_ascii_lowercase().contains("<img");
+    let render_img = |u: &str| {
+        if html_like {
+            format!("<img src=\"{u}\" />")
+        } else {
+            format!("[img]{u}[/img]")
+        }
+    };
+
+    let mut sections: Vec<(String, String)> = Vec::new();
+    for label in &rules.descr_order {
+        let body = match label.as_str() {
+            "【转载出处】" => {
+                if ctx.source_url.trim().is_empty() {
+                    ctx.source_label.clone()
+                } else {
+                    format!("{} {}", ctx.source_label, ctx.source_url)
+                }
+            }
+            "【制作说明】" => group.clone(),
+            "【海报】" => poster.as_deref().map(render_img).unwrap_or_default(),
+            "【简介】" => intro.clone(),
+            "【info】" | "【MediaInfo】" => media.clone(),
+            "【截图】" => shots
+                .iter()
+                .map(|u| render_img(u))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            _ => String::new(),
+        };
+        sections.push((label.clone(), body.trim().to_string()));
+    }
+
+    let assembled = render_ordered_sections(&sections);
+
+    // 装配后自查：段齐全且顺序对、图数达站点下限、MediaInfo 不缺。
+    let (m2, o2) = crate::gates::descr_order_gaps(&assembled, &rules.descr_order);
+    let img_n = crate::gates::image_count(&assembled);
+    let floor = rules.require_images.unwrap_or(0);
+    let media_ok = !rules.require_mediainfo() || !media.trim().is_empty();
+
+    let mut gaps: Vec<String> = Vec::new();
+    if !m2.is_empty() {
+        gaps.push(format!("简介分段缺标记：{}", m2.join("/")));
+    }
+    if !o2.is_empty() {
+        gaps.push(format!("简介分段顺序错误：{}", o2.join("/")));
+    }
+    if img_n < floor {
+        gaps.push(format!(
+            "简介图片仅 {img_n} 张 < 站点要求 {floor}（先补可达海报/截图）"
+        ));
+    }
+    if !media_ok {
+        gaps.push("简介/独立栏 MediaInfo 为空：先补技术信息再发布".into());
+    }
+
+    if gaps.is_empty() {
+        set_field(&mut prep.fields, field, assembled);
+        prep.select_notes
+            .push("简介：按站点 descrOrder 装配分段".into());
+    } else {
+        // 不带着缺段的简介提交：保留原简介，把自查缺口落到阻断清单。
+        prep.required_gaps
+            .push(format!("简介分段装配未通过自查：{}", gaps.join("；")));
+    }
+}
+
+/// 把「段标题 → 正文」按规则顺序拼成最终简介；空正文只留标题行。
+fn render_ordered_sections(sections: &[(String, String)]) -> String {
+    let mut out = String::new();
+    for (label, body) in sections {
+        if !out.is_empty() {
+            out.push_str("\n\n");
+        }
+        out.push_str(label);
+        if !body.is_empty() {
+            out.push('\n');
+            out.push_str(body);
+        }
+    }
+    out
+}
+
+/// 取简介纯文本：去掉图片（HTML `<img>` / BBCode `[img]`）和已有段标题标记，
+/// 其余 HTML 标签剥成文字，空行折叠。
+fn descr_plain_text(descr: &str, order: &[String]) -> String {
+    let mut s = descr.to_string();
+    // 删 BBCode 图片
+    loop {
+        let lower = s.to_ascii_lowercase();
+        let Some(start) = lower.find("[img]") else {
+            break;
+        };
+        let Some(close) = lower[start..].find("[/img]") else {
+            break;
+        };
+        s.replace_range(start..start + close + "[/img]".len(), "");
+    }
+    // 删 HTML `<img ...>`
+    let lower = s.to_ascii_lowercase();
+    let mut i = 0;
+    let mut cleaned = String::new();
+    while let Some(p) = lower[i..].find("<img") {
+        cleaned.push_str(&s[i..i + p]);
+        let end = lower[i + p..]
+            .find('>')
+            .map(|j| i + p + j + 1)
+            .unwrap_or(s.len());
+        i = end;
+    }
+    cleaned.push_str(&s[i..]);
+    s = cleaned;
+    for label in order {
+        s = s.replace(label, "");
+    }
+    s = strip_html_tags(&s);
+    let lines: Vec<String> = s
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(|l| l.to_string())
+        .collect();
+    lines.join("\n")
+}
+
+/// 剥掉其余 HTML 标签（属性不保留），文本原样留下。
+fn strip_html_tags(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut in_tag = false;
+    for ch in s.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => out.push(ch),
+            _ => {}
+        }
+    }
+    out
+}
+
+/// 从发布名末尾取制作组：最后一个 `-` 后的词，排除编码/片源/分辨率等技术词。
+fn release_group_from_title(name: &str) -> Option<String> {
+    let last = name.rsplit('-').next()?.trim_matches('.');
+    if last.is_empty() || last.chars().any(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    const BAD: &[&str] = &[
+        "WEB-DL", "WEBRip", "BluRay", "Blu-ray", "REMUX", "HDTV", "BDRip", "BRRip", "x264", "x265",
+        "H264", "H265", "AVC", "HEVC", "AAC", "DD+", "DDP", "TrueHD", "DTS", "1080p", "720p",
+        "2160p", "4K",
+    ];
+    if BAD.iter().any(|b| last.eq_ignore_ascii_case(b)) {
+        return None;
+    }
+    if !(2..=12).contains(&last.chars().count()) {
+        return None;
+    }
+    Some(last.to_string())
+}
+
 /// qB 中与内容分片一致的本地成员：(hash, savePath, category)
 type MatchedMember = (String, String, Option<String>);
 /// 判重复核产物：目标站 .torrent 字节 + 本地同分片成员
@@ -3994,7 +4275,8 @@ fn detail_from_download(download_url: &str, base: &Url) -> Option<String> {
 }
 
 /// 上传页归类后的中止文案；静态表单返回 None，继续走字段构造。
-/// 前缀（`[no-permission]` 等）会被 drill_upload_form 解析成 error_kind。
+/// 前缀（`[no_permission]` / `[two_fa]` / `[challenge_gate]` / `[spa_api]` 等）
+/// 会被 drill_upload_form 解析成 error_kind，也由 `site_block_kind` 识别为站侧阻塞分类。
 fn gate_error_message(
     kind: UploadPageKind,
     site_id: &str,
@@ -4006,24 +4288,44 @@ fn gate_error_message(
         UploadPageKind::NoPermission => {
             let kw = permission_keyword(html).unwrap_or("权限不足");
             Some(format!(
-                "[no-permission] 该账号在 {site_id} 无发布权限（页面提示含「{kw}」）；本站条目自动发种中止，待人工确认权限后再处理：{form_url}"
+                "[no_permission] 该账号在 {site_id} 无发布权限（页面提示含「{kw}」）；本站条目自动发种中止，待人工确认权限后再处理：{form_url}"
             ))
         }
         UploadPageKind::LoginExpired => {
             Some(format!("[login] 登录态失效（上传页是登录表单）：{form_url}"))
         }
         UploadPageKind::TwoFa => Some(format!(
-            "[two-fa] 站点要求先过二次验证（页面脚本跳到 2FA 中间页）：请在前台真实浏览器完成二次验证，会话带过来后再自动发种；纯 HTTP 复现不了 2FA：{form_url}"
+            "[two_fa] 站点要求先过二次验证（页面脚本跳到 2FA 中间页）：请在前台真实浏览器完成二次验证，会话带过来后再自动发种；纯 HTTP 复现不了 2FA：{form_url}"
         )),
         UploadPageKind::ChallengeGate => Some(format!(
-            "[challenge] 站点被人机验证/区域时段拦截：请在前台真实浏览器打开 {form_url} 人工过一次验证（标签页必须在前台，不能最小化或切到后台）；纯 HTTP 复现不了验证结果，当前不自动发种。"
+            "[challenge_gate] 站点被人机验证/区域时段拦截：请在前台真实浏览器打开 {form_url} 人工过一次验证（标签页必须在前台，不能最小化或切到后台）；纯 HTTP 复现不了验证结果，当前不自动发种。"
         )),
         UploadPageKind::SpaApi => Some(format!(
-            "[spa] 站点上传界面是纯前端 SPA/JSON API（{form_url}）：表单控件由网页 JS 渲染，纯 HTTP 拿不到字段名与提交接口；自动发种暂不支持。缺：上传表单控件定义、提交接口地址、浏览器会话鉴权。"
+            "[spa_api] 站点上传界面是纯前端 SPA/JSON API（{form_url}）：表单控件由网页 JS 渲染，纯 HTTP 拿不到字段名与提交接口；自动发种暂不支持。缺：上传表单控件定义、提交接口地址、浏览器会话鉴权。"
         )),
         UploadPageKind::NoForm => Some(format!(
             "[no-form] 目标站没有可解析的静态上传表单（JS/自定义上传界面，或 cookie 失效），v1 暂不支持：{form_url}"
         )),
+    }
+}
+
+/// 站侧阻塞四类的审计分类名。审阅/发布返回的错误消息带 `[token]` 前缀时，
+/// 这里把它映射成独立的审计 result（与 `formcheck.json` 的 `errorKind` 同名）：
+/// `no_permission` / `two_fa` / `challenge_gate` / `spa_api`。
+///
+/// 这四类是站点侧条件（没权限、要过 2FA、被人机验证拦、纯前端界面），不是我们发错了：
+/// 不进失败冷却、覆盖记录不落 `failed`、程序不自动重发。其余前缀（登录失效、
+/// 认不出的表单、网络错误）返回 None，仍走原来的失败路径。
+pub fn site_block_kind(error: &str) -> Option<&'static str> {
+    let token = error
+        .strip_prefix('[')
+        .and_then(|rest| rest.split(']').next())?;
+    match token {
+        "no_permission" => Some("no_permission"),
+        "two_fa" => Some("two_fa"),
+        "challenge_gate" => Some("challenge_gate"),
+        "spa_api" => Some("spa_api"),
+        _ => None,
     }
 }
 
@@ -4149,6 +4451,52 @@ fn dump_upload_response(
     let _ = std::fs::write(&file, body);
 }
 
+/// 上传被拒且没解析出具体原因时，把回包正文落到系统临时目录，供事后查拒因。
+/// 文件名 `bsend-upload-<站点id>-<毫秒时间戳>.html`，UTF-8 原样写。
+/// 写盘失败静默忽略（不把原本的错误吃掉）；成功才返回绝对路径。
+fn dump_upload_body_to_temp(site_id: &str, body: &str) -> Option<PathBuf> {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_millis();
+    let mut file = std::env::temp_dir();
+    file.push(format!("bsend-upload-{site_id}-{stamp}.html"));
+    std::fs::write(&file, body.as_bytes()).ok()?;
+    Some(file)
+}
+
+/// 剥掉 HTML 标签、折叠空白后取前 max 个字符的可见文字；剥不出返回空串。
+fn visible_text_snippet(html: &str, max: usize) -> String {
+    let collapsed: String = strip_tags(html)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    collapsed.chars().take(max).collect()
+}
+
+/// 这些是站点没给出明确拒因的兜底结论：回包正文另落临时目录备查。
+fn is_generic_upload_error(msg: &str) -> bool {
+    msg.starts_with("站点拒绝（回包未展开具体原因）：")
+        || (msg.starts_with("HTTP ") && msg.contains("未识别的返回"))
+}
+
+/// 兜底拒因：把回包正文落临时目录，并在错误信息里附路径和一小段可见文字。
+/// 已能解析出具体原因的错误不走这里，文案与行为不变；写盘失败静默忽略。
+fn augment_upload_error_with_dump(site_id: &str, body: &str, msg: &str) -> String {
+    if !is_generic_upload_error(msg) {
+        return msg.to_string();
+    }
+    let Some(path) = dump_upload_body_to_temp(site_id, body) else {
+        return msg.to_string();
+    };
+    let snippet = visible_text_snippet(body, 200);
+    if snippet.is_empty() {
+        format!("{msg}；回包已存 {}", path.display())
+    } else {
+        format!("{msg}；回包已存 {}；可见文字：{snippet}", path.display())
+    }
+}
+
 /// 用已构造好的字段提交（`prepare_upload` 的产出）。官方预审、审阅与
 /// 正式转种共用同一份字段，永不漂移。
 pub fn submit_upload(
@@ -4252,6 +4600,7 @@ pub fn submit_upload(
             });
         }
         last_err = extract_upload_error(&body, resp.status);
+        last_err = augment_upload_error_with_dump(&target.site_id, &body, &last_err);
         if looks_like_lost_post(&last_err) && attempt == 0 {
             thread::sleep(Duration::from_secs(2));
             continue; // 同字节重投
@@ -4279,7 +4628,7 @@ fn extract_upload_error(body: &str, status: u16) -> String {
             "HTTP {status} 空回包（站点后端没有返回内容，通常是处理超时或崩溃；本次未确认发布）"
         );
     }
-    if let Some(t) = div_inner(body, "errorbox") {
+    if let Some(t) = div_inner_by_key(body, "errorbox") {
         let t = strip_tags(&t).trim().to_string();
         if !t.is_empty() {
             return t;
@@ -4349,7 +4698,7 @@ fn exist_marker(final_url: &str, body: &str) -> Option<&'static str> {
     ];
     // 错误框里的明确重复措辞优先：有的站会把错误框和上传表单一起返回（重填页），
     // 不能因为看到 multipart 就忽略站点说过的「已存在」。
-    if let Some(boxed) = div_inner(body, "errorbox") {
+    if let Some(boxed) = div_inner_by_key(body, "errorbox") {
         if let Some(m) = MARKERS.iter().find(|m| boxed.contains(**m)) {
             return Some(*m);
         }
@@ -4545,7 +4894,13 @@ pub fn review_reseed(
     let rules = cfg.coverage.rules_for(&req.target_site);
     let mut prepared = prepare_upload(&rel.tgt, &rel.info)?;
     prepare_category_fields(&rel.tgt, &mut prepared, &rel.info, &rules)?;
-    apply_site_rules(&mut prepared, &rules);
+    let ctx = DescrOrderCtx {
+        source_label: rel.src.site_name.clone(),
+        source_url: req.source_url.clone(),
+        target_label: rel.tgt.site_name.clone(),
+        info: rel.info.clone(),
+    };
+    apply_site_rules(&mut prepared, &rules, Some(&ctx));
     // 必填缺口 / 图片全剪这类本地硬阻断要计入预检结论，不能只在字段列表下面提示。
     for gap in &prepared.required_gaps {
         rel.preflight.errors.push(gap.clone());
@@ -5127,7 +5482,8 @@ pub struct FormDrill {
     pub site_name: String,
     /// 表单没拿到/构造失败的原因（登录墙、限流、无上传权限…）
     pub error: Option<String>,
-    /// 失败类别：`no-permission` / `login` / `challenge` / `spa` / `no-form` / `network`
+    /// 失败类别：`no_permission` / `two_fa` / `challenge_gate` / `spa_api` /
+    /// `login` / `no-form` / `network`
     pub error_kind: Option<String>,
     pub field_count: usize,
     pub select_count: usize,
@@ -5233,7 +5589,7 @@ pub fn drill_upload_form_with_rules(
     match prepare_upload(target, &info) {
         Ok(mut prep) => {
             let _ = prepare_category_fields(target, &mut prep, &info, rules);
-            apply_site_rules(&mut prep, rules);
+            apply_site_rules(&mut prep, rules, None);
             analyze_form(&target.site_id, &target.site_name, &prep, &info)
         }
         Err(e) => {
@@ -6122,6 +6478,8 @@ fn prepare_released(
 ) -> Result<Released> {
     let src = adapter_for(cfg, &req.source_site)?;
     let tgt = adapter_for(cfg, &req.target_site)?;
+    src.log_proxy(log);
+    tgt.log_proxy(log);
 
     // ---- 1 源站详情页 → 发布要素 ----
     log(&format!("拉源站详情页：{}", req.source_url));
@@ -6264,6 +6622,7 @@ pub fn pull_published(
     log: &mut dyn FnMut(&str),
 ) -> Result<(CoverageStatus, String)> {
     let tgt = adapter_for(cfg, site_id)?;
+    tgt.log_proxy(log);
     log(&format!("拉取目标种：{detail_url}"));
     let page = tgt.fetch_torrent_page(detail_url)?;
     let tdata = tgt.download_torrent(&page, detail_url)?;
@@ -6615,7 +6974,13 @@ fn run_reseed_inner(
             let rules = cfg.coverage.rules_for(&req.target_site);
             let mut prep = prepare_upload(&tgt, &info)?;
             prepare_category_fields(&tgt, &mut prep, &info, &rules)?;
-            apply_site_rules(&mut prep, &rules);
+            let ctx = DescrOrderCtx {
+                source_label: req.source_site.clone(),
+                source_url: req.source_url.clone(),
+                target_label: tgt.site_name.clone(),
+                info: info.clone(),
+            };
+            apply_site_rules(&mut prep, &rules, Some(&ctx));
             if pre_audit_supported(&prep.form_html) {
                 log("调用站点官方预审（LuckAudit）…");
                 match run_pre_audit(&tgt, &info, &prep) {
@@ -7631,9 +7996,13 @@ pub(crate) fn adapter_for(cfg: &Config, site_id: &str) -> Result<NexusPhp> {
     .with_context(|| format!("站点配置不合法：{}", s.id))?;
     a.user_agent = cfg.user_agent.clone();
     a.upload_timeout_sec = cfg.coverage.rules_for(&s.id).upload_timeout_sec();
-    Ok(a.with_announce_hosts(s.announce_hosts.clone())
+    let a = a
+        .with_announce_hosts(s.announce_hosts.clone())
         .with_announce_url(s.announce_url.clone())
-        .with_image_fields(s.poster_field.clone(), s.screenshot_field.clone()))
+        .with_image_fields(s.poster_field.clone(), s.screenshot_field.clone())
+        .with_proxy(s.proxy.as_deref())
+        .with_context(|| format!("站点 {site_id} 代理配置不合法"))?;
+    Ok(a)
 }
 
 /// CLI/调试用：把上传字段清单展开成人能读的行
@@ -8116,6 +8485,45 @@ Frame rate : 25</pre>
     }
 
     #[test]
+    fn generic_upload_error_dumps_body_to_temp_and_appends_path() {
+        // iloli 实测那类通用错误框：没有可识别的错误框 class，只剩一句笼统「上传失败」。
+        let body = r#"<html><head><title>上传失败！ - Powered by NexusPHP</title></head>
+<body><p>上传失败！</p></body></html>"#;
+        let msg = extract_upload_error(body, 200);
+        assert!(is_generic_upload_error(&msg), "{msg}");
+
+        let augmented = augment_upload_error_with_dump("iloli", body, &msg);
+        assert!(augmented.contains("回包已存"), "{augmented}");
+
+        let after = augmented.split("回包已存 ").nth(1).unwrap();
+        let path: String = after.split('；').next().unwrap().trim().to_string();
+        let file = PathBuf::from(&path);
+        assert!(file.exists(), "落盘文件不存在：{path}");
+        let saved = std::fs::read_to_string(&file).expect("落盘文件应可读");
+        assert_eq!(saved, body);
+        assert!(augmented.contains("上传失败"), "{augmented}");
+
+        let _ = std::fs::remove_file(&file);
+    }
+
+    #[test]
+    fn concrete_upload_error_is_not_dumped_and_message_unchanged() {
+        // 站点已给出明确拒因（缺必填项）：不走落盘分支，文案与改动前一致。
+        let body = r#"<html><body><div class="error">有项目没有填写，请检查后重新提交</div></body></html>"#;
+        let msg = extract_upload_error(body, 200);
+        assert!(!is_generic_upload_error(&msg), "{msg}");
+        let augmented = augment_upload_error_with_dump("iloli", body, &msg);
+        assert_eq!(augmented, msg);
+        assert!(!augmented.contains("回包已存"));
+    }
+
+    #[test]
+    fn errorbox_by_class_is_recognized_like_id() {
+        let body = r#"<div class="errorbox">请填写必填项目</div>"#;
+        assert_eq!(extract_upload_error(body, 200), "请填写必填项目");
+    }
+
+    #[test]
     fn find_links() {
         assert_eq!(find_tt("xx tt4823720 yy"), Some("tt4823720".into()));
         assert_eq!(
@@ -8340,7 +8748,7 @@ Frame rate : 25</pre>
             descr_format: Some("html".into()),
             ..Default::default()
         };
-        apply_site_rules(&mut prep, &rules);
+        apply_site_rules(&mut prep, &rules, None);
         assert_eq!(field_lookup(&prep.fields, "descr"), Some(html));
         assert!(prep.select_notes.is_empty(), "{:?}", prep.select_notes);
     }
@@ -9472,7 +9880,7 @@ Language : Chinese"));
             "您没有上传种子的权限",
         )
         .unwrap();
-        assert!(perm.contains("[no-permission]") && perm.contains("上传种子的权限"));
+        assert!(perm.contains("[no_permission]") && perm.contains("上传种子的权限"));
 
         let twofa = gate_error_message(
             UploadPageKind::TwoFa,
@@ -9481,11 +9889,36 @@ Language : Chinese"));
             "",
         )
         .unwrap();
-        assert!(twofa.contains("[two-fa]") && twofa.contains("二次验证"));
+        assert!(twofa.contains("[two_fa]") && twofa.contains("二次验证"));
         assert!(!twofa.contains("没有可解析的静态上传表单"));
 
         // 静态表单不中止，返回 None 走原字段构造路径
         assert!(gate_error_message(UploadPageKind::StaticForm, "x", "u", "").is_none());
+    }
+
+    #[test]
+    fn site_block_kind_maps_four_blockers_only() {
+        // 四类站侧阻塞映射到独立审计分类；登录失效 / 认不出表单 / 网络错误仍走旧失败路径。
+        assert_eq!(
+            site_block_kind("[no_permission] 该账号在 ttg 无发布权限"),
+            Some("no_permission")
+        );
+        assert_eq!(
+            site_block_kind("[two_fa] 站点要求先过二次验证"),
+            Some("two_fa")
+        );
+        assert_eq!(
+            site_block_kind("[challenge_gate] 站点被人机验证拦截"),
+            Some("challenge_gate")
+        );
+        assert_eq!(
+            site_block_kind("[spa_api] 站点上传界面是纯前端 SPA/JSON API"),
+            Some("spa_api")
+        );
+        assert!(site_block_kind("[login] 登录态失效").is_none());
+        assert!(site_block_kind("[no-form] 没有可解析的静态上传表单").is_none());
+        assert!(site_block_kind("请求没通：operation timed out").is_none());
+        assert!(site_block_kind("").is_none());
     }
 
     #[test]
@@ -9981,7 +10414,7 @@ Language : Chinese"));
             required_fields: vec!["style_sel".into()],
             ..Default::default()
         };
-        apply_site_rules(&mut prep, &rules);
+        apply_site_rules(&mut prep, &rules, None);
         assert!(
             prep.fields
                 .iter()
@@ -10018,7 +10451,7 @@ Language : Chinese"));
             required_fields: vec!["style_sel".into()],
             ..Default::default()
         };
-        apply_site_rules(&mut prep, &rules);
+        apply_site_rules(&mut prep, &rules, None);
         assert!(
             !prep.fields.iter().any(|(n, _)| n.starts_with("style_sel")),
             "{:?}",
@@ -10046,7 +10479,7 @@ Language : Chinese"));
             }],
             ..Default::default()
         };
-        apply_site_rules(&mut prep, &rules);
+        apply_site_rules(&mut prep, &rules, None);
         assert!(
             prep.fields
                 .iter()
@@ -10068,7 +10501,7 @@ Language : Chinese"));
         // 红：页面上没有配置要求的 52 → 记缺口，门禁点名是哪个必需标签没勾
         let empty_form = r#"<form action="takeupload.php" enctype="multipart/form-data"><input type="file" name="file"></form>"#;
         let mut prep2 = prep_from_form(empty_form);
-        apply_site_rules(&mut prep2, &rules);
+        apply_site_rules(&mut prep2, &rules, None);
         assert!(
             prep2
                 .required_gaps
@@ -10176,7 +10609,7 @@ Language : Chinese"));
             poster_field: None,
             screenshot_field: None,
         };
-        apply_site_rules(&mut prep, &crate::gates::SiteRules::default());
+        apply_site_rules(&mut prep, &crate::gates::SiteRules::default(), None);
         assert_eq!(
             prep.required_gaps,
             vec!["简介图片全被剪掉（0 张可用）：先补可达的海报/截图再发布".to_string()]
@@ -10194,7 +10627,7 @@ Language : Chinese"));
             required_fields: vec!["region_sel".into()],
             ..Default::default()
         };
-        apply_site_rules(&mut prep, &rules);
+        apply_site_rules(&mut prep, &rules, None);
         assert_eq!(
             prep.required_gaps,
             vec!["必填缺失：region_sel[4]".to_string()]
@@ -10204,7 +10637,7 @@ Language : Chinese"));
 <input type="radio" name="region_sel[4]" value="1"> 中国大陆
 </form>"#;
         let mut prep2 = prep_from_form(radio_empty);
-        apply_site_rules(&mut prep2, &rules);
+        apply_site_rules(&mut prep2, &rules, None);
         assert_eq!(
             prep2.required_gaps,
             vec!["必填缺失：region_sel[4]".to_string()]
@@ -10214,7 +10647,7 @@ Language : Chinese"));
 <input type="radio" name="region_sel[4]" value="1" checked> 中国大陆
 </form>"#;
         let mut prep3 = prep_from_form(radio_checked);
-        apply_site_rules(&mut prep3, &rules);
+        apply_site_rules(&mut prep3, &rules, None);
         assert!(prep3.required_gaps.is_empty(), "{:?}", prep3.required_gaps);
     }
 
@@ -10228,10 +10661,174 @@ Language : Chinese"));
         let mut prep = prep_from_form(form);
         let before = prep.fields.len();
         let notes_before = prep.select_notes.len();
-        apply_site_rules(&mut prep, &crate::gates::SiteRules::default());
+        apply_site_rules(&mut prep, &crate::gates::SiteRules::default(), None);
         assert_eq!(prep.fields.len(), before);
         assert_eq!(prep.select_notes.len(), notes_before);
         assert!(prep.required_gaps.is_empty());
+    }
+
+    fn panda_descr_order() -> Vec<String> {
+        vec![
+            "【转载出处】".into(),
+            "【制作说明】".into(),
+            "【海报】".into(),
+            "【简介】".into(),
+            "【info】".into(),
+            "【截图】".into(),
+        ]
+    }
+
+    fn prep_with_descr(descr: &str, media: Option<&str>) -> PreparedUpload {
+        let mut fields = vec![("descr".to_string(), descr.to_string())];
+        if let Some(mi) = media {
+            fields.push(("media_info".to_string(), mi.to_string()));
+        }
+        PreparedUpload {
+            action: "https://x/takeupload.php".into(),
+            form_url: "https://x/upload.php".into(),
+            fields,
+            picked_tags: vec![],
+            tag_warn: None,
+            select_notes: vec![],
+            required_gaps: vec![],
+            form_html: "<form></form>".into(),
+            poster_field: None,
+            screenshot_field: None,
+        }
+    }
+
+    fn order_ctx(info: ReleaseInfo) -> DescrOrderCtx {
+        DescrOrderCtx {
+            source_label: "luckpt".into(),
+            source_url: "https://luckpt.example/details.php?id=123".into(),
+            target_label: "熊猫".into(),
+            info,
+        }
+    }
+
+    #[test]
+    fn descr_order_assembles_sections_when_source_has_no_markers() {
+        let rules = crate::gates::SiteRules {
+            descr_order: panda_descr_order(),
+            require_images: Some(4),
+            ..Default::default()
+        };
+        let info = ReleaseInfo {
+            name: "The.Show.S01.1080p.WEB-DL.x264-GROUP".into(),
+            subtitle: String::new(),
+            descr: "源简介正文：本剧讲的是一个故事。IMDb：https://www.imdb.com/title/tt5154296/"
+                .into(),
+            mediainfo: "General\nFormat : Matroska\nWidth : 1920 pixels".into(),
+            imdb: Some("tt5154296".into()),
+            douban: None,
+            tmdb: None,
+            completed_hint: false,
+        };
+        let shots = ["p1", "p2", "p3", "p4"];
+        let imgs = shots
+            .iter()
+            .map(|p| format!("[img]https://img3.pixhost.to/images/1/{p}.jpg[/img]"))
+            .collect::<Vec<_>>()
+            .join("");
+        let descr = format!("源简介正文：本剧讲的是一个故事。{imgs}");
+        let mut prep = prep_with_descr(&descr, Some(info.mediainfo.as_str()));
+        let ctx = order_ctx(info);
+        apply_site_rules(&mut prep, &rules, Some(&ctx));
+
+        assert!(prep.required_gaps.is_empty(), "{:?}", prep.required_gaps);
+        let out = submitted_descr(&prep, "");
+        // 六段齐全且顺序正确
+        let (missing, ooo) = crate::gates::descr_order_gaps(out, &rules.descr_order);
+        assert!(missing.is_empty() && ooo.is_empty(), "{out}");
+        assert_eq!(crate::gates::image_count(out), 4);
+        // 各段内容落位
+        assert!(out.contains("luckpt https://luckpt.example/details.php?id=123"));
+        assert!(out.contains("GROUP"));
+        assert!(out.contains("本剧讲的是一个故事"));
+        assert!(out.contains("Width : 1920 pixels"));
+        // 海报是第一张，截图是其余三张；段标题只出现一次（幂等）
+        let poster_pos = out.find("【海报】").unwrap();
+        let shot_pos = out.find("【截图】").unwrap();
+        assert!(poster_pos < shot_pos);
+        assert!(out[poster_pos..].contains("p1.jpg"));
+        assert!(out[shot_pos..].contains("p2.jpg"));
+        assert_eq!(out.matches("【海报】").count(), 1);
+    }
+
+    #[test]
+    fn descr_order_keeps_compliant_descr_byte_identical() {
+        let rules = crate::gates::SiteRules {
+            descr_order: panda_descr_order(),
+            require_images: Some(4),
+            ..Default::default()
+        };
+        let compliant = concat!(
+            "【转载出处】\nluckpt https://luckpt.example/details.php?id=123\n\n",
+            "【制作说明】\nGROUP\n\n",
+            "【海报】\n[img]https://img3.pixhost.to/images/1/p1.jpg[/img]\n\n",
+            "【简介】\n本剧讲的是一个故事。\n\n",
+            "【info】\nGeneral\nFormat : Matroska\n\n",
+            "【截图】\n[img]https://img3.pixhost.to/images/1/p2.jpg[/img]",
+            "[img]https://img3.pixhost.to/images/1/p3.jpg[/img]",
+            "[img]https://img3.pixhost.to/images/1/p4.jpg[/img]"
+        );
+        let mut prep = prep_with_descr(compliant, Some("General\nFormat : Matroska"));
+        let ctx = order_ctx(drill_release());
+        apply_site_rules(&mut prep, &rules, Some(&ctx));
+        // 已合规：原样保留，不重复包段、不重排
+        assert_eq!(submitted_descr(&prep, ""), compliant);
+    }
+
+    #[test]
+    fn descr_order_skipped_when_rule_unconfigured() {
+        // 没配 descrOrder 的站：装配函数直接返回，简介与字段逐字节不变。
+        // 直接调装配函数，隔离掉既有的 HTML→BBCode 转换等其它规则步骤。
+        let rules = crate::gates::SiteRules::default();
+        let descr =
+            "随便写的一段简介，[img]https://img3.pixhost.to/images/1/x.jpg[/img]没有任何段标题。";
+        let mut prep = prep_with_descr(descr, None);
+        let before = submitted_descr(&prep, "").to_string();
+        let fields_before = prep.fields.clone();
+        let ctx = order_ctx(drill_release());
+        assemble_descr_by_order(&mut prep, &rules, Some(&ctx));
+        assert_eq!(submitted_descr(&prep, ""), before);
+        assert_eq!(prep.fields, fields_before);
+    }
+
+    #[test]
+    fn descr_order_missing_images_or_mediainfo_blocks_instead_of_force_post() {
+        let rules = crate::gates::SiteRules {
+            descr_order: panda_descr_order(),
+            require_images: Some(4),
+            ..Default::default()
+        };
+        // 图不够：2 张 < 4 → 阻断；装配被退回，简介保持原样，不带缺段简介提交。
+        let descr = "只有两张图。[img]https://img3.pixhost.to/images/1/a.jpg[/img][img]https://img3.pixhost.to/images/1/b.jpg[/img]";
+        let mut prep = prep_with_descr(descr, Some("General\nFormat : Matroska"));
+        let ctx = order_ctx(drill_release());
+        apply_site_rules(&mut prep, &rules, Some(&ctx));
+        assert!(!prep.required_gaps.is_empty(), "{:?}", prep.required_gaps);
+        assert!(prep.required_gaps.iter().any(|g| g.contains("图片")));
+        let out = submitted_descr(&prep, "");
+        assert_eq!(out, descr);
+        assert!(!out.contains("【转载出处】"));
+
+        // MediaInfo 缺失 → 阻断，不硬发。
+        let four = ["p1", "p2", "p3", "p4"]
+            .iter()
+            .map(|p| format!("[img]https://img3.pixhost.to/images/1/{p}.jpg[/img]"))
+            .collect::<Vec<_>>()
+            .join("");
+        let mut info = drill_release();
+        info.mediainfo = String::new();
+        let mut prep2 = prep_with_descr(&four, None);
+        let ctx2 = order_ctx(info);
+        apply_site_rules(&mut prep2, &rules, Some(&ctx2));
+        assert!(
+            prep2.required_gaps.iter().any(|g| g.contains("MediaInfo")),
+            "{:?}",
+            prep2.required_gaps
+        );
     }
 
     #[test]
@@ -10306,6 +10903,7 @@ Language : Chinese"));
             announce_url: None,
             poster_field: None,
             screenshot_field: None,
+            proxy: None,
             framework: crate::sites::Framework::NexusPHP,
             search_url: None,
             api_key: None,
@@ -10725,11 +11323,11 @@ Language : Chinese"));
         };
 
         let mut prep1 = prep_from_form(form);
-        apply_site_rules(&mut prep1, &rules);
+        apply_site_rules(&mut prep1, &rules, None);
         let drill = analyze_form("x", "测试站", &prep1, &drill_release());
 
         let mut prep2 = prep_from_form(form);
-        apply_site_rules(&mut prep2, &rules);
+        apply_site_rules(&mut prep2, &rules, None);
         let gate = analyze_prepared("x", "测试站", &prep2, &drill_release());
 
         assert_eq!(drill.core_gaps(), gate.core_gaps());

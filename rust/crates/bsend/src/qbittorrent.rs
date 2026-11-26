@@ -1535,6 +1535,27 @@ mod tests {
     }
 
     #[test]
+    fn announce_for_hosts_recognizes_already_seeded_tracker() {
+        // qB 里已挂着该站独立主机 tracker（正在做种）：按合并后的 host 清单能取到 announce，
+        // 不会把已做种内容重复算成缺口。
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let tracker = "https://a.x-anime.cc/announce?passkey=abc";
+        let base = mock_qb(seen.clone(), move |_, path| {
+            if path.starts_with("/api/v2/auth/login") {
+                return (204, String::new());
+            }
+            if path.starts_with("/api/v2/torrents/info") {
+                return (200, json!([{ "tracker": tracker }]).to_string());
+            }
+            (404, String::new())
+        });
+        let qb = test_client(&base);
+        let hosts = vec!["mua.xloli.cc".to_string(), "a.x-anime.cc".to_string()];
+        let got = qb.announce_for_hosts(&hosts);
+        assert_eq!(got.as_deref(), Some(tracker));
+    }
+
+    #[test]
     fn add_form_uses_seed_mode_for_skip_checking() {
         let f = add_form_fields(r"I:\Download", None, true, 0, false, Some("Original"));
         let get = |k: &str| f.iter().find(|(n, _)| *n == k).map(|(_, v)| v.as_str());

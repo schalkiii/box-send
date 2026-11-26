@@ -223,6 +223,22 @@ pub(crate) fn run_autopost_job(
                 "review_failed" => {
                     format!("→ 审阅未通过（{site}）：{}", error.unwrap_or_default())
                 }
+                "no_permission" => format!(
+                    "→ 站侧阻塞（{site}）：账号无发布权限，待人工处理，不算失败、不自动重发：{}",
+                    error.unwrap_or_default()
+                ),
+                "two_fa" => format!(
+                    "→ 站侧阻塞（{site}）：站点要求先过二次验证，待人工在浏览器完成，不算失败、不自动重发：{}",
+                    error.unwrap_or_default()
+                ),
+                "challenge_gate" => format!(
+                    "→ 站侧阻塞（{site}）：被人机验证拦截，待人工在浏览器过一次验证，不算失败、不自动重发：{}",
+                    error.unwrap_or_default()
+                ),
+                "spa_api" => format!(
+                    "→ 站侧阻塞（{site}）：上传界面是纯前端/接口，程序暂不支持，不算失败、不自动重发：{}",
+                    error.unwrap_or_default()
+                ),
                 _ => format!("→ 发布失败（{site}）：{}", error.unwrap_or_default()),
             }],
         };

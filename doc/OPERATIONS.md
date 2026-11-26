@@ -60,7 +60,7 @@ status / at / url / note / verifyHash
 - 不要写 `status: "missing"`。表示“没有”的枚举值是 `miss`。
 - 状态值使用下划线写法：
   `seeding / assisted / reseeded / verifying / review_pending / rejected / miss / wait_source / failed / reseed_draft / other_version / same_hash_skip / skipped / pending_offers / pending_review / review_rejected / gone_from_site`。
-- `skipped` 是内容黑名单的终态，第二轮不会再排队；`note` 里会写命中了哪个关键词。
+- `skipped` 是内容黑名单的终态，第二轮不会再排队；`note` 里会写命中了哪个关键词。站侧阻塞（账号无发布权限、要过 2FA、被人机验证拦截、上传界面是纯前端）也落 `skipped` 这个中性终态，`note` 写明"站侧阻塞"和对应分类；这类不是发错了，程序不自动重发，要人工处理后删掉该站记录才会重新排队。
 - `pending_offers`（待走候选入口）用在站点要求改走候选页（NexusPHP 的 `offers.php`）时，例如判定种子超过体积上限。这类不是“完事”，也不该当失败反复重试：记录留着给人跟进，`bsend status` 单列“待跟进”，下一轮不会自动重新排队。
 - 站点审核的三类：`pending_review`（等站点审核，站上已发布但站点还没放行、拿不到站点种子）、`review_rejected`（站点明写审核不通过，`note` 里是站点给的原因）、`gone_from_site`（回访时详情页说没有这条）。都不算失败、不重发、不进失败冷却；由回访收尾（见第 6 节的 `bsend followup`），`bsend status` 的“待跟进”里逐条点名。想人工了结其中一条：删掉该站那条记录即可。
 - 审核被拒的标记认两种写法：详情页标题旁标 `(禁止)` / `（禁止）`，或明写“审核不通过”，一律判审核被拒、落 `review_rejected`，不能再记成“已在做种”。
@@ -115,12 +115,13 @@ at / site / key / result / url? / error? / note? / gates?
 
 `result` 常见值：
 
-`posted / posted_verifying / blocked / failed / review_failed / skipped_duplicate / other_version / existed_pending / posted_unresolved / pending_offers / pending_review / review_rejected / same_hash_skipped`
+`posted / posted_verifying / blocked / failed / review_failed / skipped_duplicate / other_version / existed_pending / posted_unresolved / pending_offers / pending_review / review_rejected / same_hash_skipped / no_permission / two_fa / challenge_gate / spa_api`
 
 用途：
 
 - **日限额**：按北京时间切日，`posted` 和 `posted_verifying` 都算一次上传；后者只是做种还没确认；
 - **失败冷却**：默认关闭（`assist.backoffHours` 不填或填 0）。同一内容 + 同一站点被拦或失败后，下一轮直接重试，由人看审计再决定要不要再跑；只有显式配了小时数（例如 6）才会在窗口内跳过，且拦截和失败共用这一个窗口。`pending_offers` 不进冷却，因为它不是失败；
+- **站侧阻塞四类不进冷却、不算失败**：`no_permission`（账号无发布权限）、`two_fa`（站点要求先过二次验证）、`challenge_gate`（被人机验证/区域时段拦截）、`spa_api`（上传界面是纯前端 SPA/JSON 接口，程序拿不到表单）。这四类是站点侧条件，不是我们发错了：审计单列这四个分类，不进失败冷却，覆盖记录落 `skipped` 中性终态、不落 `failed`，程序不自动重发。`bsend audit` 合计里有一行"站侧阻塞"单独列出这四类条数，不混进失败率；
 - **聚合查看**：`bsend audit --days N [--site X] [--json]`，主表按六类汇总：
   `posted / blocked / failed / duplicate / other_version / other`，另外报告格式坏掉的行数。待跟进单列，不混进六类：`pending_offers`、`pending_review`、`review_rejected`、`posted_unresolved`。
 
@@ -133,6 +134,8 @@ target_site / result / url / note / cell_status / seeded
 
 `seeded=false` 表示当前不能算“已在做种”：可能是站上已发布、但本机没挂上种子；也可能是 `posted_verifying`，种子已经加入 qB，但校验还没跑完。先看同一条记录的 `cell_status` 和 `result` 区分：`verifying` / `posted_verifying` 去等校验，其他情况再查目标种下载和添加时的目录布局，不要先怀疑上传。日志写失败只会打印错误，不影响发种结论。
 
+当前口径：手动跑 `bsend reseed --yes` 只往 `reseed-log.jsonl` 记，不往 `auto-audit.jsonl` 追加条目；按日限额、失败冷却做判定时看不到这批手动发布。是否把手动发布也写进审计，待 `ROADMAP.md` 决定。
+
 ### 4.1 上传回包怎么分六类
 
 原先所有失败都笼统显示“上传失败”。现在按回包特征分六类报：
@@ -144,7 +147,9 @@ target_site / result / url / note / cell_status / seeded
 5. **其他站点拒绝** → 取错误框原文，兜底改成“站点拒绝（回包未展开具体原因）”，不再假装是“上传失败”。
 6. **登录失效、回到上传表单、未识别返回**：各自保留原来的判定。
 
-**回包快照要先开开关**：跑批前设环境变量 `BSEND_DUMP_UPLOAD=1` 才会保存上传回包快照；不设就没有快照，事后查不出站点拒在哪个字段。2026-11-26 北洋园两条非空正文的“上传失败！”就是没留快照，离线只能记原因待查。
+**回包快照要先开开关**：跑批前设环境变量 `BSEND_DUMP_UPLOAD=1` 才会把上传回包快照存到数据目录的 `upload-debug/`；不设就没有这份带请求头和字段名的快照。2026-11-26 北洋园两条非空正文的“上传失败！”就是没留快照，离线只能记原因待查。
+
+**没解析出具体拒因时自动留一份临时回包（2026-11-27 新增能力，已落地并有单测，还没有遇到站点真实拒绝回包做实样核对）**：第 5、6 类里站点没给明确原因的通用拒绝（“站点拒绝（回包未展开具体原因）”或“HTTP … 未识别的返回”），程序会把回包正文原样写到系统临时目录 `bsend-upload-<站点id>-<时间戳>.html`，错误信息里附上绝对路径和剥掉标签后的可见文字；已经能解析出具体原因的失败（缺必填项、重复、种子过大、会话失效等）不写临时文件、文案不变。临时目录这份不需要开环境变量；写盘失败静默忽略，不影响原错误上报。
 
 ## 5. 只读巡检脚本
 
@@ -279,9 +284,9 @@ cargo build --release -p bsend-cli
 | 配置项 | 默认 | 说明 |
 | --- | --- | --- |
 | `assist.publishEnabled` | `false` | 总开关；关闭时只审不发 |
-| `assist.autoReseedSites` | 41 站（2026-11-26 加 agsvpt 后） | 自动发种白名单。空的时候真实发布不会发出任何站；只在演练时会覆盖全部站点做发布检查预演 |
-| `assist.reseedPausedSites` | 36 站 | 只停发种，辅种照常 |
-| `assist.pausedSites` | 8 站（2026-11-26 摘掉 gtk 与四个关站后） | 整站暂停 |
+| `assist.autoReseedSites` | 45 站（2026-11-27 加 panda、iloli、muxuege、fenghuang；agsvpt 11-26 已加） | 自动发种白名单。空的时候真实发布不会发出任何站；只在演练时会覆盖全部站点做发布检查预演 |
+| `assist.reseedPausedSites` | 35 站 | 只停发种，辅种照常；熊猫已撤销发种暂停、移出本名单并留在白名单 |
+| `assist.pausedSites` | 8 站（hudbt、freefarm、hdclone、u2、shadow、sunny、piggo、tu88） | 整站暂停 |
 | `assist.roundBudget` | 200 | 每轮每站最多处理多少条 |
 | `assist.uploadBudget` | 10 | 每轮最多真正发出多少次上传请求；发出请求就算一次，站点回“重复/已存在”也一样。日限额只管 `posted` 和 `posted_verifying`，两者分开算 |
 | `assist.allowOtherVersion` | `true` | 站上有同名其他版本时照样发 |
@@ -314,7 +319,29 @@ cargo build --release -p bsend-cli
 
 为什么要单独填：程序正常情况下会从 qB 里已有该站的种子中抄 tracker 地址。第一次向这个站发种时，qB 里一条该站种子都没有，抄不到，程序会停下不传。填了以后就用配置里的地址；没填仍会先尝试从 qB 抄。
 
+填了 `announceURL` 后，该地址的主机会自动并入允许的 tracker 主机清单（和页面域名、内置别名、手写的 `overrides.announceHosts` 合并去重），通常不需要再手写 `announceHosts`；一个站有多个 announce 主机时，仍可用 `announceHosts` 追加。
+
 地址必须属于这个站。程序会拿地址里的域名和该站登记的域名比对，对不上直接中止。不要把别的站的 passkey 填进来，也不要只填 tracker 主域名而漏掉你的个人参数。
+
+### 7.1.1 个别站只能过本机代理：`overrides.proxy`
+
+程序默认对站点请求直连（不读系统代理）。如果某个站本机直连不通、但浏览器走本机代理能打开（例如系统代理 `127.0.0.1:7890`，直连回 `os error 10060/10054`），可以在这个站的配置里单独填代理：
+
+```json
+{
+  "id": "gtk",
+  "name": "GTK",
+  "url": "https://pt.gtkpw.xyz/",
+  "overrides": {
+    "proxy": "http://127.0.0.1:7890"
+  }
+}
+```
+
+- 不填或留空：维持默认直连，行为不变。
+- 填了以后：只有这一个站的 HTTP 客户端走这个代理；qB 下载器、CookieCloud、其他站的客户端都仍然直连，不走代理。
+- 日志里只会记代理的 `host:port`（如 `本站走代理 127.0.0.1:7890`），不回显带账号口令的代理地址。
+- 代理地址填成不合法的 URL，构造站点客户端时会直接报错，不会静默退回直连。
 
 ### 7.2 简介格式：BBCode 站要转格式
 
@@ -338,7 +365,7 @@ NexusPHP 的简介框是 BBCode 编辑器。源站简介里的 `<fieldset>`、`<
 
 - **剪死图：所有站点无条件执行**（2026-11-24 起，代码硬规则，不再读 `assist.pruneDeadImages`）。带目标站上传页 Referer 逐张 GET，非 2xx 或非图片类型剪掉；豆瓣图床裸请求 418，带 Referer 才出图，所以 Referer 必须带。
 - **要图的站有硬性最低图数**：`gates::image_floor` 按站点硬编码——藏宝阁、优堡、太乙、麒麟 3 张；熊猫高清 4 张（站规更严）；ptlgs 4 张（1 张海报 + 3 张截图）。配置里写 `requireImages` 会被覆盖，不用再配。
-- `descrOrder`：按标记检查段落顺序，缺段或倒置都拦；只对配置了的站点生效。
+- `descrOrder`：按标记检查段落顺序，缺段或倒置都拦；只对配置了的站点生效。2026-11-27 起，配了该规则的站还会在发种前自动装配分段（源简介六段齐就逐字节不动），装配后自查段序、图数下限、MediaInfo，缺任一项阻断不提交；详见 `ARCHITECTURE.md` 5.5.1。
 - `titleNoCjk`：主标题含汉字直接拦，中文名放副标题。
 - **独立海报/截图字段**：上传页把海报、截图单列时，在 `sourceSites[].overrides` 写 `posterField` / `screenshotField`（ptlgs 是 `cover` / `screenshots`）。程序从最终简介按顺序抽图：第一张填海报，其余一行一个填截图；字段不存在不硬塞，简介没图时清空。
 - **海报/截图分开算底线（2026-11-26 起）**：除总图数底线（藏宝阁、优堡、太乙、麒麟、熊猫、ptlgs），另有两条独立口径：AGSVPT 至少 1 张海报 + 1 张截图；北洋园（tjupt）至少 1 张图。有独立海报/截图字段的站按字段算，没有独立字段的按“首图算海报、其余算截图”。
@@ -364,7 +391,7 @@ NexusPHP 的简介框是 BBCode 编辑器。源站简介里的 `<fieldset>`、`<
 **"请求没通"先分清三种情况（2026-11-26 补）**：
 
 - 站点真挂了：首页也连不上，浏览器同样打不开。
-- 只能过代理：这台机器系统代理开着（`127.0.0.1:7890`），浏览器走代理能开，而 `bsend` 按设计一律直连（PT 站 passkey 与账号 IP 绑定，走代理既可能连不上也算异常登录），所以报 `os error 10060 / 10054`。这不是站点问题，也不是配置问题；gtk 就是这类，已摘出暂停名单但没排进自动发种队列。
+- 只能过代理：这台机器系统代理开着（`127.0.0.1:7890`），浏览器走代理能开，而 `bsend` 默认直连（PT 站 passkey 与账号 IP 绑定，默认不走代理既避免连不上也避免算异常登录），所以报 `os error 10060 / 10054`。这类站可以在该站配置 `overrides.proxy` 显式开代理（见 7.1.1）；没配之前不算站点问题，也不算配置问题。gtk 已配该站代理，走代理后只剩内容侧阻断，尚未排进自动发种队列。
 - 人机验证拦住了：页面是 Cloudflare 挑战页或「Just a moment」，**不能当成站点关闭或没有表单**，要换真实浏览器、且标签页在前台。
 
 表单演练的结果现在会带失败类别（`formcheck.json` 的 `errorKind`）：无权限、登录失效、2FA 中间页、人机验证、单页应用走接口、无表单。看这个字段比看笼统的"没有可解析的静态上传表单"准确。`formcheck` 和 `gatecheck` 现在用同一套逐站规则，两边结论应该一致；不一致就是 bug。
