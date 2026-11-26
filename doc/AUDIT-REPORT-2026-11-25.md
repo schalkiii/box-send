@@ -375,6 +375,6 @@
 
 ## 8. 2026-11-26 进展
 
-- R8/T5 的审核状态 e2e 已补：上传被审核拦截落 `pending_review`、站点回 `torrent_too_large` 落 `pending_offers`、回访分别识别“未审 / 审核不通过 / 站上已找不到”。三条用例在 `coverage_e2e.rs`，`cargo test -p bsend` 现在 422 个通过。
+- R8/T5 的审核状态 e2e 已补：上传被审核拦截落 `pending_review`、站点回 `torrent_too_large` 落 `pending_offers`、回访分别识别“未审 / 审核不通过 / 站上已找不到”，以及审核通过后下载站点种子并挂回 qB。四条用例在 `coverage_e2e.rs`，`cargo test -p bsend` 现在 423 个通过。
 - R2 只在 `coverage_e2e.rs` 的测试临时目录上补了“进程号 + 递增序号”；`config.rs`、`index.rs` 里仍只用进程号的临时目录还没改。
 - 其余未完成项按本报告第 2 节状态表保持不变；本轮没有动生产代码。

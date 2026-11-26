@@ -2644,7 +2644,25 @@ fn review_followup_server() -> MockServer {
     }))
 }
 
-fn insert_review_cell(index: &mut ContentIndex, key: &str, url: String) {
+/// 审核回访 mock：详情页已经没有审核标记，下载端点给站点种子。
+/// 用来验证“审核通过后把站点种子下回来挂进 qB”的收尾链路。
+fn review_settle_server(torrent: Arc<Vec<u8>>) -> MockServer {
+    MockServer::start(Arc::new(move |_method, path, _body| {
+        if path.starts_with("/details.php?id=2001") {
+            let html = format!(
+                r#"<html><body><h1 id="top">{NAME}</h1>
+<a href="download.php?id=2001">下载种子</a></body></html>"#
+            );
+            return (200, "text/html", html.into_bytes());
+        }
+        if path.starts_with("/download.php") {
+            return (200, "application/x-bittorrent", torrent.as_ref().clone());
+        }
+        (404, "text/plain", Vec::new())
+    }))
+}
+
+fn insert_review_cell(index: &mut ContentIndex, key: &str, url: String, status: CoverageStatus) {
     index.contents.insert(
         key.to_string(),
         ContentEntry {
@@ -2659,7 +2677,7 @@ fn insert_review_cell(index: &mut ContentIndex, key: &str, url: String) {
             coverage: std::collections::BTreeMap::from([(
                 "hdsky".to_string(),
                 SiteCoverage {
-                    status: CoverageStatus::Reseeded,
+                    status,
                     at: 0,
                     url: Some(url),
                     note: None,
@@ -2688,7 +2706,12 @@ fn e2e_review_followup_marks_pending_rejected_and_gone() {
         ("m:reviewrejected0000", "1002"),
         ("m:reviewgone00000000", "1003"),
     ] {
-        insert_review_cell(&mut index, key, format!("{base}{id}"));
+        insert_review_cell(
+            &mut index,
+            key,
+            format!("{base}{id}"),
+            CoverageStatus::Reseeded,
+        );
     }
     index.save().unwrap();
 
@@ -2745,6 +2768,95 @@ fn e2e_review_followup_marks_pending_rejected_and_gone() {
     assert!(
         logs.iter()
             .any(|line| line.contains("等站点审核") || line.contains("未审")),
+        "{logs:?}"
+    );
+}
+
+#[test]
+fn e2e_review_approved_pulls_target_torrent_into_qb() {
+    let dir = temp_dir("review-settle");
+    let t_src = Arc::new(torrent_bytes("Pack", FILES));
+    let t_tgt = Arc::new(torrent_bytes("Pack2", FILES));
+    let local_hash = bencode::info_hash_v1(&t_src).unwrap();
+    let target_hash = bencode::info_hash_v1(&t_tgt).unwrap();
+    let captured: CapturedRequests = Arc::new(Mutex::new(Vec::new()));
+    let qb = qb_server_for_reseed(
+        local_hash.clone(),
+        t_src.as_ref().clone(),
+        target_hash.clone(),
+        false,
+        captured.clone(),
+    );
+    let site = review_settle_server(t_tgt.clone());
+    let mut cfg = test_config(qb.port, site.port, site.port, &dir);
+    cfg.coverage.per_site_interval_sec = 0.0;
+    let qb_client = QBittorrent::new(&cfg.downloader.url, "admin", "pass").unwrap();
+    let mut index = ContentIndex::load(&cfg.coverage_state_path());
+
+    let key = "m:reviewsettle000000";
+    let detail_url = format!("http://localhost:{}/details.php?id=2001", site.port);
+    insert_review_cell(
+        &mut index,
+        key,
+        detail_url.clone(),
+        CoverageStatus::PendingReview,
+    );
+    // 挂回前要核对分片和文件清单，索引里得有本地这条种子的记录。
+    index.contents.get_mut(key).unwrap().torrents.insert(
+        local_hash.clone(),
+        TorrentMeta {
+            save_path: "/data".into(),
+            category: None,
+            last_seen: 0,
+            tracker_hosts: Vec::new(),
+            hash_v2: None,
+            added_on: 0,
+        },
+    );
+    index.save().unwrap();
+
+    let mut logs = Vec::new();
+    let summary = recheck_reviews(
+        &cfg,
+        &qb_client,
+        &mut index,
+        &ReviewCheckOptions::default(),
+        &mut |line| logs.push(line.to_string()),
+    )
+    .unwrap();
+
+    assert_eq!(summary.selected, 1);
+    assert_eq!(summary.checked, 1);
+    assert_eq!(summary.settled, 1, "审核结束应完成挂回；日志：{logs:?}");
+    assert_eq!(summary.errors, 0);
+
+    let cell = &index.contents[key].coverage["hdsky"];
+    assert_eq!(cell.status, CoverageStatus::Reseeded);
+    assert_eq!(cell.url.as_deref(), Some(detail_url.as_str()));
+    assert!(
+        cell.note
+            .as_deref()
+            .is_some_and(|note| note.contains("转种成功")),
+        "{:?}",
+        cell.note
+    );
+    assert!(
+        !site.requests("GET /download.php").is_empty(),
+        "审核结束后应下载站点种子"
+    );
+    assert_eq!(
+        captured.lock().unwrap().len(),
+        1,
+        "审核结束后应把站点种子加进 qB"
+    );
+    let added_file = multipart_file(&captured.lock().unwrap()[0].1).unwrap();
+    assert_eq!(
+        bencode::info_hash_v1(&added_file).as_deref(),
+        Some(target_hash.as_str()),
+        "加进 qB 的必须是站点下载的种子"
+    );
+    assert!(
+        logs.iter().any(|line| line.contains("审核结束")),
         "{logs:?}"
     );
 }
