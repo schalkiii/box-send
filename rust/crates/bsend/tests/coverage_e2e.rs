@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
@@ -21,6 +21,7 @@ use bsend::index::{
 };
 use bsend::qbittorrent::QBittorrent;
 use bsend::reseed::{review_reseed, run_reseed, run_reseed_reviewed, ReseedOutcome, ReseedRequest};
+use bsend::review::{recheck_reviews, ReviewCheckOptions};
 use bsend::sites::nexusphp::NexusPhp;
 use bsend::sites::Framework;
 
@@ -454,7 +455,10 @@ fn adapters(cfg: &Config) -> Vec<Arc<NexusPhp>> {
 }
 
 fn temp_dir(name: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("bsend-e2e-{name}-{}", std::process::id()));
+    // 进程号只区分不同测试进程；同进程并行跑同名场景时还要序号，避免互相踩目录。
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let seq = NEXT.fetch_add(1, Ordering::Relaxed);
+    let d = std::env::temp_dir().join(format!("bsend-e2e-{name}-{}-{seq}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
     d
@@ -2531,6 +2535,481 @@ fn reseed_site_server_upload_result(
         }
         (404, "text/plain", Vec::new())
     }))
+}
+
+/// 目标站 mock：上传成功，但详情页标“未审”、下载端点明确说“尚未通过审核”。
+/// 用来验证发种后拿不到站点种子时落 `PendingReview`，而不是当成失败重试。
+fn reseed_site_server_review_hold(uploads: CapturedRequests) -> MockServer {
+    MockServer::start(Arc::new(move |_method, path, body| {
+        if path.starts_with("/upload.php") {
+            let form = r#"<html><body><form action="takeupload.php" method="post" enctype="multipart/form-data">
+<input type="text" name="name" value="">
+<input type="text" name="small_descr" value="">
+<textarea name="descr"></textarea>
+<input type="text" name="technical_info" value="">
+<input type="text" name="imdb_url" value="">
+<input type="file" name="file">
+<input type="submit" value="发布">
+</form></body></html>"#;
+            return (200, "text/html", form.as_bytes().to_vec());
+        }
+        if path.starts_with("/takeupload.php") {
+            uploads
+                .lock()
+                .unwrap()
+                .push((path.to_string(), body.to_vec()));
+            let html = format!(r#"<p>发布成功</p><a href="details.php?id=1002">{NAME}</a>"#);
+            return (200, "text/html", html.into_bytes());
+        }
+        if path.starts_with("/torrents.php") {
+            return (200, "text/html", "<p>没有种子</p>".as_bytes().to_vec());
+        }
+        if path.starts_with("/details.php") {
+            let html = format!(
+                r#"<html><body><h1 id="top">{NAME}</h1>
+<span title="未审">未审</span>
+<a href="download.php?id=1002">下载种子</a></body></html>"#
+            );
+            return (200, "text/html", html.into_bytes());
+        }
+        if path.starts_with("/download.php") {
+            let html = r#"<html><body>对不起，该种子尚未通过审核，请稍后再试。</body></html>"#;
+            return (200, "text/html", html.as_bytes().to_vec());
+        }
+        (404, "text/plain", Vec::new())
+    }))
+}
+
+/// 目标站 mock：上传成功路径改成 NexusPHP 的“种子过大”表单（自动跳 offers.php）。
+/// 上传页和 takeupload 与真实站点同形；候选入口不是上传，所以不提供 details/download。
+fn reseed_site_server_offers(uploads: CapturedRequests) -> MockServer {
+    MockServer::start(Arc::new(move |_method, path, body| {
+        if path.starts_with("/upload.php") {
+            let form = r#"<html><body><form action="takeupload.php" method="post" enctype="multipart/form-data">
+<input type="text" name="name" value="">
+<input type="text" name="small_descr" value="">
+<textarea name="descr"></textarea>
+<input type="text" name="technical_info" value="">
+<input type="text" name="imdb_url" value="">
+<input type="file" name="file">
+<input type="submit" value="发布">
+</form></body></html>"#;
+            return (200, "text/html", form.as_bytes().to_vec());
+        }
+        if path.starts_with("/takeupload.php") {
+            uploads
+                .lock()
+                .unwrap()
+                .push((path.to_string(), body.to_vec()));
+            let html = r#"<form id='torrent_too_large' action='/offers.php?add_offer=1&torrent_too_large=1' method='POST'>
+                <input type='hidden' name='name' value='X' />
+            </form>"#;
+            return (200, "text/html", html.as_bytes().to_vec());
+        }
+        if path.starts_with("/torrents.php") {
+            return (200, "text/html", "<p>没有种子</p>".as_bytes().to_vec());
+        }
+        (404, "text/plain", Vec::new())
+    }))
+}
+
+/// 审核回访 mock：三条详情页分别标“未审”、写“审核不通过”、回“没有该ID的种子”。
+/// 页面都不给可下载的种子，用来验证回访只改结论、不会误触发下载/挂回。
+fn review_followup_server() -> MockServer {
+    MockServer::start(Arc::new(|_method, path, _body| {
+        if path.starts_with("/details.php?id=1001") {
+            let html = format!(
+                r#"<html><body><h1 id="top">{NAME}</h1>
+<span title="未审">未审</span>
+<a href="download.php?id=1001">下载种子</a></body></html>"#
+            );
+            return (200, "text/html", html.into_bytes());
+        }
+        if path.starts_with("/details.php?id=1002") {
+            let html = format!(
+                r#"<html><body><h1 id="top">{NAME}</h1>
+<span title="审核不通过，原因：缺少海报">审核不通过，原因：缺少海报</span>
+<a href="download.php?id=1002">下载种子</a></body></html>"#
+            );
+            return (200, "text/html", html.into_bytes());
+        }
+        if path.starts_with("/details.php?id=1003") {
+            let html = r#"<html><body><table>
+<tr><td class="text">错误</td></tr>
+<tr><td class="text">没有该ID的种子</td></tr>
+</table></body></html>"#;
+            return (200, "text/html", html.as_bytes().to_vec());
+        }
+        (404, "text/plain", Vec::new())
+    }))
+}
+
+fn insert_review_cell(index: &mut ContentIndex, key: &str, url: String) {
+    index.contents.insert(
+        key.to_string(),
+        ContentEntry {
+            name: NAME.into(),
+            total_size: 105,
+            file_count: FILES.len(),
+            manifest_digest: "0".repeat(16),
+            torrents: std::collections::BTreeMap::new(),
+            tracker_hosts: Vec::new(),
+            first_seen: 0,
+            gone_since: None,
+            coverage: std::collections::BTreeMap::from([(
+                "hdsky".to_string(),
+                SiteCoverage {
+                    status: CoverageStatus::Reseeded,
+                    at: 0,
+                    url: Some(url),
+                    note: None,
+                    verify_hash: None,
+                },
+            )]),
+            source: None,
+            forbid_reseed: false,
+        },
+    );
+}
+
+#[test]
+fn e2e_review_followup_marks_pending_rejected_and_gone() {
+    let dir = temp_dir("review-followup");
+    let site = review_followup_server();
+    let qb = qb_server("review-followup".into(), Vec::new());
+    let mut cfg = test_config(qb.port, site.port, site.port, &dir);
+    cfg.coverage.per_site_interval_sec = 0.0;
+    let qb_client = QBittorrent::new(&cfg.downloader.url, "admin", "pass").unwrap();
+    let mut index = ContentIndex::load(&cfg.coverage_state_path());
+
+    let base = format!("http://localhost:{}/details.php?id=", site.port);
+    for (key, id) in [
+        ("m:reviewpending00000", "1001"),
+        ("m:reviewrejected0000", "1002"),
+        ("m:reviewgone00000000", "1003"),
+    ] {
+        insert_review_cell(&mut index, key, format!("{base}{id}"));
+    }
+    index.save().unwrap();
+
+    let opts = ReviewCheckOptions {
+        all_posted: true,
+        ..Default::default()
+    };
+    let mut logs = Vec::new();
+    let summary = recheck_reviews(&cfg, &qb_client, &mut index, &opts, &mut |line| {
+        logs.push(line.to_string())
+    })
+    .unwrap();
+
+    assert_eq!(summary.selected, 3);
+    assert_eq!(summary.checked, 3);
+    assert_eq!(summary.marked_pending, 1);
+    assert_eq!(summary.marked_rejected, 1);
+    assert_eq!(summary.marked_gone, 1);
+    assert_eq!(summary.errors, 0);
+
+    let pending = &index.contents["m:reviewpending00000"].coverage["hdsky"];
+    assert_eq!(pending.status, CoverageStatus::PendingReview);
+    assert!(pending.note.as_deref().is_some_and(|n| n.contains("未审")));
+
+    let rejected = &index.contents["m:reviewrejected0000"].coverage["hdsky"];
+    assert_eq!(rejected.status, CoverageStatus::ReviewRejected);
+    assert!(
+        rejected
+            .note
+            .as_deref()
+            .is_some_and(|n| n.contains("缺少海报")),
+        "{:?}",
+        rejected.note
+    );
+
+    let gone = &index.contents["m:reviewgone00000000"].coverage["hdsky"];
+    assert_eq!(gone.status, CoverageStatus::GoneFromSite);
+    assert!(
+        gone.note
+            .as_deref()
+            .is_some_and(|n| n.contains("没有该ID的种子")),
+        "{:?}",
+        gone.note
+    );
+
+    assert!(
+        site.requests("GET /download.php").is_empty(),
+        "只是改审核结论，不应下载站点种子"
+    );
+    assert!(
+        qb.requests("POST /api/v2/torrents/add").is_empty(),
+        "只是改审核结论，不应往 qB 里加种子"
+    );
+    assert!(
+        logs.iter()
+            .any(|line| line.contains("等站点审核") || line.contains("未审")),
+        "{logs:?}"
+    );
+}
+
+#[test]
+fn e2e_upload_pending_review_holds_without_mounting() {
+    let dir = temp_dir("pending-review");
+    let t_src = Arc::new(torrent_bytes("Pack", FILES));
+    let t_tgt = Arc::new(torrent_bytes("Pack2", FILES));
+    let local_hash = bencode::info_hash_v1(&t_src).unwrap();
+    let target_hash = bencode::info_hash_v1(&t_tgt).unwrap();
+    let captured: CapturedRequests = Arc::new(Mutex::new(Vec::new()));
+    let uploads: CapturedRequests = Arc::new(Mutex::new(Vec::new()));
+    let qb = qb_server_for_reseed(
+        local_hash.clone(),
+        t_src.as_ref().clone(),
+        target_hash.clone(),
+        false,
+        captured.clone(),
+    );
+    let src = reseed_site_server(t_src.clone());
+    let tgt = reseed_site_server_review_hold(uploads.clone());
+    let mut cfg = test_config(qb.port, src.port, tgt.port, &dir);
+    cfg.coverage.reseed_publish_enabled = true;
+
+    let key = "m:uploadpendingreview";
+    let src_url = format!("http://127.0.0.1:{}/details.php?id=1002", src.port);
+    let mut index = ContentIndex::load(&cfg.coverage_state_path());
+    index.contents.insert(
+        key.to_string(),
+        ContentEntry {
+            name: NAME.into(),
+            total_size: 105,
+            file_count: FILES.len(),
+            manifest_digest: "0".repeat(16),
+            torrents: std::collections::BTreeMap::from([(
+                local_hash.clone(),
+                TorrentMeta {
+                    save_path: "/data".into(),
+                    category: None,
+                    last_seen: 0,
+                    tracker_hosts: Vec::new(),
+                    hash_v2: None,
+                    added_on: 0,
+                },
+            )]),
+            tracker_hosts: Vec::new(),
+            first_seen: 0,
+            gone_since: None,
+            coverage: std::collections::BTreeMap::from([(
+                "hdsky".to_string(),
+                SiteCoverage {
+                    status: CoverageStatus::ReseedDraft,
+                    at: 0,
+                    url: None,
+                    note: None,
+                    verify_hash: None,
+                },
+            )]),
+            source: Some(SourceRecord {
+                site_id: "pter".into(),
+                detail_url: src_url.clone(),
+                resolved_at: 0,
+                miss_at: None,
+            }),
+            forbid_reseed: false,
+        },
+    );
+    index.save().unwrap();
+
+    let qb_client = QBittorrent::new(&cfg.downloader.url, "admin", "pass").unwrap();
+    let req = ReseedRequest {
+        content_key: key.into(),
+        source_site: "pter".into(),
+        source_url: src_url,
+        target_site: "hdsky".into(),
+        name: NAME.into(),
+    };
+    let mut logs = Vec::new();
+    let outcome = run_reseed(
+        &cfg,
+        &qb_client,
+        &req,
+        &mut index,
+        &mut |line| logs.push(line.to_string()),
+        None,
+    )
+    .unwrap();
+
+    let ReseedOutcome::Duplicate(d) = &outcome else {
+        panic!("站点先审应返回 Duplicate，实际 {outcome:?}");
+    };
+    assert_eq!(d.status, CoverageStatus::PendingReview);
+    assert!(!d.mounted, "审核没放行前拿不到站点种子，不能算挂回");
+    assert_eq!(outcome.audit_result(), "pending_review");
+    assert!(
+        d.url
+            .as_deref()
+            .is_some_and(|url| url.contains("details.php?id=1002")),
+        "{:?}",
+        d.url
+    );
+    assert!(
+        d.note.contains("等站点审核") && d.note.contains("尚未通过审核"),
+        "{}",
+        d.note
+    );
+
+    let cell = &index.contents[key].coverage["hdsky"];
+    assert_eq!(cell.status, CoverageStatus::PendingReview);
+    assert_eq!(uploads.lock().unwrap().len(), 1, "审核没放行也不应重复上传");
+    assert!(
+        qb.requests("POST /api/v2/torrents/add").is_empty(),
+        "拿不到站点种子时不能往 qB 里加"
+    );
+    assert!(
+        site_request_paths(&tgt)
+            .iter()
+            .any(|path| path.starts_with("/download.php")),
+        "mock 的下载端点应该被访问过，才能验证审核拦截"
+    );
+
+    let action_log = std::fs::read_to_string(dir.join("reseed-log.jsonl")).unwrap();
+    assert!(
+        action_log.contains("\"result\":\"pending_review\""),
+        "{action_log}"
+    );
+    assert!(
+        logs.iter().any(|line| line.contains("等站点审核")),
+        "{logs:?}"
+    );
+}
+
+/// mock 服务只记了完整请求行；取路径部分，便于断言具体端点。
+fn site_request_paths(server: &MockServer) -> Vec<String> {
+    server
+        .log
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|line| line.split_whitespace().nth(1).map(|s| s.to_string()))
+        .collect()
+}
+
+#[test]
+fn e2e_torrent_too_large_stays_pending_offers_without_retry() {
+    let dir = temp_dir("pending-offers");
+    let t_src = Arc::new(torrent_bytes("Pack", FILES));
+    let t_tgt = Arc::new(torrent_bytes("Pack2", FILES));
+    let local_hash = bencode::info_hash_v1(&t_src).unwrap();
+    let target_hash = bencode::info_hash_v1(&t_tgt).unwrap();
+    let captured: CapturedRequests = Arc::new(Mutex::new(Vec::new()));
+    let uploads: CapturedRequests = Arc::new(Mutex::new(Vec::new()));
+    let qb = qb_server_for_reseed(
+        local_hash.clone(),
+        t_src.as_ref().clone(),
+        target_hash.clone(),
+        false,
+        captured.clone(),
+    );
+    let src = reseed_site_server(t_src.clone());
+    let tgt = reseed_site_server_offers(uploads.clone());
+    let mut cfg = test_config(qb.port, src.port, tgt.port, &dir);
+    cfg.coverage.reseed_publish_enabled = true;
+
+    let key = "m:pendingoffers0000";
+    let src_url = format!("http://127.0.0.1:{}/details.php?id=1002", src.port);
+    let mut index = ContentIndex::load(&cfg.coverage_state_path());
+    index.contents.insert(
+        key.to_string(),
+        ContentEntry {
+            name: NAME.into(),
+            total_size: 105,
+            file_count: FILES.len(),
+            manifest_digest: "0".repeat(16),
+            torrents: std::collections::BTreeMap::from([(
+                local_hash.clone(),
+                TorrentMeta {
+                    save_path: "/data".into(),
+                    category: None,
+                    last_seen: 0,
+                    tracker_hosts: Vec::new(),
+                    hash_v2: None,
+                    added_on: 0,
+                },
+            )]),
+            tracker_hosts: Vec::new(),
+            first_seen: 0,
+            gone_since: None,
+            coverage: std::collections::BTreeMap::from([(
+                "hdsky".to_string(),
+                SiteCoverage {
+                    status: CoverageStatus::ReseedDraft,
+                    at: 0,
+                    url: None,
+                    note: None,
+                    verify_hash: None,
+                },
+            )]),
+            source: Some(SourceRecord {
+                site_id: "pter".into(),
+                detail_url: src_url.clone(),
+                resolved_at: 0,
+                miss_at: None,
+            }),
+            forbid_reseed: false,
+        },
+    );
+    index.save().unwrap();
+
+    let qb_client = QBittorrent::new(&cfg.downloader.url, "admin", "pass").unwrap();
+    let req = ReseedRequest {
+        content_key: key.into(),
+        source_site: "pter".into(),
+        source_url: src_url,
+        target_site: "hdsky".into(),
+        name: NAME.into(),
+    };
+    let mut logs = Vec::new();
+    let outcome = run_reseed(
+        &cfg,
+        &qb_client,
+        &req,
+        &mut index,
+        &mut |line| logs.push(line.to_string()),
+        None,
+    )
+    .unwrap();
+
+    let ReseedOutcome::Duplicate(d) = &outcome else {
+        panic!("种子过大应返回 Duplicate，实际 {outcome:?}");
+    };
+    assert_eq!(d.status, CoverageStatus::PendingOffers);
+    assert!(!d.mounted, "候选入口没有挂回 qB");
+    assert!(d.note.contains("offers.php"), "{}", d.note);
+    assert_eq!(outcome.audit_result(), "pending_offers");
+
+    let cell = &index.contents[key].coverage["hdsky"];
+    assert_eq!(cell.status, CoverageStatus::PendingOffers);
+    assert!(
+        cell.note
+            .as_deref()
+            .is_some_and(|n| n.contains("offers.php")),
+        "{:?}",
+        cell.note
+    );
+    assert_eq!(
+        uploads.lock().unwrap().len(),
+        1,
+        "站点明确回候选入口后不应重试上传"
+    );
+    assert!(
+        qb.requests("POST /api/v2/torrents/add").is_empty(),
+        "候选入口没有站点种子，不能往 qB 里加"
+    );
+
+    let action_log = std::fs::read_to_string(dir.join("reseed-log.jsonl")).unwrap();
+    assert!(
+        action_log.contains("\"result\":\"pending_offers\""),
+        "{action_log}"
+    );
+    assert!(
+        logs.iter().any(|line| line.contains("候选入口")),
+        "{logs:?}"
+    );
 }
 
 #[test]

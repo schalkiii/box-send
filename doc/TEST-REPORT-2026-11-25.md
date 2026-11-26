@@ -181,7 +181,20 @@ cargo fmt --all -- --check
 | CLI 集成 | `status_with_missing_config_exits_nonzero` | 缺配置非零退出，错误可读 |
 | CLI 集成 | `status_with_bad_config_json_exits_nonzero` | 坏配置非零退出，错误可读 |
 
-## 9. 结论
+## 9. 第三批：审核状态 e2e（2026-11-26）
+
+| 用例 | 目标 | 检查点 |
+| --- | --- | --- |
+| `e2e_upload_pending_review_holds_without_mounting` | 上传成功，但站点详情页标“未审”、下载端点明确说“尚未通过审核” | 返回 `PendingReview`，`mounted=false`，审计词 `pending_review`；不往 qB 加种；只上传一次 |
+| `e2e_torrent_too_large_stays_pending_offers_without_retry` | 站点回 `torrent_too_large` / `offers.php` 表单 | 覆盖格 `PendingOffers`，审计词 `pending_offers`；不重试上传，不碰 qB |
+| `e2e_review_followup_marks_pending_rejected_and_gone` | 回访三条已发布种子：页面标“未审”、写“审核不通过”、回“没有该ID的种子” | 分别落 `PendingReview` / `ReviewRejected` / `GoneFromSite`；回访只改结论，不下载、不挂种 |
+
+同时把 `coverage_e2e.rs` 的临时目录从“进程号”改成“进程号 + 递增序号”，同进程并行跑同名场景不会再互相踩目录。
+
+本机验证：`cargo test -p bsend` 通过 **422 个**（386 lib + 32 `coverage_e2e` + 2 `other_version_e2e` + 2 `skip_keywords_e2e`）；`cargo fmt --all -- --check` 和 `cargo clippy -p bsend --all-targets -- -D warnings` 通过。
+
+## 10. 结论
 
 本轮把“上传成功但校验没完”“同 hash 不碰原种”“旧版 qB 参数回退”“409/0 成功/空回包/非 torrent 回包”这些真实踩过的坑补成了回归测试；陆续补到核心库 + CLI + 集成测试 429 个全绿，静态检查和格式检查通过。GUI 3 个测试和完整 workspace 仍依赖远端 Windows MSVC CI；行覆盖率仍没有数字，下一轮应先解决覆盖率工具链，再谈覆盖率门禁。
-</content>
+
+2026-11-26 又补了三条审核状态 e2e，`cargo test -p bsend` 现在是 422 个全绿。仍未补的是“审核通过后自动把站点种子下回来挂进 qB”的收尾链路，以及 CLI 命令处理和 GUI 行为测试。
