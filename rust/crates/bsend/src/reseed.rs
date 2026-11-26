@@ -319,6 +319,11 @@ fn wanted_tags(info: &ReleaseInfo) -> Vec<&'static str> {
         out.push("粤语");
     }
     let title_hay = format!("{} {}", info.name, info.subtitle);
+    // 青蛙实测：媒介为 Remux 时必须同时勾「Remux」标签；表单有该复选框的站
+    // 由 match_checkboxes 自动勾上，没有的站不会硬造字段。
+    if title_hay.to_ascii_lowercase().contains("remux") {
+        out.push("Remux");
+    }
     let has_cjk = title_hay
         .chars()
         .any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c));
@@ -619,6 +624,18 @@ fn reorder_release_title(name: &str, completed: bool) -> String {
 fn normalize_release_title_for(name: &str, completed: bool) -> String {
     let cleaned = normalize_release_title(name);
     reorder_release_title(&cleaned, completed)
+}
+
+/// 站点对标题片源写法的硬性要求。青蛙实测：Remux 资源必须写 `BluRay`，
+/// 不能带 `Blu-ray` 的横杠；只改目标站标题，不改源站页和其他站口径。
+fn normalize_title_for_site(name: &str, site_id: &str) -> String {
+    if site_id != "qingwa" {
+        return name.to_string();
+    }
+    name.replace("Blu-ray", "BluRay")
+        .replace("Blu-Ray", "BluRay")
+        .replace("Blu ray", "BluRay")
+        .replace("blu-ray", "BluRay")
 }
 
 /// 详情页解析：发布名/副标题/简介/MediaInfo/条目链接（Swift `parse` 的通用子集）
@@ -1533,12 +1550,16 @@ pub fn build_upload_fields_for_site(
     tags_wanted: &[&str],
     site_id: &str,
 ) -> (Vec<Field>, Vec<String>, Vec<String>) {
-    let (mut fields, picked, notes) = build_upload_fields(info, page, tags_wanted);
+    // 标题按目标站规范改写后再参与选档；否则 qingwa 的 `Blu-ray` 会被站点
+    // 审核要求改成 `BluRay`，而且改写后仍要用同一份标题匹配下拉/标签。
+    let mut site_info = info.clone();
+    site_info.name = normalize_title_for_site(&site_info.name, site_id);
+    let (mut fields, picked, notes) = build_upload_fields(&site_info, page, tags_wanted);
     if site_id == "tjupt" {
-        fill_tjupt_series_fields(&mut fields, info, page);
+        fill_tjupt_series_fields(&mut fields, &site_info, page);
     }
     if site_id == "ubits" {
-        fill_ubits_quality_fields(&mut fields, info, page);
+        fill_ubits_quality_fields(&mut fields, &site_info, page);
     }
     (fields, picked, notes)
 }
@@ -2979,10 +3000,8 @@ pub fn prune_dead_images_with_site(
     site_url: &str,
     probe: &mut dyn FnMut(&str) -> bool,
 ) -> (String, usize) {
-    let (html_out, html_removed) =
-        prune_dead_html_images_with_site(html, site_url, &mut *probe);
-    let (bb_out, bb_removed) =
-        prune_dead_bbcode_images_with_site(&html_out, site_url, &mut *probe);
+    let (html_out, html_removed) = prune_dead_html_images_with_site(html, site_url, &mut *probe);
+    let (bb_out, bb_removed) = prune_dead_bbcode_images_with_site(&html_out, site_url, &mut *probe);
     (bb_out, html_removed + bb_removed)
 }
 
@@ -3065,7 +3084,6 @@ fn image_should_keep(src: &str, site_url: &str, probe: &mut dyn FnMut(&str) -> b
         && !blocked_image_host(src, site_url)
         && (trusted_image_host(src) || probe(src))
 }
-
 
 /// 兼容旧调用的无站点版本（单测和不带站点上下文的探测用）。
 pub fn prune_dead_images_with(html: &str, probe: &mut dyn FnMut(&str) -> bool) -> (String, usize) {
@@ -5489,6 +5507,8 @@ fn prepare_released(
     if info.name.is_empty() {
         info.name = req.name.clone();
     }
+    // 目标站标题规范先落地，后续预检、审计和提交字段看到的是同一版标题。
+    info.name = normalize_title_for_site(&info.name, &req.target_site);
     // 源页图片不足时，读取程序化截图清单（key → 公网图片 URL），注入简介。
     if let Some(urls) = extra_images_for(cfg, &req.content_key) {
         let mut add = String::new();
@@ -8123,6 +8143,30 @@ Language : English"
         };
         let (fs, _p, notes) = build_upload_fields(&info, form, &[]);
         assert_eq!(field_lookup(&fs, "medium_sel"), Some("2"), "{notes:?}");
+    }
+
+    #[test]
+    fn qingwa_remux_title_and_tag_are_fixed() {
+        let form = r#"<input type="text" name="name" value="">
+<select name="source_sel[4]"><option value="0">请选择</option><option value="1">UHD Blu-ray</option><option value="8">Blu-ray</option><option value="9">Remux</option><option value="10">Encode</option></select>
+<label><input type="checkbox" name="tags[4][]" value="15" />Remux</label>"#;
+        let info = ReleaseInfo {
+            name: "A Touch of Zen 1971 1080p Blu-ray REMUX AVC LPCM 1.0-WScode".into(),
+            ..Default::default()
+        };
+        let tags = wanted_tags(&info);
+        assert!(tags.contains(&"Remux"), "Remux 没进想勾的标签：{tags:?}");
+        let (fs, picked, notes) = build_upload_fields_for_site(&info, form, &tags, "qingwa");
+        assert_eq!(
+            field_lookup(&fs, "name"),
+            Some("A Touch of Zen 1971 1080p BluRay REMUX AVC LPCM 1.0-WScode"),
+            "{notes:?}"
+        );
+        assert_eq!(field_lookup(&fs, "source_sel[4]"), Some("9"), "{notes:?}");
+        assert!(
+            picked.contains(&"15".to_string()),
+            "Remux 标签没勾上：{picked:?}"
+        );
     }
 
     #[test]

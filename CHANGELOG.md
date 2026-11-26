@@ -7,6 +7,8 @@
 
 ### Changed
 
+- 青蛙（qingwa）Remux 资源标题按站点规范把 `Blu-ray` 写成 `BluRay`，并在表单有「Remux」复选框时自动勾选；2026-11-26 `208804` 已按此改好，等站点重新审核。
+
 - 图片检查覆盖 BBCode（`[img]` / `[img=尺寸]`）和 HTML 两种写法；`hdsky.me`、`img.hdsky.me`、`imgur.com` 源站热链即使本机 200 也按死图剪掉，UBits 另把 `imgbox.com` 按死图处理。新增 `scripts/rehost-descr-images.py` 把简介图片统一转存 pixhost。2026-11-25 藏宝阁 44189 因 3 张 hdsky 图被拒，已换 pixhost 等复审。
 
 - 上传超时可按站点配置：`assist.reseedRules.<site>.uploadTimeoutSec`（缺省 120 秒）。2026-11-25 tjupt 真发《我们的父辈》25GB 成功并挂回 qB（`652794`，校验 100%，等站点审核）；同一批 274GB《波洛全季》合集上传 5 分钟仍回 HTTP 200 空正文、站上无条目，属于站点后端处理超时，重试仍会空回包，要发得先拆小或换内容。

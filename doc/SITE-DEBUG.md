@@ -156,6 +156,8 @@ luckpt 的候选规则（**还没有写进 `boxsend.json`**）：
 
 665/667 条有记录，约 99.7%。没覆盖的是成人合集和多片合集，前者被内容黑名单拦掉，后者不是适配器故障。保留白名单，不再投入映射修复。
 
+- **Remux 标题与标签（2026-11-26 站内信实测）**：`A Touch of Zen 1971 1080p Blu-ray REMUX AVC LPCM 1.0-WScode` 被拒，原因两条：片源必须写 `BluRay`，不能带 `Blu-ray` 的横杠；媒介是 Remux，必须勾「Remux」标签。已在 `edit.php?id=208804` 把标题改成 `... 1080p BluRay REMUX ...` 并勾上 `tags[4][]=15`，页面提示“编辑成功”，标签显示 `中字 国语 Remux`。代码同步加 `normalize_title_for_site`（只对 qingwa 把 `Blu-ray` 写成 `BluRay`）和 `wanted_tags` 的 Remux 自动勾选，避免下一条再犯。
+
 ### 6.4 haitang 和 haoxue
 
 - haitang：只有曲艺、有声书类目，和影视范围不匹配，已移出白名单，规则留档。

@@ -34,7 +34,7 @@ Rust 2021；crate：`bsend`（引擎）、`bsend-cli`、`bsend-gui`。错误用 
 - **audiences 的站内检索固定走 Kimi WebBridge**：用用户已登录的真实浏览器打开种子列表页、等 Cloudflare Turnstile token，再同源 `fetch` 搜索 URL；IMDb 区判重也走这个入口，不退回无头 HTTP，也不把“人机验证”页面当成“站内没有”。token 为空时明确报需要人工点一次验证；如果页面 `visibilityState=hidden`（窗口最小化或不在前台），Turnstile 不会渲染 iframe，要明确报“标签页在后台”并提示切到前台，不能硬等或盲发。详见 `doc/ARCHITECTURE.md` 5.5.2。
 - **一个种子只挂一个站点**：禁止 `addTrackers`，禁止把多个站的 announce 合并。上传种子时写目标站专属 `info.source`，让新 info hash 和源种子不同；发布后从目标站下载 `.torrent`，作为独立种子挂回 qB。
 - 发布不看画质：站上有同名其他版本照样发（`assist.allowOtherVersion`）；只有站点明确返回 `existed` 才不发。
-- 标题按站点规范重排：完结剧集去掉 `Complete`，技术参数按“分辨率 → 片源 → 视频编码 → 音频编码”的顺序；站点改写标题时同样按这套顺序生成，不再把 `USA`、`MA`、`5.1` 塞到音频后面。
+- 标题按站点规范重排：完结剧集去掉 `Complete`，技术参数按“分辨率 → 片源 → 视频编码 → 音频编码”的顺序；站点改写标题时同样按这套顺序生成，不再把 `USA`、`MA`、`5.1` 塞到音频后面。青蛙的 Remux 标题片源必须写 `BluRay`（不要 `Blu-ray` 的横杠），并勾「Remux」标签。
 - 第一次向 qB 里还没有该站种子的站点发种时，抄不到该站 passkey，必须在 `sourceSites[].overrides.announceURL` 填该站完整 tracker 地址；没填会直接中止，不会伪造无 passkey 的种子。
 - **判重以 info hash 和分片（pieces）为准；只有名称相同且总大小相等时才进人工核对，总大小不同就是不同内容。**
 - **站上 hash 与上传构造不同也能挂回，但只认 pieces 和文件清单**：站点常改写 `info.source` 或标题；挂回前必须核对 pieces 指纹一致、文件清单一致（比较时忽略首段根目录名），不看 hash、也不看标题是否一字不差。`allows_target_hash_rewrite` 白名单只用于日志标注“这个站已实测改写过”，不是放行条件；pieces 或文件清单对不上就拒绝挂回，宁可落人工。
