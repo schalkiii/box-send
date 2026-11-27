@@ -40,8 +40,21 @@ rust/target/
 # 实机发种/浏览器证据目录（含 passkey 种子、页面截图、回包原文，整目录不入库）
 /artifacts/
 # 根目录一次性调试输出（命令回显、回包原文、页面截图、review/gatecheck 草稿）
-/*.txt
-/*.html
+# 只挡已知证据前缀，不要用 /*.txt、/*.html 这类会吃掉正式文档的通配
+/audit-final*.txt
+/drafts-*.txt
+/followup-*.txt
+/formcheck-*.txt
+/gatecheck-*.txt
+/review*.txt
+/status-*.txt
+/test-*.txt
+/workspace-test-*.txt
+/release-build-*.txt
+/iloli-*.html
+/railgun-*.html
+/u2-*.html
+/wintersakura-*.html
 /bsend-batch-*.md
 /gatecheck-*.json
 /rust/*.txt
