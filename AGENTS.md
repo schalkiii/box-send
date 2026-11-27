@@ -26,7 +26,7 @@ cargo build --release -p bsend-cli                   # 产物 rust/target/releas
 Rust 2021；crate：`bsend`（引擎）、`bsend-cli`、`bsend-gui`。错误用 `anyhow`，HTTP 用 `reqwest`（默认跟随重定向），种子文件格式（Bencode）自实现于 `bencode.rs`。
 
 ## 目录与约定
-- `rust/crates/bsend/src/`：`reseed.rs`（审阅/上传/挂回主流程，单文件约 1.18 万行，待拆分）、`autopost.rs`（自动发种编排）、`coverage.rs` / `report.rs`（覆盖记录与统计）、`matcher.rs`（判重）、`sites/nexusphp.rs`（站点适配）、`config.rs`、`gates.rs`。
+- `rust/crates/bsend/src/`：`reseed.rs`（审阅/上传/挂回主流程，单文件约 1.19 万行，已拆出 `reseed/title.rs` 第一批，主体待拆分）、`autopost.rs`（自动发种编排）、`coverage.rs` / `report.rs`（覆盖记录与统计）、`matcher.rs`（判重）、`sites/nexusphp.rs`（站点适配）、`config.rs`、`gates.rs`；CLI 参数定义在 `bsend-cli/src/cli.rs`。
 - 注释语言跟随所在文件既有习惯（现状以中文为主）；日志与文档用中文。
 
 ## 不能违反的规则
