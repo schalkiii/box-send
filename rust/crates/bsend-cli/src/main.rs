@@ -1003,7 +1003,7 @@ fn cmd_formcheck(cfg: &Config, sites: Option<Vec<String>>) -> Result<()> {
         facts.push(formcheck_fact(&d, &core, &soft));
     }
     println!(
-        "\n汇总：{} 站｜表单齐 {}｜有缺口 {}｜不可发种/失败 {}（权限/登录/限流）",
+        "\n汇总：{} 站｜表单齐 {}｜有缺口 {}｜不可发种 {}（权限/登录/无表单/其他）",
         adapters.len(),
         ok_n,
         gap_n,
