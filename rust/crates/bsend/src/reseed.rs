@@ -7713,16 +7713,17 @@ fn run_reseed_inner(
             log(&format!("发后挂回·未做种：{}", outcome.display()));
             Ok(outcome)
         }
-        // 上传成功、种子已加入 qB，但等到校验窗口结束还没到 100%。旧版和普通发布
-        // 一起走 `Ok(other) => Posted`，界面写“转种完成”，实际还没做种。
+        // 上传成功、种子已加入 qB，但还没确认做种：可能校验没到 100%，
+        // 也可能校验到了 100% 但 tracker 还没回包。旧版和普通发布一起走
+        // `Ok(other) => Posted`，界面写“转种完成”，实际站点还没看见做种。
         Ok(CoverageStatus::Verifying) => {
             if let Some((mark, why)) = &page_mark {
                 log(&format!(
-                    "站点页面标着审核结论（{}：{why}）；本轮种子还在校验，等回访时再记",
+                    "站点页面标着审核结论（{}：{why}）；本轮还没确认做种，等回访时再记",
                     mark.label()
                 ));
             }
-            log("发后挂回·校验未完成：站上已发布，种子已加入 qB，当前还没到 100%，下一轮接着收尾");
+            log("发后挂回·尚未确认做种：站上已发布，种子已加入 qB，tracker/校验还没确认；下一轮复核");
             Ok(ReseedOutcome::PostedVerifying(reported_url))
         }
         Ok(CoverageStatus::Seeding) => {
@@ -7795,7 +7796,7 @@ fn append_reseed_log(
         Ok(ReseedOutcome::PostedVerifying(u)) => (
             "posted_verifying",
             Some(u.as_str()),
-            Some("站上已发布，种子已加入 qB，校验还没跑完；下一轮接着收尾".to_string()),
+            Some("站上已发布，种子已加入 qB，但 tracker/校验还没确认做种；下一轮复核".to_string()),
         ),
         Ok(ReseedOutcome::Duplicate(d)) => (
             ReseedOutcome::Duplicate(d.clone()).audit_result(),
@@ -7941,14 +7942,16 @@ fn same_hash_on_target(cfg: &Config, qb: &QBittorrent, hash: &str, target_site: 
         return false;
     }
     // progress=1 只是本地校验完；tracker status=2 才是站点已回包。
-    infos.iter().any(|t| t.status == 2)
+    crate::qbittorrent::tracker_confirms_seeding(&infos)
 }
 
 /// 把目标站 `.torrent` 推进下载器并校验：发布成功、或目标站已有同分片条目
 /// （existed / 站内判重命中）时共用——「新站已有条目」也要下载目标种挂到本地数据上，
 /// 否则站点上永远只有发布记录、下载器里没有这个 tracker。
-/// 返回最终格子状态：`Reseeded`（校验 100% 在做种）/ `Assisted`（下载器里早已有，
-/// 已补挂 tracker）/ `Verifying`（本轮没验完，下一轮收尾）；校验失败返回 Err（格子已写 Failed）。
+/// 返回最终格子状态：`Reseeded`（校验 100% 且目标 tracker 已回包）/
+/// `Verifying`（已发布挂回但 tracker 还没确认，下一轮继续复核）/
+/// `Assisted`（下载器里早已有，已补挂 tracker）/ `Seeding`（同 hash 已在做种）；
+/// 校验失败返回 Err（格子已写 Failed）。
 #[allow(clippy::too_many_arguments)]
 fn push_target_torrent(
     cfg: &Config,
@@ -8145,22 +8148,39 @@ fn push_target_torrent(
         if let Ok(Some((progress, state))) = qb.torrent_progress(&site_hash) {
             if progress >= 0.999 {
                 let _ = qb.set_download_limit(&site_hash, 0);
-                let tracker_note = qb
-                    .tracker_info(&site_hash)
-                    .map(|infos| crate::qbittorrent::tracker_status_note(&infos))
-                    .unwrap_or_else(|_| "tracker 状态读不到".to_string());
-                let note = format!("转种成功：校验到 100%，{tracker_note}");
+                let (confirmed, tracker_note) = match qb.tracker_info(&site_hash) {
+                    Ok(infos) => (
+                        crate::qbittorrent::tracker_confirms_seeding(&infos),
+                        crate::qbittorrent::tracker_status_note(&infos),
+                    ),
+                    Err(e) => (false, format!("tracker 状态读不到：{e}")),
+                };
+                // progress=1 只说明本地校验完成；tracker 没回包时不能落“已转种”，
+                // 留在“校验中”让下一轮覆盖扫描继续复核，直到站点真的回包。
+                let (status, note) = if confirmed {
+                    (
+                        CoverageStatus::Reseeded,
+                        format!("转种成功：校验到 100%，{tracker_note}"),
+                    )
+                } else {
+                    (
+                        CoverageStatus::Verifying,
+                        format!(
+                            "已发布并挂回 100%，但{tracker_note}；还没确认站点看见做种，下一轮复核"
+                        ),
+                    )
+                };
                 log(&format!("校验到 100%，{tracker_note}"));
                 write_cell(
                     index,
                     &req.content_key,
                     &req.target_site,
-                    CoverageStatus::Reseeded,
+                    status,
                     Some(detail_url.to_string()),
                     &note,
                 );
                 index.save()?;
-                return Ok(CoverageStatus::Reseeded);
+                return Ok(status);
             }
             if waited > 0 && !state.contains("check") && !state.contains("meta") {
                 let _ = qb.set_paused(&[&site_hash], true);

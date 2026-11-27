@@ -1459,9 +1459,10 @@ fn reseed_arm(
     }
 }
 
-/// 校验中格子的收尾判定（方案第七节「下一轮收尾」）：满 100% → 启动；
-/// 校验完仍不满 → 按 removeOnVerifyFail 回滚或保持暂停；还在校验/这次查询没通 →
-/// None（下轮再看）。qB 查询不过站点预算。
+/// 校验中格子的收尾判定（方案第七节「下一轮收尾」）：满 100% 且目标 tracker
+/// `status=2` → 启动并记为已做种；满 100% 但 tracker 没回包 → 继续留在校验中，
+/// 下一轮再问；校验完仍不满 → 按 removeOnVerifyFail 回滚或保持暂停；还在校验/
+/// 这次查询没通 → None（下轮再看）。qB 查询不过站点预算。
 fn collect_verifying(
     qb: &QBittorrent,
     hash: &str,
@@ -1472,14 +1473,25 @@ fn collect_verifying(
             if progress >= 0.999 {
                 let _ = qb.set_download_limit(hash, 0);
                 let _ = qb.set_paused(&[hash], false);
-                let tracker_note = qb
-                    .tracker_info(hash)
-                    .map(|infos| crate::qbittorrent::tracker_status_note(&infos))
-                    .unwrap_or_else(|_| "tracker 状态读不到".to_string());
-                Some((
-                    CoverageStatus::Assisted,
-                    format!("校验到 100%，已在 qB 做种；{tracker_note}（上一轮推送收尾）"),
-                ))
+                let (confirmed, tracker_note) = match qb.tracker_info(hash) {
+                    Ok(infos) => (
+                        crate::qbittorrent::tracker_confirms_seeding(&infos),
+                        crate::qbittorrent::tracker_status_note(&infos),
+                    ),
+                    Err(e) => (false, format!("tracker 状态读不到：{e}")),
+                };
+                if confirmed {
+                    Some((
+                        CoverageStatus::Assisted,
+                        format!("校验到 100%，已在 qB 做种；{tracker_note}（上一轮推送收尾）"),
+                    ))
+                } else {
+                    // 本地校验完成不等于站点看见做种；继续留在校验中，下一轮再问 tracker。
+                    Some((
+                        CoverageStatus::Verifying,
+                        format!("校验到 100%，但{tracker_note}；还没确认站点看见做种，下一轮复核"),
+                    ))
+                }
             } else if is_checking(&state) {
                 None
             } else if cov.remove_on_verify_fail {

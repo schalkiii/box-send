@@ -235,7 +235,7 @@ fn qb_server(
             return (
                 200,
                 "application/json",
-                br#"[{"url":"http://localhost/announce?passkey=ZZZ"}]"#.to_vec(),
+                br#"[{"url":"http://localhost/announce?passkey=ZZZ","status":2}]"#.to_vec(),
             );
         }
         if path.starts_with("/api/v2/torrents/export") {

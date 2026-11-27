@@ -84,6 +84,12 @@ pub fn tracker_status_note(infos: &[TrackerInfo]) -> String {
     "tracker 还没回包".to_string()
 }
 
+/// 站点是否真的看见这条做种：只有 qB tracker 明确回报 `status=2` 才算。
+/// `progress=1` 只证明本地校验完成，不能替代站点回包。
+pub fn tracker_confirms_seeding(infos: &[TrackerInfo]) -> bool {
+    infos.iter().any(|t| t.status == 2)
+}
+
 pub struct QBittorrent {
     client: Client,
     base_url: String,
@@ -1234,6 +1240,7 @@ mod tests {
         assert_eq!(infos[0].num_seeds, 3);
         assert!(tracker_status_note(&infos).contains("tracker 已回包"));
         assert!(tracker_status_note(&infos).contains("做种 3 / 下载 14"));
+        assert!(tracker_confirms_seeding(&infos));
 
         let pending = vec![TrackerInfo {
             url: "https://tracker.example/announce".into(),
@@ -1244,6 +1251,7 @@ mod tests {
             num_downloaded: -1,
         }];
         assert_eq!(tracker_status_note(&pending), "tracker 还没回包");
+        assert!(!tracker_confirms_seeding(&pending));
 
         let broken = vec![TrackerInfo {
             url: "https://tracker.example/announce".into(),

@@ -252,7 +252,12 @@ fn qb_server_ex(
             return (200, "text/plain", b"Ok.".to_vec());
         }
         if path.starts_with("/api/v2/torrents/trackers") {
-            return (200, "application/json", b"[]".to_vec());
+            // 默认模拟站点 tracker 已回包；校验收尾现在不再把 progress=1 当成做种。
+            return (
+                200,
+                "application/json",
+                br#"[{"url":"http://localhost/announce","status":2}]"#.to_vec(),
+            );
         }
         // qB 4.x 形态：start/stop 不存在（404），启停走 resume/pause 兜底
         if path.starts_with("/api/v2/torrents/start") || path.starts_with("/api/v2/torrents/stop") {
@@ -1747,10 +1752,11 @@ fn qb_server_for_reseed_with_progress(
             return (200, "application/json", json.into_bytes());
         }
         if path.starts_with("/api/v2/torrents/trackers") {
+            // 模拟站点 tracker 已回包：收尾逻辑要求 status=2 才算站点看见做种。
             return (
                 200,
                 "application/json",
-                br#"[{"url":"http://localhost/announce?passkey=ZZZ"}]"#.to_vec(),
+                br#"[{"url":"http://localhost/announce?passkey=ZZZ","status":2}]"#.to_vec(),
             );
         }
         if path.starts_with("/api/v2/torrents/export") {

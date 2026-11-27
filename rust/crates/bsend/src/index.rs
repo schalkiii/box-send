@@ -26,7 +26,7 @@ pub enum CoverageStatus {
     Assisted,
     /// 已转种成功
     Reseeded,
-    /// 上一轮推送还没等到校验结果
+    /// 上一轮推送还没确认做种：校验未完成，或校验到 100% 但目标 tracker 还没回包
     Verifying,
     /// 站内检索命中但清单对不上（C 级），待人工确认
     ReviewPending,

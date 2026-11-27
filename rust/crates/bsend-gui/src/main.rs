@@ -733,8 +733,9 @@ fn show_error(message: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::pick_config_path;
-    use std::path::PathBuf;
+    use super::{pick_config_path, short_path, status_chip};
+    use bsend::index::CoverageStatus;
+    use std::path::{Path, PathBuf};
 
     #[test]
     fn config_path_prefers_arg_then_cwd_then_local_appdata() {
@@ -754,5 +755,112 @@ mod tests {
         // 当前目录没有则回退到 %LOCALAPPDATA%
         std::fs::remove_file(&cwd_cfg).unwrap();
         assert_eq!(pick_config_path(None, &dir, Some(&local)), local);
+    }
+
+    #[test]
+    fn status_chip_labels_the_review_and_gone_states() {
+        let chip = status_chip(CoverageStatus::PendingReview, 7);
+        assert_eq!(chip.label, "等站点审核");
+        assert_eq!(chip.count, 7);
+        let chip = status_chip(CoverageStatus::ReviewRejected, 3);
+        assert_eq!(chip.label, "审核没过");
+        let chip = status_chip(CoverageStatus::GoneFromSite, 2);
+        assert_eq!(chip.label, "站上已没有");
+    }
+
+    #[test]
+    fn short_path_keeps_only_the_last_two_components() {
+        let path = Path::new("/Users/Schal/AppData/Local/BoxSend/boxsend.json");
+        assert_eq!(short_path(path), "…\\BoxSend\\boxsend.json");
+    }
+
+    #[test]
+    fn status_chip_labels_active_states() {
+        assert_eq!(status_chip(CoverageStatus::Seeding, 0).label, "已在做种");
+        assert_eq!(status_chip(CoverageStatus::Assisted, 0).label, "已辅种");
+        assert_eq!(status_chip(CoverageStatus::Reseeded, 0).label, "已转种");
+    }
+
+    #[test]
+    fn status_chip_labels_in_progress_and_other_version() {
+        assert_eq!(status_chip(CoverageStatus::Verifying, 0).label, "校验中");
+        assert_eq!(
+            status_chip(CoverageStatus::OtherVersion, 0).label,
+            "其他版本"
+        );
+    }
+
+    #[test]
+    fn status_chip_labels_skip_states() {
+        assert_eq!(
+            status_chip(CoverageStatus::SameHashSkip, 0).label,
+            "同 hash 跳过"
+        );
+        assert_eq!(status_chip(CoverageStatus::Rejected, 0).label, "人工否决");
+        assert_eq!(status_chip(CoverageStatus::Miss, 0).label, "站内没有");
+    }
+
+    #[test]
+    fn status_chip_labels_source_and_failure() {
+        assert_eq!(status_chip(CoverageStatus::WaitSource, 0).label, "待找源");
+        assert_eq!(status_chip(CoverageStatus::Failed, 0).label, "失败");
+    }
+
+    #[test]
+    fn status_chip_labels_draft_and_offer() {
+        assert_eq!(
+            status_chip(CoverageStatus::ReseedDraft, 0).label,
+            "转种草稿"
+        );
+        assert_eq!(
+            status_chip(CoverageStatus::PendingOffers, 0).label,
+            "等走候选"
+        );
+    }
+
+    #[test]
+    fn status_chip_labels_skipped() {
+        assert_eq!(status_chip(CoverageStatus::Skipped, 0).label, "已跳过");
+    }
+
+    #[test]
+    fn status_chip_keeps_review_colors_distinct() {
+        let pending = status_chip(CoverageStatus::PendingReview, 0).color;
+        let rejected = status_chip(CoverageStatus::ReviewRejected, 0).color;
+        let gone = status_chip(CoverageStatus::GoneFromSite, 0).color;
+        assert_ne!(pending, rejected);
+        assert_ne!(pending, gone);
+        assert_ne!(rejected, gone);
+    }
+
+    #[test]
+    fn status_chip_labels_are_unique() {
+        let labels: Vec<&str> = [
+            CoverageStatus::Seeding,
+            CoverageStatus::Assisted,
+            CoverageStatus::Reseeded,
+            CoverageStatus::Verifying,
+            CoverageStatus::ReviewPending,
+            CoverageStatus::OtherVersion,
+            CoverageStatus::SameHashSkip,
+            CoverageStatus::Rejected,
+            CoverageStatus::Miss,
+            CoverageStatus::WaitSource,
+            CoverageStatus::Failed,
+            CoverageStatus::ReseedDraft,
+            CoverageStatus::PendingOffers,
+            CoverageStatus::PendingReview,
+            CoverageStatus::ReviewRejected,
+            CoverageStatus::GoneFromSite,
+            CoverageStatus::Skipped,
+        ]
+        .iter()
+        .map(|s| status_chip(*s, 0).label)
+        .collect();
+        let mut set = std::collections::HashSet::new();
+        for label in &labels {
+            assert!(!label.is_empty());
+            assert!(set.insert(*label), "重复状态文案：{label}");
+        }
     }
 }
