@@ -149,7 +149,20 @@ CLI 侧 `main.rs` 从 2,380 行降到 129 行，只留 `main`、连接 qB、构�
 
 - `rust/Cargo.toml` 声明 `rust-version = "1.88"`。1.82 会撞上依赖的 edition 2024（`cpufeatures 0.3.1`），1.85 又不够 `cookie_store`、`icu_*`、`time` 的 1.86/1.88 要求；1.88 是当前依赖树的真实下限。
 - 本地 `cargo +1.88.0-x86_64-pc-windows-gnu check -p bsend` 通过。Windows MSVC 工具链在本机没有 `link.exe`/Windows SDK，1.88 的 MSVC 目标无法链接；CI 的 MSRV job 跑在 Ubuntu，不依赖本机 MSVC。
-- `.github/workflows/rust.yml` 新增 `msrv` job（1.88.0，`cargo check -p bsend -p bsend-cli`）和 `coverage` job（stable + `llvm-tools-preview` + `cargo-llvm-cov --workspace --exclude bsend-gui --lcov`，上传 `lcov.info`）。本地 Windows GNU 仍缺 profiler runtime，不能跑 `cargo llvm-cov`；覆盖数字以 CI artifact 为准，不伪造百分比。
+- `.github/workflows/rust.yml` 新增 `msrv` job（1.88.0，`cargo check -p bsend -p bsend-cli`）和 `coverage` job（stable + `llvm-tools-preview` + `cargo-llvm-cov --workspace --exclude bsend-gui --lcov`，上传 `lcov.info`）。本地 Windows GNU 仍缺 profiler runtime，不能跑 `cargo llvm-cov`；覆盖数字以 CI artifact 为准，不伪造百分比。2026-11-27 从 CI artifact 读到行覆盖 79.87%，门槛设为 77。
+
+### 4.7 拆分 `sites/nexusphp.rs`（已完成 2026-11-27）
+
+`sites/nexusphp.rs` 从 2,886 行降到 1,834 行，保留站点定义、`impl NexusPhp`、复审逻辑和测试；按职责拆出：
+
+```
+sites/nexusphp/text.rs    文本工具、实体解码、下载提示表单（231 行）
+sites/nexusphp/search.rs  查询词逐级放宽、名称判定、归一化（235 行）
+sites/nexusphp/detail.rs  结果页/详情页解析、大小/上传者/审核标记（710 行）
+sites/nexusphp/upload.rs  页面请求重试、限流/拦截页识别、站点提示页（119 行）
+```
+
+拆分只移动代码，不改行为；全量 533 条、`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings` 通过。
 
 ## 5. 已知问题
 
@@ -176,7 +189,7 @@ CLI 侧 `main.rs` 从 2,380 行降到 129 行，只留 `main`、连接 qB、构�
 - ~~配置测试的临时目录按进程号共用，偶尔互相干扰~~（2026-11-27 已修：按测试线程隔离，同一测试内多次 `write_temp` 仍共享目录）。
 - ~~部分临时目录只用进程号做前缀，同一进程并发跑测试可能撞名~~（同上，`write_temp_isolated` 改成 `test_dir().join(tag)`）。
 - 界面的自动化测试仍偏少：13 条纯状态测试已覆盖状态文案、配色、计数和配置路径（见 `AUDIT-REPORT-2026-11-27.md` S7）；按钮可用性和真实窗口渲染仍靠手工。
-- 旧版 `startup.log` 已没有程序写，可以删。
+- 旧版 `startup.log` 已没有程序写，文件也已不存在（2026-11-27 复核）；`rust-embed 8.7.0` 是 GPUI 的传递依赖（`gpui_util`），不是本项目主动降级，Cargo.toml 没有它的版本声明，不需要恢复或补降级说明。
 
 ## 6. 风险
 

@@ -132,18 +132,20 @@
 - 验证：新增用例在 `cargo test -p bsend-cli` 通过；不改变现有 20+3 条。
 - 执行结果：新增 `status_with_empty_index_is_ok`、`audit_without_file_is_ok`、`report_with_empty_index_is_ok`；CLI 单测 20→23，冒烟仍 3，全部通过。
 
-### S6（P2，串行）给 `nexusphp.rs` 做下一轮拆分
+### S6（P2，串行，已执行）给 `nexusphp.rs` 做下一轮拆分
 
 - 做法：按 `sites/nexusphp/{mod,detail,search,upload}.rs` 拆，`mod.rs` 只留站点定义和公共类型；只移动代码，不改行为；每拆一个文件跑 `cargo test -p bsend --lib sites::`。
 - 文件：`rust/crates/bsend/src/sites/nexusphp.rs` + 新文件。
-- 验证：`cargo test -p bsend --lib` 455 条全绿；`cargo clippy` 无新警告；`git diff` 只有移动。
+- 验证：`cargo test -p bsend --lib` 456 条全绿；`cargo clippy` 无新警告；`git diff` 只有移动。
+- 执行结果：采用保留 `nexusphp.rs` 作模块根、新建 `sites/nexusphp/` 子模块的方式，拆出 `text.rs`（231 行，文本工具）、`search.rs`（235 行，查询词/名称判定）、`detail.rs`（710 行，结果页/详情页解析）、`upload.rs`（119 行，请求重试/限流/提示页）；根文件 2,886 → 1,834 行，仍保留站点定义、`impl NexusPhp`、复审逻辑和测试。全量 533 条、fmt、clippy 均通过。
 - 并行性：串行，单独分支；不要与 S2 同改 `nexusphp.rs`。
 
-### S7（P3，串行）清掉过时工程说明
+### S7（P3，串行，已执行）清掉过时工程说明
 
 - 做法：`ROADMAP` 5.2 的 `startup.log` 删除项标注“已不存在”；旧 `AUDIT-REPORT-2026-11-27.md` 顶部加“历史版，现状见 r2”；`Cargo.lock` 的 rust-embed 降级要么恢复 8.14，要么在 `Cargo.toml`/文档写一句“为兼容旧工具链临时降级，MSRV 1.88 后可评估恢复”。
 - 文件：`doc/ROADMAP.md`、`doc/AUDIT-REPORT-2026-11-27.md`、`rust/Cargo.toml`、`rust/Cargo.lock`。
 - 验证：文档搜索不再出现 11,889/第一批；`cargo check` 仍通过。
+- 执行结果：`ROADMAP` 5.2 已写“文件已不存在”；旧审计报告顶部历史版说明已存在；`cargo tree -i rust-embed` 确认 8.7.0 由 GPUI 的 `gpui_util` 传递引入，不是本项目降级，`Cargo.toml` 没有 pin，无需改 lock，已在 ROADMAP 说明。
 - 并行性：与 S2/S3/S4 文件不重叠，可并行；但改 lock 要和 S1 提交串行。
 
 ### S8（P3，串行，需用户确认）清场 `artifacts/`
@@ -175,7 +177,7 @@
 - S1 已执行：改动提交为 `025b712` 并推送 `origin/master`；GitHub Actions run [45993230747](https://github.com/schalkiii/box-send/actions/runs/45993230747) 的 `MSRV 1.88`、覆盖率、Ubuntu、Windows 四个 job 全部 success。
 - S2 已执行：新增 `lib.rs::lock_unpoisoned`，`coverage.rs`、`throttle.rs`、`qbittorrent.rs` 的生产路径锁改为 poison 恢复；新增 `lock_unpoisoned_recovers_after_holder_panics` 用例。全量从 527 增到 **528 条**，核心库 455、e2e 33、CLI 23、GUI 13 全绿；fmt/clippy 通过。
 - S3 已执行：删掉根目录 `/*.txt`、`/*.html` 两条总通配，改成 `/audit-final*`、`/review*`、`/status-*`、`/test-*`、`/iloli-*` 等已知证据前缀；`artifacts/` 整目录仍忽略。`git check-ignore` 实测 `review-54.txt` 仍命中、`notes.txt`/`README.md`/`report.html` 不再被吞。
-- S4/S5/S6/S7/S8 未在本轮执行，作为后续可并行/串行项保留；其中 S8 清场必须等用户明确确认。
+- S4/S5/S6/S7 已在本轮执行；S8 清场仍待用户明确确认。
 - 旧 `doc/AUDIT-REPORT-2026-11-27.md` 保留为拆分前历史版，现状以本报告为准。
 
 
