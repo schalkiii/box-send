@@ -20,7 +20,7 @@
 
 ### 1.1 规模与结构
 
-- Git：`master`，审计开始基线 `1c666a7`；最终收尾在 `a81b568`（含 `7046f4d` 的 5 条测试分支和 tracker 真值修复），远端最新仍是 `db9e16b`，`7046f4d`、`a81b568` 尚未推送。
+- Git：`master`，审计开始基线 `1c666a7`；最终收尾在 `a81b568`（含 `7046f4d` 的 5 条测试分支和 tracker 真值修复），文档收尾 `304101c` 已推送；`a81b568` 的 GitHub Actions run `45969811014` 全绿，`304101c` 只改文档、不触发 Rust workflow。
 - Rust 源文件 45 个，合计 42,353 行；按 `#[cfg(test)]` 估算生产代码约 31,237 行。
 - 测试属性 513 个（本报告初稿写 507，后续补了 6 条：5 条测试分支 + 1 条 tracker 状态）。`cargo test --workspace` 实测：核心库 454、`coverage_e2e` 33、其余 2/2/16/3/3，全部通过。
 - 最大模块：`reseed.rs` 11,857 行、345 个函数、49 个公开函数、168 个测试；`coverage_e2e.rs` 3,582 行、33 个测试；`sites/nexusphp.rs` 3,091 行、36 个测试；`bsend-cli/main.rs` 2,380 行、16 个内联测试，加 `tests/cli_smoke.rs` 3 条共 19 条。
