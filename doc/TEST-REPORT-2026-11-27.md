@@ -5,11 +5,11 @@
 
 ## 一、基线
 
-- 改动后 `cargo test --workspace`：**533 条全绿**（核心库 456、coverage_e2e 34、其余 2/2/23/3/13）。
+- 改动后 `cargo test --workspace`：**535 条全绿**（核心库 457、coverage_e2e 35、其余 2/2/23/3/13）。
 - `cargo fmt --check` 通过；`cargo clippy --workspace --all-targets -- -D warnings` 通过（只有 `proc-macro-error2` 的 future-incompat 提示，不是本项目代码）。
 - GitHub Actions `61cf4d2` run `45979346634` success（Linux + Windows 全量测试、fmt、clippy）；本地同一提交 527 条全绿。
-- 覆盖率：已接入 CI（`coverage` job 用 Ubuntu + `cargo-llvm-cov` 生成 `lcov.info` artifact）；本地 Windows GNU 工具链缺 profiler runtime，仍不能跑 `cargo llvm-cov`，下面用“测试/函数比”和缺口清单量化，不伪造百分比。
-- 最新重构后复跑：核心库 456、CLI 23 + 冒烟 3、e2e 34、GUI 13，全量 **533 条全绿**；`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings` 通过。MSRV 1.88 的 `cargo check` 在本机 GNU 工具链通过。
+- 覆盖率：已接入 CI（`coverage` job 用 Ubuntu + `cargo-llvm-cov` 生成 `lcov.info` artifact），并用 `--fail-under-lines 77` 设了 77% 的硬门槛；当前行覆盖率 16,842/21,087 = **79.87%**。本地 Windows GNU 工具链缺 profiler runtime，仍不能跑 `cargo llvm-cov`，本地用“测试/函数比”和缺口清单量化。
+- 最新重构后复跑：核心库 457、CLI 23 + 冒烟 3、coverage_e2e 35、GUI 13，全量 **535 条全绿**；`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings` 通过。MSRV 1.88 的 `cargo check` 在本机 GNU 工具链通过。
 - 推送后远端 CI：提交 `025b712`，run [45993230747](https://github.com/schalkiii/box-send/actions/runs/45993230747) 的 `MSRV 1.88`、覆盖率、Ubuntu、Windows 四个 job 全部 success；覆盖率 `lcov.info` 以 artifact `coverage-lcov` 保存。
 
 ## 二、逐模块缺口（量化）
@@ -97,6 +97,12 @@
 
 验证：`cargo test -p bsend-gui` 13 条全绿（`artifacts/gui-test-20261127-final2.log`）；Windows CI 的 `cargo test --workspace` 会跑。
 
+### 4.9 新发种收尾语义（S9，生产行为）
+
+`collect_verifying` 原先对“校验 100% 且 tracker 已回包”的格子一律写 `Assisted`，导致本站新发种被误计成“已辅种”。现在按格子备注区分来源：带“本站新发种”的写 `Reseeded`，只有“补挂种子”才写 `Assisted`；`push_target_torrent` 在 tracker 未确认时按 `expectedHash` 是否为空写对应前缀，下一轮仍能分辨。hdvideo [79168](https://hdvideo.top/details.php?id=79168) 的旧格已按此语义人工纠正为 `reseeded`。
+
+验证：单测 `verifying_origin_is_new_post_only_for_new_post_notes`、e2e `e2e_verifying_collect_reseeded_for_new_post` 通过；`cargo test --workspace` **535 条全绿**（`artifacts/workspace-full-test-20261127-final18.log`，核心 457、coverage_e2e 35、其余 2/2/23/3/13）；fmt/clippy 通过。
+
 ## 五、新增用例结果
 
 | 用例 | 结果 |
@@ -110,12 +116,14 @@
 | `bsend-gui::tests::status_chip_labels_*`（8 组状态文案/配色） | 通过 |
 | `bsend-gui::tests::status_chip_labels_are_unique`、`status_chip_keeps_review_colors_distinct` | 通过 |
 | `bsend-gui::tests::short_path_keeps_only_the_last_two_components` | 通过 |
+| `coverage::tests::verifying_origin_is_new_post_only_for_new_post_notes` | 通过 |
+| `coverage_e2e::e2e_verifying_collect_reseeded_for_new_post` | 通过 |
 
 ## 六、覆盖率提升与限制
 
-- 测试总数 507 → 523，新增 16 条：5 条测试分支 + tracker 真值 1 条 + GUI 纯状态 10 条。`reseed` 166 → 168，`config` 17 → 18，`autopost` 24 → 25，`nexusphp` 35 → 36，`qbittorrent` 22 → 23，`bsend-gui` 3 → 13。
-- 新增覆盖：16 种角标的全量分支、IMDb 无 title 锚点、手动重复审计、名称判别词冲突、配置测试线程隔离、tracker status 1/2/4 的文案与同 hash 条件、tracker 终态进 `Verifying`、GUI 全状态文案和配置路径。
-- 没有行覆盖率数字：GNU 工具链缺 profiler runtime，MSVC 组件下载无响应。下一轮按审计 S8 在 CI 里预装 `llvm-tools-preview`，再补真实百分比。
+- 测试总数 507 → 523，新增 16 条：5 条测试分支 + tracker 真值 1 条 + GUI 纯状态 10 条。后续拆分/修复再增：NexusPHP 拆分不增删用例，verifyHash 回填 2 条、CLI 空路径 3 条、新发种收尾语义 2 条，当前 **535 条**。
+- 新增覆盖：16 种角标的全量分支、IMDb 无 title 锚点、手动重复审计、名称判别词冲突、配置测试线程隔离、tracker status 1/2/4 的文案与同 hash 条件、tracker 终态进 `Verifying`、GUI 全状态文案和配置路径、新发种/补挂的来源区分。
+- 行覆盖率已由 CI 产出：16,842/21,087 = **79.87%**，`--fail-under-lines 77` 作为硬门槛；本地 Windows GNU 仍缺 profiler runtime，不重复尝试。
 - 没有引入随机 fuzzing：本轮缺口都是有限枚举或固定输入，随机化不会增加判别力；标题角标已做 16 种穷举。后续若要 fuzzing，优先对 `strip_site_title_badges` 和 `search_names_match` 做约束输入生成，并固定可打印种子。
 
 ## 七、完成判据自查

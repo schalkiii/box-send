@@ -81,11 +81,11 @@ python scripts\replay-reseed.py --draft 56 --expect 'source_sel[4] = 10' --expec
 
 ## 5. 覆盖率的现状
 
-2026-11-27 已把覆盖率接入 CI（`.github/workflows/rust.yml` 的 `coverage` job）：Ubuntu + stable + `llvm-tools-preview` + `cargo-llvm-cov`，跑 `cargo llvm-cov --workspace --exclude bsend-gui --lcov --output-path lcov.info`，把 `lcov.info` 作为 artifact 上传。先在 CI 建立趋势，不设会误伤重构的硬阈值。
+2026-11-27 已把覆盖率接入 CI（`.github/workflows/rust.yml` 的 `coverage` job）：Ubuntu + stable + `llvm-tools-preview` + `cargo-llvm-cov`，跑 `cargo llvm-cov --workspace --exclude bsend-gui --lcov --output-path lcov.info`，把 `lcov.info` 作为 artifact 上传。当前行覆盖率 16,842/21,087 = **79.87%**，CI 用 `--fail-under-lines 77` 设了 77% 的硬门槛；门槛低于实际值留出正常波动空间，掉到 77% 以下 CI 直接失败。
 
 本地 Windows GNU 工具链仍不能跑 `cargo llvm-cov`：报 `can't find crate for profiler_builtins`，这是工具链没编 profiler runtime，不是测试失败。要看数字以 CI 的覆盖率为准；本地继续用“测试数 / 模块行数”和“具体未覆盖路径”衡量缺口，不能把测试数当成行覆盖率。
 
-**2026-11-27 当前基线**：`cargo test --workspace` 共 **533 条**全绿（核心库 456、`coverage_e2e` 34、其余 2/2/23/3/13）；`cargo fmt --check` 和 `cargo clippy --workspace --all-targets -- -D warnings` 都通过。GUI 不再需要排除，直接跑 workspace 测试；其中 GUI 的 13 条是不依赖窗口的纯状态测试；CLI 参数定义在 `cli.rs`，命令处理拆到 `commands.rs`，CLI 单测 20 + 冒烟 3。
+**2026-11-27 当前基线**：`cargo test --workspace` 共 **535 条**全绿（核心库 457、`coverage_e2e` 35、其余 2/2/23/3/13）；`cargo fmt --check` 和 `cargo clippy --workspace --all-targets -- -D warnings` 都通过。GUI 不再需要排除，直接跑 workspace 测试；其中 GUI 的 13 条是不依赖窗口的纯状态测试；CLI 参数定义在 `cli.rs`，命令处理拆到 `commands.rs`，CLI 单测 20 + 冒烟 3。
 
 **MSRV**：`rust/Cargo.toml` 声明 `rust-version = "1.88"`，CI 的 `MSRV 1.88` job 跑 `cargo check -p bsend -p bsend-cli`。本地已用 `cargo +1.88.0-x86_64-pc-windows-gnu check -p bsend` 验证通过；1.88 是当前依赖（`cookie_store`、`icu_*`、`time`）的真实下限，1.82/1.85 已证实不够。
 

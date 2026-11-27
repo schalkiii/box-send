@@ -890,6 +890,77 @@ fn e2e_already_exists_does_not_touch_original_torrent() {
     );
 }
 
+/// 本站新发种的校验格收尾必须落「已转种」，不能和跨站补挂混成「已辅种」。
+#[test]
+fn e2e_verifying_collect_reseeded_for_new_post() {
+    let dir = temp_dir("verify-new-post");
+    let t = Arc::new(torrent_bytes("Pack", FILES));
+    let hash = bencode::info_hash_v1(&t).unwrap();
+    let progress = Arc::new(Mutex::new((1.0f64, "pausedUP".to_string())));
+    let qb = qb_server_ex(hash.clone(), Vec::new(), Some(progress), None);
+    let src = nexus_site_server("hit", t.clone());
+    let tgt = nexus_site_server("miss", t.clone());
+    let cfg = test_config(qb.port, src.port, tgt.port, &dir);
+
+    let key = "m:newpostverify";
+    let mut index = ContentIndex::load(&cfg.coverage_state_path());
+    index.contents.insert(
+        key.to_string(),
+        ContentEntry {
+            name: NAME.into(),
+            total_size: 105,
+            file_count: FILES.len(),
+            manifest_digest: "0".repeat(16),
+            torrents: std::collections::BTreeMap::from([(
+                hash.clone(),
+                TorrentMeta {
+                    save_path: "/data".into(),
+                    category: None,
+                    last_seen: 0,
+                    tracker_hosts: Vec::new(),
+                    hash_v2: None,
+                    added_on: 0,
+                },
+            )]),
+            tracker_hosts: Vec::new(),
+            first_seen: 0,
+            gone_since: None,
+            coverage: std::collections::BTreeMap::from([(
+                "hdsky".to_string(),
+                SiteCoverage {
+                    status: CoverageStatus::Verifying,
+                    at: 0,
+                    url: None,
+                    note: Some("本站新发种校验到 100%，但 tracker 还没回包；下一轮复核".into()),
+                    verify_hash: Some(hash),
+                },
+            )]),
+            source: None,
+            forbid_reseed: false,
+        },
+    );
+    index.save().unwrap();
+
+    let qb_client = Arc::new(QBittorrent::new(&cfg.downloader.url, "admin", "pass").unwrap());
+    let ads = adapters(&cfg);
+    let report = run_round(
+        &cfg,
+        qb_client,
+        &ads,
+        &mut index,
+        |_| {},
+        RoundOptions {
+            persist: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(report.by_status[&CoverageStatus::Reseeded], 1);
+    let cell = &index.contents[key].coverage["hdsky"];
+    assert_eq!(cell.status, CoverageStatus::Reseeded, "{cell:?}");
+    assert_eq!(cell.verify_hash, None, "收尾后清掉凭据");
+}
+
 /// 场景六：校验迟迟不结束 → 落「校验中」+ verify_hash 持久化；
 /// 下一轮收尾 pass 直查下载器（零站点请求）：校验满 → 启动 → 已辅。
 #[test]

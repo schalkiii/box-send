@@ -292,15 +292,16 @@ pub fn run_round(
     if !opts.dry_run {
         for entry in index.contents.values_mut() {
             for site in &active_sites {
-                let (vh, backfilled) = {
+                let (vh, backfilled, posted_here) = {
                     let Some(cell) = entry.coverage.get(&site.id) else {
                         continue;
                     };
                     if cell.status != CoverageStatus::Verifying {
                         continue;
                     }
+                    let posted_here = cell.note.as_deref().is_some_and(verifying_was_posted_here);
                     match cell.verify_hash.clone().filter(|h| !h.is_empty()) {
-                        Some(h) => (h, false),
+                        Some(h) => (h, false, posted_here),
                         // 旧数据兼容：早期“100% 但 tracker 未确认”的格子没有落 verifyHash，
                         // 按目标站 tracker 在成员种子里找回那条已挂回的种子，下一轮继续收尾。
                         None => {
@@ -309,13 +310,13 @@ pub fn run_round(
                                 continue;
                             };
                             match verify_hash_from_entry(entry, adapter) {
-                                Some(h) => (h, true),
+                                Some(h) => (h, true, posted_here),
                                 None => continue,
                             }
                         }
                     }
                 };
-                let verdict = collect_verifying(qb.as_ref(), &vh, &cfg.coverage);
+                let verdict = collect_verifying(qb.as_ref(), &vh, &cfg.coverage, posted_here);
                 if backfilled {
                     if let Some(cell) = entry.coverage.get_mut(&site.id) {
                         cell.verify_hash = Some(vh.clone());
@@ -1504,14 +1505,24 @@ fn reseed_arm(
     }
 }
 
+/// 判断“校验中”格子是不是本站新发种：新发种推送写“已发布并挂回…”，
+/// 后续复核保留“本站新发种…”；跨站补挂写“补挂种子…”或旧版通用文案。
+fn verifying_was_posted_here(note: &str) -> bool {
+    note.starts_with("已发布并挂回") || note.starts_with("本站新发种")
+}
+
 /// 校验中格子的收尾判定（方案第七节「下一轮收尾」）：满 100% 且目标 tracker
 /// `status=2` → 启动并记为已做种；满 100% 但 tracker 没回包 → 继续留在校验中，
 /// 下一轮再问；校验完仍不满 → 按 removeOnVerifyFail 回滚或保持暂停；还在校验/
 /// 这次查询没通 → None（下轮再看）。qB 查询不过站点预算。
+///
+/// `posted_here` 区分本站新发种和跨站补挂：同样是“校验 100% 且 tracker 已回包”，
+/// 新发种收尾成 `Reseeded`，已有条目补挂收尾成 `Assisted`。
 fn collect_verifying(
     qb: &QBittorrent,
     hash: &str,
     cov: &crate::config::CoverageSettings,
+    posted_here: bool,
 ) -> Option<(CoverageStatus, String)> {
     match qb.torrent_progress(hash) {
         Ok(Some((progress, state))) => {
@@ -1527,14 +1538,25 @@ fn collect_verifying(
                 };
                 if confirmed {
                     Some((
-                        CoverageStatus::Assisted,
+                        if posted_here {
+                            CoverageStatus::Reseeded
+                        } else {
+                            CoverageStatus::Assisted
+                        },
                         format!("校验到 100%，已在 qB 做种；{tracker_note}（上一轮推送收尾）"),
                     ))
                 } else {
                     // 本地校验完成不等于站点看见做种；继续留在校验中，下一轮再问 tracker。
                     Some((
                         CoverageStatus::Verifying,
-                        format!("校验到 100%，但{tracker_note}；还没确认站点看见做种，下一轮复核"),
+                        format!(
+                            "{}校验到 100%，但{tracker_note}；还没确认站点看见做种，下一轮复核",
+                            if posted_here {
+                                "本站新发种"
+                            } else {
+                                "补挂种子"
+                            }
+                        ),
                     ))
                 }
             } else if is_checking(&state) {
@@ -1677,6 +1699,20 @@ mod tests {
             source: None,
             forbid_reseed: false,
         }
+    }
+
+    #[test]
+    fn verifying_origin_is_new_post_only_for_new_post_notes() {
+        assert!(verifying_was_posted_here(
+            "已发布并挂回 100%，但 tracker 还没回包"
+        ));
+        assert!(verifying_was_posted_here(
+            "本站新发种校验到 100%，但 tracker 还没回包"
+        ));
+        assert!(!verifying_was_posted_here(
+            "补挂种子校验到 100%，但 tracker 还没回包"
+        ));
+        assert!(!verifying_was_posted_here("100% 校验完成且 tracker 已回包"));
     }
 
     #[test]

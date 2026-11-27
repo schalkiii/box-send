@@ -3600,7 +3600,12 @@ fn push_target_torrent(
                     (
                         CoverageStatus::Verifying,
                         format!(
-                            "已发布并挂回 100%，但{tracker_note}；还没确认站点看见做种，下一轮复核"
+                            "{}校验到 100%，但{tracker_note}；还没确认站点看见做种，下一轮复核",
+                            if expected_hash.is_some() {
+                                "本站新发种"
+                            } else {
+                                "补挂种子"
+                            }
                         ),
                     )
                 };
