@@ -10,6 +10,7 @@
 - GitHub Actions `61cf4d2` run `45979346634` success（Linux + Windows 全量测试、fmt、clippy）；本地同一提交 527 条全绿。
 - 覆盖率：已接入 CI（`coverage` job 用 Ubuntu + `cargo-llvm-cov` 生成 `lcov.info` artifact）；本地 Windows GNU 工具链缺 profiler runtime，仍不能跑 `cargo llvm-cov`，下面用“测试/函数比”和缺口清单量化，不伪造百分比。
 - 最新重构后复跑：核心库 455、CLI 20 + 冒烟 3、e2e 33、GUI 13，全量 **528 条全绿**；`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings` 通过。MSRV 1.88 的 `cargo check` 在本机 GNU 工具链通过。
+- 推送后远端 CI：提交 `025b712`，run [45993230747](https://github.com/schalkiii/box-send/actions/runs/45993230747) 的 `MSRV 1.88`、覆盖率、Ubuntu、Windows 四个 job 全部 success；覆盖率 `lcov.info` 以 artifact `coverage-lcov` 保存。
 
 ## 二、逐模块缺口（量化）
 

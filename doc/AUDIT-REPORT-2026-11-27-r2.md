@@ -87,11 +87,12 @@
 
 ## 四、改进建议
 
-### S1（P0，串行）先提交并跑远端 CI
+### S1（P0，串行，已执行）先提交并跑远端 CI
 
 - 做法：把本轮拆分、`Cargo.toml`/`Cargo.lock`、coverage miss、文档改动分组提交；推送后等 `test`（Linux/Windows）、`MSRV 1.88`、`coverage` 三个 job 全绿，再写“已通过”。
 - 文件：`rust/crates/bsend/src/reseed.rs`、`reseed/{form,audit,upload,post,tests}.rs`、`bsend-cli/src/{main,commands}.rs`、`coverage.rs`、`rust/Cargo.toml`、`rust/Cargo.lock`、`.github/workflows/rust.yml`、`doc/*`、`AGENTS.md`、`CHANGELOG.md`。
 - 验证：`git status` 干净；GitHub Actions 三个 job 成功；`git rev-parse HEAD` 与 `origin/master` 一致。
+- 执行结果：提交 `025b712` 已推送，run [45993230747](https://github.com/schalkiii/box-send/actions/runs/45993230747) 的覆盖率和 MSRV、Ubuntu、Windows 四个 job 全部 success。
 - 并行性：串行，提交是所有其它改动的收口。
 
 ### S2（P1，可与 S1 外的文档工作并行）修生产路径锁 poison
@@ -162,6 +163,7 @@
 
 ## 七、本轮执行结果
 
+- S1 已执行：改动提交为 `025b712` 并推送 `origin/master`；GitHub Actions run [45993230747](https://github.com/schalkiii/box-send/actions/runs/45993230747) 的 `MSRV 1.88`、覆盖率、Ubuntu、Windows 四个 job 全部 success。
 - S2 已执行：新增 `lib.rs::lock_unpoisoned`，`coverage.rs`、`throttle.rs`、`qbittorrent.rs` 的生产路径锁改为 poison 恢复；新增 `lock_unpoisoned_recovers_after_holder_panics` 用例。全量从 527 增到 **528 条**，核心库 455、e2e 33、CLI 23、GUI 13 全绿；fmt/clippy 通过。
 - S3/S4/S5/S6/S7/S8 未在本轮执行，作为后续可并行/串行项保留；其中 S8 清场必须等用户明确确认。
 - 旧 `doc/AUDIT-REPORT-2026-11-27.md` 保留为拆分前历史版，现状以本报告为准。
