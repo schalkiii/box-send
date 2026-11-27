@@ -73,6 +73,8 @@
 
 ### Added
 
+- **`bsend reseed` 新增 `--site <目标站>` 和 `--only <名称/内容键子串>`**（2026-11-27）：`--site` 先按目标站筛草稿，解决同一内容在多个站有缺口时 `--only` 先命中别站的问题；`--only` 不再靠草稿编号选条，编号漂移不会发错。iloli 已定为二次元站：`selectPicks.type=405` 只在自动分类落“动漫”含糊分支时纠正，电影/电视剧不套用；`allowedTypes=["动画"]` 落成硬缺口，手动 `reseed` 也拦。首条动画《Ghiblies Episode 2》真发 https://mua.xloli.cc/details.php?id=56513 ，`type=405 动画 (Animation)`、4 张 pixhost 图、qB 校验 100%；非动画《知否》复测被白名单阻断，未提交。
+
 - `scripts/replay-reseed.py`：按草稿号跑 `bsend reseed --draft <N>` 且不提交，用 `--expect` 断言提交字段/图片数/标题，用 `--reject` 挡住旧问题回归；修完问题先回放，再执行提交。
 - `scripts/edit-seed.py` 新增 `--processing`（改 MP4/MKV 容器下拉）、`--team`（改制作组下拉）和 `--append-image`（按 `[img]` 追加图片，已有同链接就跳过）。
 - `scripts/seed-images.py` 新增 `--also-content`（同一剧多个内容键逐个补图）和 `--for-name`（按覆盖记录里的内容名子串找齐所有键）；仍默认上传 pixhost、默认 `--dry-run` 只抽帧不上传。

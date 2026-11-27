@@ -245,7 +245,7 @@ reseed/coverage_io.rs  覆盖记录读写
 | --- | --- | --- |
 | 账号没有发布权限（站点侧，程序改不了） | btschool、carpt、chdbits、cmct、daxiangjiao、discfan、dstudio、ggpt、hdarea、hdhome、hdsky、hhanclub、hitpt、kamept、keepfrds、march、njtupt、okpt、playlet、pt52、pter、ptskit、siqi、tccf、tokyo、ultrahd、wtsakura、xingwan、zmpt | 上传页明示"没有发布种子的权限"；只有账号升级权限后才谈得上适配 |
 | 权限待实证（旧"无权限"结论可能过时） | ~~agsvpt~~ | 2026-11-26 GET `upload.php` 返回完整上传表单、没有权限拒绝字样；2026-11-27 已启用并进白名单，见 7.8 |
-| 动态/JS 上传界面，当前程序不支持 | hddolby、mypt、ptt、rousi、ttg、haoxue、hdcity | 拿不到可解析的静态表单（自定义 JS、SPA、隐藏字段）；haoxue 是 Next.js/Flux 单页应用，要按前端接口重做。iloli、muxuege、fenghuang 2026-11-27 已落地并实发，见 7.9；iloli 另被账号浓度门槛拦下，见下；aling 源站 500、hdu 全站过载、xingtan 类目不符，见下两组 |
+| 动态/JS 上传界面，当前程序不支持 | hddolby、mypt、ptt、rousi、ttg、haoxue、hdcity | 拿不到可解析的静态表单（自定义 JS、SPA、隐藏字段）；haoxue 是 Next.js/Flux 单页应用，要按前端接口重做。iloli、muxuege、fenghuang 2026-11-27 已落地并实发，见 7.9；iloli 已定为二次元站，`allowedTypes=["动画"]` 硬拦，非动画不发；aling 源站 500、hdu 全站过载、xingtan 类目不符，见下两组 |
 | 连不通 / 超时 / 403（网络或登录态） | hdclone、hudbt、u2、shadow、sunny、piggo、tu88 | 域名、TLS、连接超时或跳登录页；整站暂停，不写"站上没有"的记录。freefarm 的 `pt.0ff.cc` 与 `farmm.cc` 是镜像，维持 `pt.0ff.cc`，见 7.9；gtk 已配按站代理、临时进白名单等窗口，见 7.9 |
 | 类目不符（不转影视） | haitang、kelu、vclib、nicept、ziran、soulvoice、musopia、dicmusic、xingtan | 只有曲艺、有声书、音乐、电子书类目；xingtan 是学术教材方向，影视无处归档（书籍/PDF 类目 11-27 手动发成一条 456304，见 7.9） |
 | 已关站或换形态 | momentpt、ptlao、movie52、yinghua | 告别页、404 或域名解析失败 |
@@ -348,7 +348,7 @@ reseed/coverage_io.rs  覆盖记录读写
 **待办（还没决定怎么做）**：
 
 1. **手动发布要不要进审计**：手动 `bsend reseed --yes` 只往 `reseed-log.jsonl` 记，不往 `auto-audit.jsonl` 追加；按日限额、失败冷却的判定因此看不到这批手动发布。权威口径在 `OPERATIONS.md` 4，需要决定是否统一写进审计。
-2. **iloli 账号浓度门槛**：这站按账号的**发布记录**算二次元占比——在种子区发非二次元时，二次元条数须 ≥50%、体积须 ≥40%；当前发布记录 0 条，所以数量/体积都是 0.00%（当前做种 163 条里有 15 条动画也不计入）。要在这站发非动画内容，得先从这个号发出二次元素材（动画/漫画/CG/动漫杂志），把发布记录里的条数和体积养到门槛以上；是否这么做待定。在此之前 iloli 不再试发非动画条目。
+2. **iloli 定位二次元站（已定）**：站点只收动画/漫画/CG/动漫杂志，配置已加 `allowedTypes=["动画"]` 硬拦，电影/电视剧不再套 `type=405`。账号浓度门槛是站侧规则：发非二次元时，二次元条数须 ≥50%、体积须 ≥40%；2026-11-27 发出 Ghiblies 动画后，发布记录里已有二次元素材，基数不再是 0，但按“二次元特色站”的定位仍不拿非二次元去占额度，`reseed --site iloli` 只选动画内容。
 3. **iloli 的 AC3 同名候选**：audiocodec_sel 里 AC3 有多个同名候选（`DD/AC3`、`DD/AC-3`、`AC3` 这类），引擎判歧义留空不猜，被 G2 拦。先读表单真实 value，在 `reseedRules.selectPicks` 钉住普通 AC3 档，或在代码里补音频选档映射。
 4. **望雪这类"引擎走不了、只能走站点接口/浏览器"的站**：要长期维护一套浏览器提交流程，还是每次人工处理，待决定。
 5. **freefarm 镜像入口（已定）**：`pt.0ff.cc` 和 `farmm.cc` 是同一站点的镜像；配置维持 `pt.0ff.cc`，不切 `farmm.cc`，也不再为切域补 cookie。该站仍在 `pausedSites`，本轮不动。

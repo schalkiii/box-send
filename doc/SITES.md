@@ -213,7 +213,7 @@ xingyunge, agsvpt, panda, iloli, muxuege, fenghuang, gtk
 | ubits | ≥3 张可达图；`source_sel` 地区、`team_sel=Other` 必填；图床黑名单 | imgbox 会被直接拒，改用 pixhost；按 pieces + 文件清单核对（白名单仅日志） |
 | xingyunge | 默认 | tracker 域名别名已补；按 qB 覆盖真值核对，不凭页面域名猜 |
 | panda | 主标题禁中文；简介按六段顺序装配；≥4 张可达图；链接 + MediaInfo | 站规简介按【转载出处】【制作说明】【海报】【简介】【info】【截图】六段排列；2026-11-27 闭环跑通，141840 等审核，见 2.8 |
-| iloli | `team_sel` 兜底 Other=5；地区下拉按标题/简介地区词配对 | announce 主机是独立域 `a.x-anime.cc`，不是站点同域；填了 `overrides.announceURL` 后该主机自动并入允许清单；AC3 有多个同名候选，引擎留空不猜，见 2.9 |
+| iloli | `team_sel` 兜底 Other=5；只收动画/二次元，`allowedTypes=["动画"]` 硬拦；`selectPicks.type=405` 只在自动分类落动漫含糊分支时纠正 | announce 主机是独立域 `a.x-anime.cc`，不是站点同域；填了 `overrides.announceURL` 后该主机自动并入允许清单；AC3 有多个同名候选，引擎留空不猜；2026-11-27 首条动画《Ghiblies Episode 2》实发成功，见 2.9 |
 | muxuege | `team_sel` 兜底 Other=52；普通 AAC 取 6；年代档抽不到年份留空 | 源简介只剩 1 张豆瓣海报时，用抽帧脚本补 pixhost 截图满足门禁 |
 | fenghuang | `team_sel` 只有 other=1；无地区、无音频码下拉 | 详情页编号从站点下载种子的评论字段取到 |
 
@@ -294,7 +294,7 @@ xingyunge, agsvpt, panda, iloli, muxuege, fenghuang, gtk
 
 | 站点 | 结论 |
 | --- | --- |
-| iloli | `team_sel` 配 Other=5 已落地；`source_sel` 是**地区**下拉，代码这轮补了通用地区匹配（国产→大陆 1 / 日剧→日本 6 / 无线索→其它 13），不再按站写死。2026-11-27《知否》被账号浓度门槛拦下（数量 ≥50%、体积 ≥40%），账号级站侧阻塞，见 2.9。 |
+| iloli | `team_sel` 配 Other=5 已落地；`source_sel` 是**地区**下拉，代码这轮补了通用地区匹配（国产→大陆 1 / 日剧→日本 6 / 无线索→其它 13），不再按站写死。2026-11-27《知否》被账号浓度门槛拦下（数量 ≥50%、体积 ≥40%），该门槛只针对非二次元；动画/漫画/CG/动漫杂志不计入非二次元，见 2.9 首条动画实发。 |
 | muxuege | `team_sel` 配 Other=52、`audiocodec_sel` 取普通组首个 AAC=6 已落地；同名 AAC 消歧与年代档（`processing_sel`，2015=19）已进代码，抽不到年份就留空。2026-11-27 实发 59990，见 2.8。 |
 | fenghuang | `team_sel` 下拉只有 other=1，已落地。2026-11-27 实发 39168，见 2.8。 |
 | xingtan | 页面按分类渲染 328 个 `mode_<分类id>` 隐藏行，只有当前分类那行可见；隐藏行的空下拉不再误报缺口（实测 326 条不再算缺口）。两级分类是页面里点树切换的，静态 HTTP 驱动不了。2026-11-27 浏览器复核：无电影/剧集类目，影视无处归档，移出白名单；书籍/PDF 类目手动发成一条 456304，见 2.8、2.9。 |
@@ -332,6 +332,9 @@ xingyunge, agsvpt, panda, iloli, muxuege, fenghuang, gtk
 - **tracker 真相**：announce 主机是独立域 `a.x-anime.cc`，不是站点同域；完整 announce 从站内两条种子（56406、56211）的 .torrent bencode 里取出，两条一致，74 字符；qB 里本来就有 163 条挂这个主机的种子（passkey 一致）。
 - **由此暴露的 bug，已修**：引擎按站点域名匹配 tracker，会把这个站的已有做种认不出来，于是把两条本来 100% 在做种的内容（Poirot、周星驰合集）当成缺口；上传守卫又因为配置的 announce 主机不在允许清单里而拒绝上传，客观上挡住了重复上传。修法：配置里填了 `overrides.announceURL` 就自动把该主机并入允许清单（和页面 host、内置别名、手写 `announceHosts` 去重合并），识别已有做种和上传守卫两处消费同一份清单；没填 announceURL 的站行为不变。修完后这两条假缺口从草稿里消失。
 - **修完后出现两条真缺口，拒因已查清**：《知否》两次提交都被站点拒绝、未建种、未挂回，`reseed-log.jsonl` 记 failed；第二次回包正文被留档抓到，错误框原文：`发布者二次元浓度不足，无法发布该类型资源。当前数量浓度 0.00%（须不低于 50%），体积浓度 0.00%（须不低于 40%）。` 站点上传页规则原文是：在种子区发布非二次元时，二次元条数须 ≥50%、体积须 ≥40%；二次元只算漫画/CG杂图/动漫杂志和动画（Animation），非二次元算电视剧、综艺、纪录片、电影，来源写日本（JPN）的不计入。这里的比例按账号的**发布记录**算，不是当前做种：这个号当前做种 163 条（其中动画 15 条、232.94GB），发布记录仍是 0 条，所以数量/体积都是 0.00%。这是账号级站侧阻塞，不是表单问题，也不是同剧重复（站上虽有同剧另一版本 31565 UBWEB 2160p，但回包没说重复）。回包留档 `artifacts\iloli-upload-1795736380253.html`。要在这站发非动画内容，得先从这个号发出二次元素材（动画/漫画/CG/动漫杂志），把发布记录里的二次元条数和体积养到门槛以上；是否这么做待定，见 ROADMAP 待办。《广告狂人》没提交：iloli 的 audiocodec_sel 里 AC3 有多个同名候选（`DD/AC3`、`DD/AC-3`、`AC3` 这类），引擎判歧义留空不猜，被 G2 质量档门禁拦住。这两条不是"站点不可用"。
+- **首条二次元实发成功，站点定位确定为动画/二次元（2026-11-27）**：《吉卜力工作室特别短片合辑2 / Ghiblies Episode 2 2002 1080p BluRay 10bit DD5.1 x265-MNHD-FRDS》（源 pter 332330，1,376,985,722 字节 / 3 文件）走 `bsend reseed --only 'Ghiblies.Episode.2' --site iloli --yes` 真发，详情页 https://mua.xloli.cc/details.php?id=56513 ，分类 `405 动画 (Animation)`、来源日本、媒介 Encode、编码 HEVC/x265、1080p、制作组 Other，4 张 pixhost 图逐张可用；qB 目标 hash `5d8dff96e44b5d640529268a8adc840224356e9b` 校验 100%、`forcedUP`，站点详情显示 1 个做种者 / 16 个下载者。这条没有被二次元浓度门槛拦住，说明动画本身不再算“非二次元”。
+- **站点规则加固，已进代码和配置**：`selectPicks.type=405` 只在自动分类落在“动漫”含糊分支时纠正，电影/电视剧不再被无条件改成动画；`allowedTypes=["动画"]` 在 `apply_site_rules_tail` 里落成硬缺口，自动发种和手动 `reseed` 都拦。复测 `bsend reseed --only '知否' --site iloli` 输出 `预检：阻断 1`、`分类「电视剧(TV Series)」不在站点白名单（动画）`，没有提交。`reseed` 新增 `--site` 参数，解决同一内容在多个站有缺口时 `--only` 先命中别站的问题。代码提交 `f9013df` 已 push，`cargo test --workspace` 和 `cargo clippy --workspace --all-targets -- -D warnings` 均通过，GitHub Actions run `45952102303` success。
+- **遗留**：qB 重启后 tracker 面板仍显示 `status=1`（未联系），但 iloli 站点已统计到 1 个做种者；`uploaded=0`，本地做种连接数为 0，继续观察 qB announce 队列。测试用的临时 HTTP tracker 和本地 tracker 已从目标种移除，qB 的 `max_concurrent_http_announces` 已恢复 200、`proxy_peer_connections` 已恢复 true。
 
 **三个站点侧硬阻塞（都做过真实浏览器复核，不是静态解析失败就放弃）**
 
