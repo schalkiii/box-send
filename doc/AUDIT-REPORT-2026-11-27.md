@@ -134,7 +134,7 @@
 
 | 编号 | 位置 | 问题 | 严重程度 | 影响范围 |
 |---|---|---|---|---|
-| E1 | `.gitignore`、根目录 `artifacts/` | `artifacts/` 未忽略；实测 125 个文件、约 36.5 MB，其中 7 个 `.torrent` 含 `passkey=`；根目录还有 48 个未跟踪证据文件 | 高 | 一次误 `git add -A` 就可能把站点 passkey 推到公开仓库 |
+| E1 | `.gitignore`、根目录 `artifacts/` | `artifacts/` 审计时 125 个文件、约 36.5 MB，收尾时 139 个、约 35 MB；其中 7 个 `.torrent` 含 `passkey=`；根目录还有 48 个未跟踪证据文件 | 高 | 一次误 `git add -A` 就可能把站点 passkey 推到公开仓库；本轮已加 ignore 并验证 |
 | E2 | 运行态 qB | 42,469 条种子、200 并发 announce、重启约 9 分钟；新种 tracker status=1 可持续很久 | 高 | 发布成功但站点看不到做种；用户会以为代码坏了 |
 | E3 | `.github/workflows/rust.yml` | CI 只跑 fmt/clippy/test，没有 MSRV 任务，也没有覆盖率或 `scripts` 行为测试 | 中 | MSRV 声明和实际依赖漂移不会被发现；覆盖率无法持续 |
 | E4 | 仓库根目录 | 48 个未跟踪调试文件与源码混在一起，没有归档目录/清理规则 | 中 | 审查时噪声大；敏感材料容易误提交 |
