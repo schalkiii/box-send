@@ -11811,6 +11811,54 @@ Language : Chinese"));
     }
 
     #[test]
+    fn all_site_title_badges_are_stripped_idempotently() {
+        let core = "Some.Release.2024.1080p.BluRay.x265-GRP";
+        let badges = [
+            "[免费]",
+            "[免費]",
+            "[Free]",
+            "[FREE]",
+            "[2X免费]",
+            "[2x免费]",
+            "[2X免費]",
+            "[2x免費]",
+            "[2x]",
+            "[2X]",
+            "[50%]",
+            "[促销]",
+            "[Promotion]",
+            "[HR]",
+            "[官方]",
+            "剩余时间：23时59分钟",
+        ];
+        for badge in badges {
+            let with_badge = format!("{core} {badge}");
+            let stripped = strip_site_title_badges(&with_badge);
+            assert_eq!(stripped, core, "角标 {badge} 应从标题尾部裁掉");
+            assert_eq!(
+                strip_site_title_badges(stripped),
+                core,
+                "裁剪必须幂等：{badge}"
+            );
+        }
+    }
+
+    #[test]
+    fn first_imdb_hit_ignores_anchor_without_title_attribute() {
+        let base = Url::parse("https://13city.org/").unwrap();
+        let html = r#"<a href="details.php?id=99">Agatha Christies Poirot S01-S13 Collection</a>"#;
+        assert!(
+            first_imdb_hit(
+                html,
+                &base,
+                "Agatha Christies Poirot S01-S13 Collection 1080p Bluray x265 10bit MNHD-FRDS"
+            )
+            .is_none(),
+            "只有链接文字、没有发布名 title 时不能判重"
+        );
+    }
+
+    #[test]
     fn hidden_mode_rows_are_not_counted_as_gaps() {
         // xingtan 实测：328 个 mode_<分类id> 隐藏行，只有当前分类那行可见；
         // 静态演练只看可见行，隐藏行的空下拉不计缺口。

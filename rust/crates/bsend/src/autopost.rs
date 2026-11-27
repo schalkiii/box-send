@@ -1252,6 +1252,34 @@ mod tests {
     }
 
     #[test]
+    fn manual_duplicate_audit_is_manual_but_not_counted_as_posted() {
+        let dir = temp_dir("manual-duplicate");
+        let cfg = cfg_with_drafts(&dir, 2, 0);
+        append_manual_audit(
+            &cfg,
+            "sbpt",
+            "m:manual-dup",
+            "skipped_duplicate",
+            None,
+            "判重命中，已在做种",
+        )
+        .unwrap();
+        let text = std::fs::read_to_string(audit_path_of(&cfg)).unwrap();
+        let (posted_today, _) = parse_audit(&text, now_unix());
+        assert_eq!(
+            posted_today.get("sbpt").copied(),
+            None,
+            "重复命中不能占当日发布额度"
+        );
+        let v: serde_json::Value = serde_json::from_str(text.trim()).unwrap();
+        assert_eq!(v.get("manual").and_then(|m| m.as_bool()), Some(true));
+        assert_eq!(
+            v.get("result").and_then(|m| m.as_str()),
+            Some("skipped_duplicate")
+        );
+    }
+
+    #[test]
     fn duplicate_outcomes_map_to_distinct_audit_results() {
         use crate::index::CoverageStatus as S;
         let outcome = |st| {

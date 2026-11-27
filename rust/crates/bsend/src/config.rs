@@ -715,9 +715,28 @@ impl Config {
 mod tests {
     use super::*;
     use std::io::Write;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_TEST_DIR: AtomicU64 = AtomicU64::new(0);
+
+    /// 每个测试线程一个稳定目录：同一测试内的多次写入共享，测试之间不共享。
+    fn test_dir() -> PathBuf {
+        thread_local! {
+            static DIR: PathBuf = {
+                let n = NEXT_TEST_DIR.fetch_add(1, Ordering::Relaxed);
+                let name = std::thread::current()
+                    .name()
+                    .unwrap_or("unnamed")
+                    .replace("::", "-")
+                    .replace(['/', '\\'], "-");
+                std::env::temp_dir().join(format!("bsend-cfg-{}-{name}-{n}", std::process::id()))
+            };
+        }
+        DIR.with(Clone::clone)
+    }
 
     fn write_temp(name: &str, content: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("bsend-cfg-{}", std::process::id()));
+        let dir = test_dir();
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join(name);
         let mut f = std::fs::File::create(&p).unwrap();
@@ -856,15 +875,26 @@ mod tests {
         assert!(cfg.cookie_header_for("nowhere.example").is_none());
     }
 
-    // cookies.json 相关断言要用独立目录：write_temp 所有测试共用一个目录，
-    // 谁写了 cookies.json 别的测试也会加载到
+    // 同一测试内还要再按 tag 分目录时用这个；跨测试已经由 test_dir 隔离。
     fn write_temp_isolated(tag: &str, name: &str, content: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("bsend-cfg-{}-{tag}", std::process::id()));
+        let dir = test_dir().join(tag);
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join(name);
         let mut f = std::fs::File::create(&p).unwrap();
         f.write_all(content.as_bytes()).unwrap();
         p
+    }
+
+    #[test]
+    fn temp_dirs_are_isolated_between_test_threads() {
+        let here = test_dir();
+        let other = std::thread::Builder::new()
+            .name("config-isolation-probe".into())
+            .spawn(test_dir)
+            .unwrap()
+            .join()
+            .unwrap();
+        assert_ne!(here, other, "不同测试线程不能共用配置临时目录");
     }
 
     #[test]

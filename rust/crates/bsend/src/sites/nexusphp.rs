@@ -2404,6 +2404,29 @@ mod tests {
     }
 
     #[test]
+    fn search_names_match_rejects_conflicting_discriminating_tokens() {
+        let name = "Movie.2023.1080p.BluRay.x264-GROUP";
+        // 年份不同：即使其余部分完全一致，宽容模式也不能当同一条
+        assert!(!search_names_match(
+            "Movie.2024.1080p.BluRay.x264-GROUP",
+            name,
+            true
+        ));
+        // 分辨率不同：1080p vs 720p 必须判为两个版本
+        assert!(!search_names_match(
+            "Movie.2023.720p.BluRay.x264-GROUP",
+            name,
+            true
+        ));
+        // 分隔符写法不同但词元一致：仍然命中
+        assert!(search_names_match(
+            "Movie 2023 1080p BluRay x264 GROUP",
+            name,
+            true
+        ));
+    }
+
+    #[test]
     fn discriminating_shapes() {
         assert!(is_discriminating_token("x264"));
         assert!(is_discriminating_token("s01"));
