@@ -81,7 +81,7 @@ python scripts\replay-reseed.py --draft 56 --expect 'source_sel[4] = 10' --expec
 
 ## 5. 覆盖率的现状
 
-2026-11-27 已把覆盖率接入 CI（`.github/workflows/rust.yml` 的 `coverage` job）：Ubuntu + stable + `llvm-tools-preview` + `cargo-llvm-cov`，跑 `cargo llvm-cov --workspace --exclude bsend-gui --lcov --output-path lcov.info`，把 `lcov.info` 作为 artifact 上传。当前行覆盖率 16,842/21,087 = **79.87%**，CI 用 `--fail-under-lines 77` 设了 77% 的硬门槛；门槛低于实际值留出正常波动空间，掉到 77% 以下 CI 直接失败。
+2026-11-27 已把覆盖率接入 CI（`.github/workflows/rust.yml` 的 `coverage` job）：Ubuntu + stable + `llvm-tools-preview` + `cargo-llvm-cov`，跑 `cargo llvm-cov --workspace --exclude bsend-gui --lcov --output-path lcov.info`，把 `lcov.info` 作为 artifact 上传。run #115 的行覆盖率 17,058/21,235 = **80.33%**，CI 用 `--fail-under-lines 77` 设了 77% 的硬门槛；门槛低于实际值留出正常波动空间，掉到 77% 以下 CI 直接失败。
 
 本地 Windows GNU 工具链仍不能跑 `cargo llvm-cov`：报 `can't find crate for profiler_builtins`，这是工具链没编 profiler runtime，不是测试失败。要看数字以 CI 的覆盖率为准；本地继续用“测试数 / 模块行数”和“具体未覆盖路径”衡量缺口，不能把测试数当成行覆盖率。
 

@@ -9,15 +9,15 @@
 - **规模**：Rust 57 个 `.rs` 文件、43,318 行。按职责拆开：生产代码 26,915 行，内联测试 11,562 行，`tests/` 目录 4,841 行；测试代码占 37.9%。项目 Markdown 33 个。
 - **结构**：`bsend`（核心引擎）、`bsend-cli`（命令行）、`bsend-gui`（GPUI 桌面界面）三个 crate。核心按“配置 / 站点适配 / 审阅上传 / 覆盖记录 / 自动编排 / qB 接口”分层；`reseed` 与 `sites/nexusphp` 已完成按职责拆分，`coverage.rs`、`commands.rs` 仍是单文件大模块。
 - **质量基线**：`cargo test --workspace` 536 条全绿（核心 458、`coverage_e2e` 35、`other_version` 2、`skip_keywords` 2、CLI 23、`cli_smoke` 3、GUI 13）。`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings` 通过。
-- **覆盖率**：最近一次 CI 行覆盖率 16,842/21,087 = **79.87%**；`coverage` job 用 `--fail-under-lines 77` 设了 77% 硬门槛。本轮新增 1 条 qB 分页用例，精确比例以新 CI run 为准。
-- **CI**：`0f1ff35` 的 run #113 四个 job 全部 success；`a5cd535` 的 run #114 也已四个 job 全部 success（2 分 35 秒）。
+- **覆盖率**：run #115 的 `coverage-lcov` artifact 行覆盖率 17,058/21,235 = **80.33%**；`coverage` job 用 `--fail-under-lines 77` 设了 77% 硬门槛。本地 Windows GNU 缺 profiler runtime，不重复跑 `cargo llvm-cov`。
+- **CI**：`0f1ff35` 的 run #113 四个 job 全部 success；`a5cd535` 的 run #114 也已四个 job 全部 success（2 分 35 秒）；`44de361` 推后的 run #115（[46014063791](https://github.com/schalkiii/box-send/actions/runs/46014063791)）四个 job 全部 success。
 - **真实链路**：city13 [88467](https://13city.org/details.php?id=88467) 已发布、挂回、tracker `status=2`，复查上传 227.16 MB、2 个下载者；hdvideo [79168](https://hdvideo.top/details.php?id=79168) 已发布、挂回，主 announce `status=2`，`tracker.hdvideo.top` `status=4`（stream truncated），0 peers、0 上传；pthome 285040 回“该种子已存在！”，未重复挂种。两条站点页仍标“未审”。
 
 ## 二、七个维度
 
 ### 1. 文档一致性
 
-- 当前基线文档已同步到 536 条、最近 CI 覆盖率 79.87%、CI 77% 门槛；`README.md` 原先“旧报告不再单独保留”与 `doc/AUDIT-REPORT-*`、`doc/TEST-REPORT-*` 实际存在矛盾，已改成“报告保留作证据、结论以最新一份为准”。
+- 当前基线文档已同步到 536 条、CI 覆盖率 80.33%、77% 门槛；`README.md` 原先“旧报告不再单独保留”与 `doc/AUDIT-REPORT-*`、`doc/TEST-REPORT-*` 实际存在矛盾，已改成“报告保留作证据、结论以最新一份为准”。
 - `AGENTS.md` 已补 `sites/nexusphp/` 子模块，删掉“历史报告不再保留”的死引用；`doc/ROADMAP.md` 第 6 节旧的“两个 Agent 改 `reseed.rs`”风险已改成当前拆分后的写集。
 - `doc/SITES.md` 的 hdvideo 行已从 `assisted` 纠正为 `reseeded`，tracker 状态更新为 `status=4`；city13 复查上传量 227.16 MB。
 - **剩余问题**：`AUDIT-REPORT-2026-11-27-r2.md` 前部仍是 53 文件 / 40,770 行 / 533 条 / 覆盖率无阈值的旧快照；已按 S4 在顶部标“历史版，现役见 r3”，正文旧数字保留作当时证据。
@@ -42,7 +42,7 @@
 
 ### 5. 测试覆盖率
 
-- 536 条测试、最近 CI 行覆盖率 79.87%，高于 77% 门槛；核心库 458 条覆盖解析、判重、表单、覆盖状态和 qB 假服务端。
+- 536 条测试、CI 行覆盖率 80.33%，高于 77% 门槛；核心库 458 条覆盖解析、判重、表单、覆盖状态和 qB 假服务端。
 - **原缺口一（已补）**：qB 超过 50,000 条的分页/截断行为原先没有用例；本轮补了 50,001 条假服务端用例，断言分页取全。
 - **缺口二**：GUI 13 条是纯状态测试，按钮可用性、真实窗口渲染、配置路径选择仍靠手工。
 - **缺口三**：真实站点链路只有 city13、hdvideo 两条人工证据；qingwa、dragonhd、ptzone 等仍被外部链路挡住，不能算代码已覆盖。
@@ -56,7 +56,7 @@
 ### 7. 工程规范
 
 - `.gitignore` 已挡住 `artifacts/`、`rust/target/`、根目录一次性证据；`git status` 干净（本报告写完后待提交）。
-- `artifacts/` 当前 334 个文件、39.79 MB；其中 8 个 `.torrent` 含站点 `passkey`，虽然被 ignore，打包/备份/误拷贝仍会泄露。
+- `artifacts/` 当前 335 个文件、40.87 MB；其中 8 个 `.torrent` 含站点 `passkey`，虽然被 ignore，打包/备份/误拷贝仍会泄露。
 - 分支 `main`、`rust/coverage` 已完全合入 `master`，但远端正地保留；worktree 只有当前一个。
 - GitHub push 在 schannel/openssl 下会被 reset；实测根因是全局 `http.proxy=http://127.0.0.1:7890`，用 `git -c http.proxy= -c http.sslBackend=openssl push origin master` 直连可通，已写进 `AGENTS.md` 的常用命令。
 
@@ -70,7 +70,7 @@
 | A4 | `rust/crates/bsend/tests/coverage_e2e.rs`、`doc/OPERATIONS.md` | 真站验收只有人工证据，无只读巡检脚本 | 中 | 回归时无法快速复核站点状态 |
 | A5 | `rust/crates/bsend/src/coverage.rs`、`index.rs` | `coverage.json` 单文件 23 MB，整文件序列化落盘 | 中 | 启动/保存变慢，手工合并易冲突 |
 | A6 | `index.rs`、`report.rs`、`reseed/upload.rs`、`detail.rs`、`sites/nexusphp/upload.rs`、`commands.rs`、`bsend-gui/src/main.rs` | 生产路径仍有 10 处 `unwrap/expect`，GUI 锁未做 poison 恢复 | 低 | 极端 panic 会中断单轮任务 |
-| A7 | `artifacts/` | 334 文件 / 39.79 MB，8 个 torrent 含 passkey | 中 | 备份、打包、误拷贝泄露站点凭据 |
+| A7 | `artifacts/` | 335 文件 / 40.87 MB，8 个 torrent 含 passkey | 中 | 备份、打包、误拷贝泄露站点凭据 |
 | A8 | Git 分支 | `main`、`rust/coverage` 已合入未删除 | 低 | 分支列表噪音 |
 | A9 | `bsend-gui/src/main.rs` | 13 条 GUI 测试只覆盖纯状态，不覆盖窗口交互 | 低 | 界面回归靠手工 |
 | A10 | `AGENTS.md`、推送流程 | 全局 `http.proxy` 会让 git TLS reset；已写直连命令（本轮已修） | 低 | 换机器重复排障 |
@@ -154,4 +154,4 @@
 - **待用户确认**：S6 清场（`artifacts/` 与根目录 ignored 证据）、S7 删除已合并分支。未确认前一个都没删。
 - **待站点侧**：city13 88467、hdvideo 79168 仍“未审”；hdvideo `tracker.hdvideo.top` `status=4`（stream truncated），0 上传；city13 已上传 227.16 MB，但覆盖格仍是 `pending_review`。
 - **外部阻塞**：qingwa 真实回包、dragonhd/ptzone 真站复测仍被站点链路挡住，不是代码回包识别 bug。
-- **CI**：`a5cd535` 的 run #114 四 job success；`44de361` 含 Rust 改动，推送后按 `rust.yml` 应重新触发四个 job，待远端结果。
+- **CI 已确认**：`a5cd535` 的 run #114 四 job success；`44de361` 的 run #115（[46014063791](https://github.com/schalkiii/box-send/actions/runs/46014063791)）四 job 全 success，覆盖 Windows、MSRV 1.88、Ubuntu、覆盖率。

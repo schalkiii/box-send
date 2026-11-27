@@ -149,7 +149,7 @@ CLI 侧 `main.rs` 从 2,380 行降到 129 行，只留 `main`、连接 qB、构�
 
 - `rust/Cargo.toml` 声明 `rust-version = "1.88"`。1.82 会撞上依赖的 edition 2024（`cpufeatures 0.3.1`），1.85 又不够 `cookie_store`、`icu_*`、`time` 的 1.86/1.88 要求；1.88 是当前依赖树的真实下限。
 - 本地 `cargo +1.88.0-x86_64-pc-windows-gnu check -p bsend` 通过。Windows MSVC 工具链在本机没有 `link.exe`/Windows SDK，1.88 的 MSVC 目标无法链接；CI 的 MSRV job 跑在 Ubuntu，不依赖本机 MSVC。
-- `.github/workflows/rust.yml` 新增 `msrv` job（1.88.0，`cargo check -p bsend -p bsend-cli`）和 `coverage` job（stable + `llvm-tools-preview` + `cargo-llvm-cov --workspace --exclude bsend-gui --lcov`，上传 `lcov.info`）。本地 Windows GNU 仍缺 profiler runtime，不能跑 `cargo llvm-cov`；覆盖数字以 CI artifact 为准，不伪造百分比。2026-11-27 从 CI artifact 读到行覆盖 79.87%，门槛设为 77。
+- `.github/workflows/rust.yml` 新增 `msrv` job（1.88.0，`cargo check -p bsend -p bsend-cli`）和 `coverage` job（stable + `llvm-tools-preview` + `cargo-llvm-cov --workspace --exclude bsend-gui --lcov`，上传 `lcov.info`）。本地 Windows GNU 仍缺 profiler runtime，不能跑 `cargo llvm-cov`；覆盖数字以 CI artifact 为准，不伪造百分比。2026-11-27 从 CI artifact 读到行覆盖 79.87%，门槛设为 77；同日晚 qB 分页补丁后 run #115 为 17,058/21,235 = 80.33%。
 
 ### 4.7 拆分 `sites/nexusphp.rs`（已完成 2026-11-27）
 
@@ -170,7 +170,7 @@ sites/nexusphp/upload.rs  页面请求重试、限流/拦截页识别、站点�
 - **P2 真站只读巡检脚本**：新增 `scripts/live-smoke.ps1`，只读查 city13/hdvideo/pthome 的详情页、tracker、上传量、审核标记，不发布、不挂种；配合 `doc/OPERATIONS.md`。详见 r3 S2。
 - **P2 覆盖率落盘基准**：先测 23 MB `coverage.json` 的加载/保存耗时和峰值内存，再决定是否分片或增量写；涉及 `coverage.rs`、`index.rs`、`config.rs`。详见 r3 S3。
 - **P3 剩余生产路径 `unwrap/expect`**：按 r3 S5 的逐处判断清理，先改一处跑一处测试。
-- **P3 清场与分支**：`artifacts/` 的 39.79 MB 证据、8 个含 passkey 的 torrent、三个 `reseed.rs` 备份、根目录 47 个一次性 ignored 文件（`.workbuddy/`、`artifacts/`、`rust/target/` 不删），以及已合并的 `main`/`rust/coverage` 分支，等用户看完 r3 与洁癖汇报后明确确认再删。
+- **P3 清场与分支**：`artifacts/` 的 40.87 MB 证据、8 个含 passkey 的 torrent、三个 `reseed.rs` 备份、根目录 47 个一次性 ignored 文件（`.workbuddy/`、`artifacts/`、`rust/target/` 不删），以及已合并的 `main`/`rust/coverage` 分支，等用户看完 r3 与洁癖汇报后明确确认再删。
 
 ## 5. 已知问题
 

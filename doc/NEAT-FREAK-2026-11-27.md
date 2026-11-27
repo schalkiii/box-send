@@ -8,17 +8,17 @@
 |---|---|---|
 | 代码 | `verified-current` | `master` 在 `a5cd535` + qB 分页补丁；生产 26,915 行、测试 16,403 行；536 条全绿；fmt/clippy 通过 |
 | 运行态 | `verified-current` | city13 88467 tracker `status=2`、上传 227.16 MB、2 个下载者；hdvideo 79168 主 announce `status=2`、子 tracker `status=4`、0 上传；pthome 285040 明确 existed，未重复挂种；qB 现役 42,470 条，`bsend status` 跑通 |
-| 文档 | `changed-and-verified` | 536/最近 CI 79.87%/77% 已同步；`README`、`AGENTS` 的死引用已修；`SITES` hdvideo 已改 `reseeded`；新增 r3 审计本报告 |
+| 文档 | `changed-and-verified` | 536/CI 80.33%/77% 已同步；`README`、`AGENTS` 的死引用已修；`SITES` hdvideo 已改 `reseeded`；新增 r3 审计本报告 |
 | 规则 | `changed-and-verified` | `AGENTS.md` 补 `sites/nexusphp/` 子模块，删除“历史报告不再保留”的矛盾表述；ROADMAP 第 6 节并发风险改成当前写集 |
 | 记忆 | `not-applicable` | 本项目没有可手工维护的项目记忆文件；平台长期偏好只读，不在本次范围 |
-| 工作区 | `pending` | `artifacts/` 334 文件 / 39.79 MB；根目录 50 个 ignored 条目（其中 `.workbuddy/`、`artifacts/`、`rust/target/` 是工作/构建目录，不删，剩余 47 个一次性证据）；`main`、`rust/coverage` 已合入未删；清场待确认 |
+| 工作区 | `pending` | `artifacts/` 335 文件 / 40.87 MB；根目录 50 个 ignored 条目（其中 `.workbuddy/`、`artifacts/`、`rust/target/` 是工作/构建目录，不删，剩余 47 个一次性证据）；`main`、`rust/coverage` 已合入未删；清场待确认 |
 
 ## 二、当前代码/运行事实
 
 - Rust 57 个 `.rs`、43,318 行：生产 26,915、内联测试 11,562、`tests/` 4,841；Markdown 33 个（含本轮新增的 r3、软件改进、洁癖报告）。
 - 覆盖索引：3,388 段内容、42,470 条成员种子；覆盖分布“已辅种 27、已转种 117、待人工确认 19、其他版本 8、同 hash 跳过 1、站内没有 20、待找源 54”。
 - 测试：核心 458、`coverage_e2e` 35、`other_version` 2、`skip_keywords` 2、CLI 23、`cli_smoke` 3、GUI 13，合计 536。
-- CI：`0f1ff35` run #113 四 job success；`a5cd535` run #114 也已四 job success（2 分 35 秒）。
+- CI：`0f1ff35` run #113 四 job success；`a5cd535` run #114 也已四 job success（2 分 35 秒）；`44de361` 的 run #115（[46014063791](https://github.com/schalkiii/box-send/actions/runs/46014063791)）四 job 全 success。
 
 ## 三、本轮改动
 

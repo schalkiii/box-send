@@ -8,9 +8,10 @@
 - 改动后 `cargo test --workspace`：**536 条全绿**（核心库 458、coverage_e2e 35、其余 2/2/23/3/13）。
 - `cargo fmt --check` 通过；`cargo clippy --workspace --all-targets -- -D warnings` 通过（只有 `proc-macro-error2` 的 future-incompat 提示，不是本项目代码）。
 - GitHub Actions `61cf4d2` run `45979346634` success（Linux + Windows 全量测试、fmt、clippy）；本地同一提交 527 条全绿。
-- 覆盖率：已接入 CI（`coverage` job 用 Ubuntu + `cargo-llvm-cov` 生成 `lcov.info` artifact），并用 `--fail-under-lines 77` 设了 77% 的硬门槛；当前行覆盖率 16,842/21,087 = **79.87%**。本地 Windows GNU 工具链缺 profiler runtime，仍不能跑 `cargo llvm-cov`，本地用“测试/函数比”和缺口清单量化。
+- 覆盖率：已接入 CI（`coverage` job 用 Ubuntu + `cargo-llvm-cov` 生成 `lcov.info` artifact），并用 `--fail-under-lines 77` 设了 77% 的硬门槛；run #115 行覆盖率 17,058/21,235 = **80.33%**。本地 Windows GNU 工具链缺 profiler runtime，仍不能跑 `cargo llvm-cov`，本地用“测试/函数比”和缺口清单量化。
 - 最新重构后复跑：核心库 458、CLI 23 + 冒烟 3、coverage_e2e 35、GUI 13，全量 **536 条全绿**；`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings` 通过。MSRV 1.88 的 `cargo check` 在本机 GNU 工具链通过。
 - 推送后远端 CI：提交 `025b712`，run [45993230747](https://github.com/schalkiii/box-send/actions/runs/45993230747) 的 `MSRV 1.88`、覆盖率、Ubuntu、Windows 四个 job 全部 success；覆盖率 `lcov.info` 以 artifact `coverage-lcov` 保存。
+- qB 分页补丁推送后：提交 `44de361`，run [46014063791](https://github.com/schalkiii/box-send/actions/runs/46014063791)（#115）四个 job 全部 success；从 artifact 重算行覆盖 17,058/21,235 = 80.33%。
 
 ## 二、逐模块缺口（量化）
 
@@ -130,7 +131,7 @@
 
 - 测试总数 507 → 523，新增 16 条：5 条测试分支 + tracker 真值 1 条 + GUI 纯状态 10 条。后续拆分/修复再增：NexusPHP 拆分不增删用例，verifyHash 回填 2 条、CLI 空路径 3 条、新发种收尾语义 2 条、qB 分页 1 条，当前 **536 条**。
 - 新增覆盖：16 种角标的全量分支、IMDb 无 title 锚点、手动重复审计、名称判别词冲突、配置测试线程隔离、tracker status 1/2/4 的文案与同 hash 条件、tracker 终态进 `Verifying`、GUI 全状态文案和配置路径、新发种/补挂的来源区分。
-- 行覆盖率已由 CI 产出：16,842/21,087 = **79.87%**，`--fail-under-lines 77` 作为硬门槛；本地 Windows GNU 仍缺 profiler runtime，不重复尝试。
+- 行覆盖率已由 CI 产出：run #115 为 17,058/21,235 = **80.33%**，`--fail-under-lines 77` 作为硬门槛；本地 Windows GNU 仍缺 profiler runtime，不重复尝试。
 - 没有引入随机 fuzzing：本轮缺口都是有限枚举或固定输入，随机化不会增加判别力；标题角标已做 16 种穷举。后续若要 fuzzing，优先对 `strip_site_title_badges` 和 `search_names_match` 做约束输入生成，并固定可打印种子。
 
 ## 七、完成判据自查
