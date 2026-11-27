@@ -1,7 +1,7 @@
 # 项目审计（2026-11-27 r3）
 
 > 审计范围：`C:\Users\Schal\WorkBuddy\2026-11-17-20-52-34` 当前 `master` 分支。
-> 代码基线：`a5cd535`（生产路径 `unwrap/expect` 清理与文档同步已提交）；审计后按 S1 补了 qB 列表分页，当前基线 536 条。审计过程只读，分页修复单独提交。
+> 代码基线：`a5cd535`（生产路径 `unwrap/expect` 清理与文档同步已提交）；审计后按 S1 补了 qB 列表分页，提交 `44de361`，当前基线 536 条。
 > 本报告取代 `AUDIT-REPORT-2026-11-27-r2.md`；r2 保留为上一轮证据，前部快照已过时。
 
 ## 一、现状
@@ -154,4 +154,4 @@
 - **待用户确认**：S6 清场（`artifacts/` 与根目录 ignored 证据）、S7 删除已合并分支。未确认前一个都没删。
 - **待站点侧**：city13 88467、hdvideo 79168 仍“未审”；hdvideo `tracker.hdvideo.top` `status=4`（stream truncated），0 上传；city13 已上传 227.16 MB，但覆盖格仍是 `pending_review`。
 - **外部阻塞**：qingwa 真实回包、dragonhd/ptzone 真站复测仍被站点链路挡住，不是代码回包识别 bug。
-- **CI 已确认**：`a5cd535` 的 run #114 四 job success；本轮文档改动只动 Markdown，提交后的 CI 仍按同一条 `rust.yml` 跑。
+- **CI**：`a5cd535` 的 run #114 四 job success；`44de361` 含 Rust 改动，推送后按 `rust.yml` 应重新触发四个 job，待远端结果。
