@@ -7,6 +7,7 @@
 
 - 改动后 `cargo test --workspace`：**527 条全绿**（核心库 454、coverage_e2e 33、其余 2/2/20/3/13）。
 - `cargo fmt --check` 通过；`cargo clippy --workspace --all-targets -- -D warnings` 通过（只有 `proc-macro-error2` 的 future-incompat 提示，不是本项目代码）。
+- GitHub Actions `61cf4d2` run `45979346634` success（Linux + Windows 全量测试、fmt、clippy）；本地同一提交 527 条全绿。
 - 覆盖率工具：GNU 工具链缺 `profiler_builtins`，`cargo llvm-cov` 失败；MSVC + `rust-lld` 方案需要 `llvm-tools-preview`，下载组件长时间无响应，本轮停止，未产生行覆盖率数字。下面用“测试/函数比”和缺口清单量化，不伪造百分比。
 
 ## 二、逐模块缺口（量化）

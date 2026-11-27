@@ -20,7 +20,7 @@
 
 ### 1.1 规模与结构
 
-- Git：`master`，审计开始基线 `1c666a7`；tracker 状态机收尾在 `77fd8a1`，文档在 `ba1fa71`，均已 push 到 `origin/master`。`77fd8a1` 的 GitHub Actions run `45976168609` 全绿；`ba1fa71` 只改文档，不触发 Rust workflow。
+- Git：`master`，审计开始基线 `1c666a7`；tracker 状态机 `77fd8a1`、文档 `ba1fa71`、结构拆分 `f230d58`、收尾文档 `61cf4d2`，均已 push 到 `origin/master`。`77fd8a1` 的 CI run `45976168609` success；最终 `61cf4d2` 的 CI run `45979346634` 也 success，包含 CLI 拆分后的 527 条全量测试。
 - Rust 源文件 45 个，合计 42,353 行；按 `#[cfg(test)]` 估算生产代码约 31,237 行。
 - 测试属性 527 个（初稿 507；测试分支 5 条 + tracker 真值 1 条 + GUI 纯状态 10 条 + CLI 参数解析 4 条）。`cargo test --workspace` 实测：核心库 454、`coverage_e2e` 33、CLI 20 + 冒烟 3、其余 2/2/13，全部通过。
 - 最大模块：`reseed.rs` 11,889 行、345 个函数、49 个公开函数、168 个测试（标题角标裁剪已拆到 `reseed/title.rs`）；`coverage_e2e.rs` 3,582 行、33 个测试；`sites/nexusphp.rs` 3,091 行、36 个测试；`bsend-cli/main.rs` 2,188 行、16 个内联测试，加 `cli.rs` 4 条参数解析测试和 `tests/cli_smoke.rs` 3 条共 23 条。
