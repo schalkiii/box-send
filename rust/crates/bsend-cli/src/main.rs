@@ -96,8 +96,14 @@ enum Cmd {
     /// 转种草稿的审阅与提交（默认只审阅不提交）
     Reseed {
         /// 转第 N 条草稿（1 起编号；不带此参数只列草稿）
-        #[arg(long)]
+        #[arg(long, conflicts_with = "only")]
         draft: Option<usize>,
+        /// 只选名称或 content key 包含这段文字的草稿（单条调试用，与 --draft 互斥）
+        #[arg(long)]
+        only: Option<String>,
+        /// 只选这个目标站（如 iloli）；同一内容在多个站有缺口时避免选错站
+        #[arg(long)]
+        site: Option<String>,
         /// 真提交（预检 → 上传 → 发后自检 → 推种校验）；不带则只审阅
         #[arg(long)]
         yes: bool,
@@ -245,7 +251,12 @@ fn main() -> Result<()> {
         Cmd::Prime => cmd_round(&cfg, Some(0), None, None, false, true),
         Cmd::Cookies { from, write, all } => cmd_cookies(&mut cfg, &from, write, all),
         Cmd::Status => cmd_status(&cfg),
-        Cmd::Reseed { draft, yes } => cmd_reseed(&cfg, draft, yes),
+        Cmd::Reseed {
+            draft,
+            yes,
+            only,
+            site,
+        } => cmd_reseed(&cfg, draft, yes, only.as_deref(), site.as_deref()),
         Cmd::Pull { site, url, key } => cmd_pull(&cfg, &site, &url, key.as_deref()),
         Cmd::Followup {
             dry_run,
@@ -754,7 +765,13 @@ fn cmd_status(cfg: &Config) -> Result<()> {
 }
 
 /// 转种草稿的审阅与提交：`--draft N` 审阅第 N 条（不 POST），加 `--yes` 才真发
-fn cmd_reseed(cfg: &Config, draft: Option<usize>, yes: bool) -> Result<()> {
+fn cmd_reseed(
+    cfg: &Config,
+    draft: Option<usize>,
+    yes: bool,
+    only: Option<&str>,
+    site: Option<&str>,
+) -> Result<()> {
     if yes {
         bsend::config::ensure_publish_enabled(cfg)?;
     }
@@ -778,12 +795,23 @@ fn cmd_reseed(cfg: &Config, draft: Option<usize>, yes: bool) -> Result<()> {
         println!("没有可发条目：qB 里没有目标站缺口，或源种子还没定位。先 `bsend scan` 刷新索引。");
         return Ok(());
     }
-    let Some(n) = draft else {
-        let total = report.drafts.len();
+    let site_filter = site.map(str::trim).filter(|s| !s.is_empty());
+    let candidates: Vec<&bsend::report::DraftRow> = report
+        .drafts
+        .iter()
+        .filter(|d| site_filter.is_none_or(|s| d.target_site.eq_ignore_ascii_case(s)))
+        .collect();
+    if candidates.is_empty() {
+        let wanted = site_filter.unwrap_or("指定站");
+        println!("没有可发条目：目标站「{wanted}」当前没有缺口草稿。");
+        return Ok(());
+    }
+    if draft.is_none() && only.is_none() {
+        let total = candidates.len();
         println!(
             "可发条目（{total} 条，按 qB 缺口现场生成）。`bsend reseed --draft N` 审阅第 N 条，加 `--yes` 真提交："
         );
-        for (i, d) in report.drafts.iter().take(200).enumerate() {
+        for (i, d) in candidates.iter().take(200).enumerate() {
             println!(
                 "  #{} 「{}」{} → {}（源：{}）",
                 i + 1,
@@ -797,11 +825,20 @@ fn cmd_reseed(cfg: &Config, draft: Option<usize>, yes: bool) -> Result<()> {
             println!("  ……只显示前 200 条，共 {total} 条。");
         }
         return Ok(());
+    }
+    let d = if let Some(filter) = only.map(str::trim).filter(|s| !s.is_empty()) {
+        candidates
+            .iter()
+            .copied()
+            .find(|d| d.name.contains(filter) || d.content_key.starts_with(filter))
+            .ok_or_else(|| anyhow::anyhow!("没有名称或 content key 含「{filter}」的草稿"))?
+    } else {
+        let n = draft.expect("上面已保证 draft/only 至少有一个");
+        candidates
+            .get(n.checked_sub(1).unwrap_or(usize::MAX))
+            .copied()
+            .ok_or_else(|| anyhow::anyhow!("没有第 {n} 条草稿（共 {} 条）", candidates.len()))?
     };
-    let d = report
-        .drafts
-        .get(n.checked_sub(1).unwrap_or(usize::MAX))
-        .ok_or_else(|| anyhow::anyhow!("没有第 {n} 条草稿（共 {} 条）", report.drafts.len()))?;
     let req = bsend::reseed::request_from_draft(
         &d.content_key,
         &d.name,

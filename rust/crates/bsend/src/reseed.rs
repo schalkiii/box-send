@@ -2852,6 +2852,29 @@ fn infer_type_candidates(
     None
 }
 
+/// 源站简介里「类型: 喜剧 / 动画 / 短片」这种明确题材行，优先于片名年份推断。
+/// 只认动画，避免把简介正文里偶尔出现的「动画」误当分类。
+fn infer_type_from_descr(descr: &str) -> Option<(Vec<&'static str>, &'static [&'static str])> {
+    const ANIME: &[&str] = &["动画", "动漫", "Anime", "Animation"];
+    let plain = strip_html_tags(descr).to_lowercase();
+    let start = plain.find("类型")?;
+    let tail = &plain[start..];
+    let end = ["制片国家", "语言", "上映日期", "片长", "又名", "imdb"]
+        .iter()
+        .filter_map(|marker| tail.find(marker))
+        .min()
+        .unwrap_or(tail.len().min(120));
+    let genre_line = &tail[..end];
+    if ANIME
+        .iter()
+        .any(|word| genre_line.contains(&word.to_lowercase()))
+    {
+        Some((vec!["动画", "动漫", "Anime", "Animation"], ANIME))
+    } else {
+        None
+    }
+}
+
 /// 发布名里是否带 19xx/20xx 年份（要求两侧非数字）
 fn has_release_year(h: &str) -> bool {
     let b = h.as_bytes();
@@ -3215,7 +3238,9 @@ fn fill_selects(fields: &mut Vec<Field>, page: &str, info: &ReleaseInfo) -> Vec<
         let options = select_options(page, "type");
         if !options.is_empty() {
             let mut picked = None;
-            if let Some((phrases, syns)) = infer_type_candidates(&info.name, &info.subtitle) {
+            let inferred = infer_type_from_descr(&info.descr)
+                .or_else(|| infer_type_candidates(&info.name, &info.subtitle));
+            if let Some((phrases, syns)) = inferred {
                 for ph in &phrases {
                     if let Some(v) = match_option(&options, ph) {
                         picked = Some(v);
@@ -3914,7 +3939,24 @@ fn apply_site_rules_tail(prep: &mut PreparedUpload, rules: &crate::gates::SiteRu
     for (prefix, want) in &rules.select_picks {
         for name in select_field_names(&prep.fields, prefix) {
             let cur = field_lookup(&prep.fields, &name).unwrap_or("").to_string();
-            if !cur.is_empty() && cur != "0" {
+            // 分类是站点级硬口径（如 iloli 只收动画），允许显式覆盖自动推断；
+            // 但只纠正「动漫」这个含糊分支，不能把电影/剧集也硬改成动画。
+            // 质量档仍只在空/0 时填，避免站点规则把已正确推出来的档位改坏。
+            if prefix == "type" {
+                if !cur.is_empty() && cur != "0" {
+                    let label = select_options(&prep.form_html, &name)
+                        .into_iter()
+                        .find(|(v, _)| v == &cur)
+                        .map(|(_, l)| l)
+                        .unwrap_or_default();
+                    if !label.contains("动漫") {
+                        prep.select_notes.push(format!(
+                            "{name}：自动分类「{label}」不是动漫类，拒绝套用站点 type 覆盖"
+                        ));
+                        continue;
+                    }
+                }
+            } else if !cur.is_empty() && cur != "0" {
                 continue;
             }
             let valid = select_options(&prep.form_html, &name)
@@ -3924,6 +3966,31 @@ fn apply_site_rules_tail(prep: &mut PreparedUpload, rules: &crate::gates::SiteRu
                 set_field(&mut prep.fields, &name, want.clone());
                 prep.select_notes
                     .push(format!("{name}：按站点显式规则选 value={want}"));
+            }
+        }
+    }
+
+    // G1 分类白名单：手动 `reseed` 不走 gates::evaluate，必须在构造字段时就落成
+    // 必填缺口，否则「电影→405」这类绕过会直接从审阅走到提交。自动发种也共用这里。
+    if !rules.allowed_types.is_empty() {
+        if let Some(name) = select_field_names(&prep.fields, "type").into_iter().next() {
+            let cur = field_lookup(&prep.fields, &name).unwrap_or("").to_string();
+            if !cur.is_empty() && cur != "0" {
+                let label = select_options(&prep.form_html, &name)
+                    .into_iter()
+                    .find(|(v, _)| v == &cur)
+                    .map(|(_, l)| l)
+                    .unwrap_or_default();
+                if !rules
+                    .allowed_types
+                    .iter()
+                    .any(|t| label.contains(t.as_str()))
+                {
+                    prep.required_gaps.push(format!(
+                        "分类「{label}」不在站点白名单（{}）",
+                        rules.allowed_types.join("/")
+                    ));
+                }
             }
         }
     }
@@ -8892,6 +8959,64 @@ Frame rate : 25</pre>
     }
 
     #[test]
+    fn explicit_type_pick_overrides_ambiguous_anime_category() {
+        // iloli 只收动画：自动推断落到「动漫/CG杂图/动漫杂志」(411) 时，
+        // 站点规则要能改成 405；这只纠正含糊的动漫分支。
+        let mut prep = PreparedUpload {
+            action: "https://x/takeupload.php".into(),
+            form_url: "https://x/upload.php".into(),
+            fields: vec![("type".into(), "411".into())],
+            picked_tags: vec![],
+            tag_warn: None,
+            select_notes: vec![],
+            required_gaps: vec![],
+            form_html: r#"<form action="takeupload.php"><select name="type"><option value="411">动漫/CG杂图/动漫杂志</option><option value="405">动画 (Animation)</option></select></form>"#.into(),
+            poster_field: None,
+            screenshot_field: None,
+        };
+        let mut rules = crate::gates::SiteRules::default();
+        rules.select_picks.insert("type".into(), "405".into());
+        apply_site_rules_tail(&mut prep, &rules);
+        assert_eq!(field_lookup(&prep.fields, "type"), Some("405"));
+    }
+
+    #[test]
+    fn explicit_type_pick_does_not_turn_movie_into_anime() {
+        // 电影/剧集不能被站点的 type=405 覆盖硬改成动画，否则等于绕过站点只收二次元的规则。
+        let mut prep = PreparedUpload {
+            action: "https://x/takeupload.php".into(),
+            form_url: "https://x/upload.php".into(),
+            fields: vec![("type".into(), "401".into())],
+            picked_tags: vec![],
+            tag_warn: None,
+            select_notes: vec![],
+            required_gaps: vec![],
+            form_html: r#"<form action="takeupload.php"><select name="type"><option value="401">电影 (Movie)</option><option value="405">动画 (Animation)</option></select></form>"#.into(),
+            poster_field: None,
+            screenshot_field: None,
+        };
+        let mut rules = crate::gates::SiteRules::default();
+        rules.select_picks.insert("type".into(), "405".into());
+        rules.allowed_types = vec!["动画".into()];
+        apply_site_rules_tail(&mut prep, &rules);
+        assert_eq!(field_lookup(&prep.fields, "type"), Some("401"));
+        assert!(
+            prep.required_gaps
+                .iter()
+                .any(|n| n.contains("不在站点白名单")),
+            "{:?}",
+            prep.required_gaps
+        );
+        assert!(
+            prep.select_notes
+                .iter()
+                .any(|n| n.contains("拒绝套用站点 type 覆盖")),
+            "{:?}",
+            prep.select_notes
+        );
+    }
+
+    #[test]
     fn default_rules_convert_html_descr_to_bbcode() {
         let html = "<fieldset><legend>引用</legend>正文</fieldset><img src=\"https://x/a.jpg\">";
         let mut prep = PreparedUpload {
@@ -10044,6 +10169,15 @@ Language : Chinese"));
         let m = infer_type_candidates("Dune.2021.1080p.BluRay.x264-GRP", "").unwrap();
         assert!(m.0.contains(&"电影"));
         assert!(infer_type_candidates("Plain.Title.1080p", "").is_none());
+    }
+
+    #[test]
+    fn type_inference_prefers_genre_line_from_descr() {
+        let descr = "导演: 百瀬義行<br>类型: 喜剧 / 动画 / 短片 / 奇幻<br>制片国家/地区: 日本<br>语言: 日语";
+        let hint = infer_type_from_descr(descr).unwrap();
+        assert_eq!(hint.0[0], "动画");
+        // 简介正文里没有明确「类型」行时不猜
+        assert!(infer_type_from_descr("这是一部关于动画制作人的纪录片").is_none());
     }
 
     #[test]

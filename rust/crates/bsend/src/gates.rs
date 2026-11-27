@@ -946,4 +946,17 @@ mod tests {
         let out = evaluate(&input);
         assert!(all_passed(&out), "{out:?}");
     }
+
+    #[test]
+    fn site_rules_deserialize_allowed_types() {
+        // 配置里的 camelCase 字段必须真的落到结构体，否则 iloli 只收动画的白名单是空转。
+        let rules: SiteRules =
+            serde_json::from_str(r#"{"allowedTypes":["动画"],"selectPicks":{"type":"405"}}"#)
+                .unwrap();
+        assert_eq!(rules.allowed_types, vec!["动画".to_string()]);
+        assert_eq!(
+            rules.select_picks.get("type").map(String::as_str),
+            Some("405")
+        );
+    }
 }
