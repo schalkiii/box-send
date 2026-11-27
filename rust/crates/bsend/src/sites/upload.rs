@@ -104,13 +104,12 @@ fn looks_like_spa(html: &str) -> bool {
 
 fn has_static_form(html: &str) -> bool {
     let lower = html.to_ascii_lowercase();
+    // 只有 hidden/number 的捐款、搜索、登录表单不是上传表单。
+    // 上传表单至少要能选种子文件或填简介文本域；只看到一个 hidden 不能算。
     lower.contains("<form")
         && (lower.contains("type=\"file\"")
             || lower.contains("type='file'")
-            || lower.contains("<select")
-            || lower.contains("<textarea")
-            || lower.contains("type=\"hidden\"")
-            || lower.contains("type='hidden'"))
+            || lower.contains("<textarea"))
 }
 
 /// 按上传页 HTML 归类。判定顺序：登录墙 → 权限 → 静态表单 → 2FA → 验证/区域拦截 → SPA → 兜底。
@@ -209,6 +208,17 @@ mod tests {
     #[test]
     fn unknown_shell_falls_back_to_no_form() {
         let html = "<html><body><p>页面里既没有表单也认不出特征</p></body></html>";
+        assert_eq!(classify_upload_page(html), UploadPageKind::NoForm);
+    }
+
+    #[test]
+    fn donation_form_with_only_hidden_fields_is_not_an_upload_form() {
+        // longpt 实测：upload.php 只有一个 bonusrain.php 捐款表单（hidden + number），
+        // 不能因为有 hidden 就当成静态上传表单。
+        let html = r#"<form action="bonusrain.php" method="post">
+<input type="hidden" name="action" value="donate">
+<input type="hidden" name="nonce" value="x">
+<input type="number" name="amount"></form>"#;
         assert_eq!(classify_upload_page(html), UploadPageKind::NoForm);
     }
 }

@@ -2421,6 +2421,35 @@ fn match_option(options: &[(String, String)], token: &str) -> Option<String> {
     }
 }
 
+/// Remux 的介质档要优先命中「Remux」本身，不能先按 Blu-ray/BD 泛匹配。
+/// hdfans/kufei 有「BD Remux」，ptzone/hdvideo/city13 只有「Remux」，
+/// ptsbao 没有 Remux 档（但 processing/source 已标 Remux）则回退 BluRay。
+/// 4K 优先 UHD Remux；站点没有 UHD Remux 时选通用 Remux，避免误选 UHD 原盘。
+fn pick_remux_option(options: &[(String, String)], hay: &str) -> Option<String> {
+    let lower = hay.to_ascii_lowercase();
+    let uhd = lower.contains("uhd") || lower.contains("2160") || lower.contains("4k");
+    let candidates: &[&str] = if uhd {
+        &["UHD Remux", "Remux", "UHD Blu-ray", "UHD BluRay"]
+    } else {
+        &[
+            "BD Remux",
+            "Blu-ray Remux",
+            "BluRay Remux",
+            "Bluray Remux",
+            "Remux",
+            "BluRay",
+            "Blu-ray",
+            "BD",
+        ]
+    };
+    for c in candidates {
+        if let Some(v) = match_option(options, c) {
+            return Some(v);
+        }
+    }
+    None
+}
+
 /// 选项标签与词元是否有关系（规范化全等或任一方向的子串）：域判定用，宁可偏宽
 fn label_relates(label: &str, token: &str) -> bool {
     let ln = norm_token(label);
@@ -3092,6 +3121,11 @@ fn fill_selects(fields: &mut Vec<Field>, page: &str, info: &ReleaseInfo) -> Vec<
             let is_remux = tokens
                 .iter()
                 .any(|t| t.to_ascii_lowercase().contains("remux"));
+            // Remux 介质档优先精确命中「Remux」/「BD Remux」，再回退 BluRay；
+            // 不能让 Blu-ray 泛匹配把「BD 原盘 / BD DIY / BD Remux」算成歧义而留空。
+            if picked.is_none() && is_remux && *prefix == "medium_sel" {
+                picked = pick_remux_option(&options, &hay);
+            }
             if reencoded && disc_source && !is_remux {
                 picked = match_option(&options, "Encode");
             }
@@ -3405,7 +3439,7 @@ fn non_upload_endpoint(action: &str, base: &Url) -> Option<&'static str> {
 /// 只在上传表单块内取 action：导航条的搜索/登录表单排在前面，整页取第一个
 /// 会把提交地址误配成 search.php / bonusrain.php 一类。
 fn form_action(page: &str, base: &Url) -> Option<String> {
-    let scope = upload_form_block(page).unwrap_or(page);
+    let scope = upload_form_block(page)?;
     let lower = scope.to_ascii_lowercase();
     let p = lower.find("<form")?;
     let end = lower[p..]
@@ -3482,6 +3516,9 @@ pub struct UploadResult {
     pub message: String,
     /// 站点回「种子已存在」：视为已覆盖，不算本次转种
     pub duplicate: bool,
+    /// HTTP 200 但回包认不出来：站点可能已经收下，也可能只是拒绝页。
+    /// 不直接记失败，交给发后定位按名称+总大小站内核对；核对不到落 `posted_unresolved`。
+    pub uncertain: bool,
     /// 回包正文原文（发后定位只从中提取自带链接，不做检索）
     pub body: String,
     /// 最终跳转 URL（跟随重定向后）
@@ -4480,6 +4517,12 @@ fn is_generic_upload_error(msg: &str) -> bool {
         || (msg.starts_with("HTTP ") && msg.contains("未识别的返回"))
 }
 
+/// HTTP 200 但回包认不出来：这是「未确认发布」，不是明确的站点拒绝。
+/// 403/404 等状态码有明确含义，空回包按后端超时处理，都不走这条兜底。
+fn is_unconfirmed_http_200(msg: &str) -> bool {
+    msg.starts_with("HTTP 200 未识别的返回")
+}
+
 /// 兜底拒因：把回包正文落临时目录，并在错误信息里附路径和一小段可见文字。
 /// 已能解析出具体原因的错误不走这里，文案与行为不变；写盘失败静默忽略。
 fn augment_upload_error_with_dump(site_id: &str, body: &str, msg: &str) -> String {
@@ -4555,6 +4598,7 @@ pub fn submit_upload(
                     "站点提示种子已存在（证据：{marker}；视为已覆盖，不算本次转种）{note_suffix}"
                 ),
                 duplicate: true,
+                uncertain: false,
                 body,
                 final_url,
             });
@@ -4565,6 +4609,7 @@ pub fn submit_upload(
                 detail_url: Some(u),
                 message: format!("发布成功（跳转详情页）{note_suffix}"),
                 duplicate: false,
+                uncertain: false,
                 body,
                 final_url,
             });
@@ -4582,6 +4627,7 @@ pub fn submit_upload(
                     format!("发布成功（响应页没找到详情链接，需手动确认新种）{note_suffix}")
                 },
                 duplicate: false,
+                uncertain: false,
                 body,
                 final_url,
             });
@@ -4595,12 +4641,28 @@ pub fn submit_upload(
                 detail_url: Some(u),
                 message: format!("发布成功（回包正文详情链接）{note_suffix}"),
                 duplicate: false,
+                uncertain: false,
                 body,
                 final_url,
             });
         }
         last_err = extract_upload_error(&body, resp.status);
         last_err = augment_upload_error_with_dump(&target.site_id, &body, &last_err);
+        // HTTP 200 但页面认不出来：先别判失败。站点可能已经收下种，只是成功页/拒绝页
+        // 没有可识别的结构；交给发后定位按名称+总大小检索，找到就挂回，找不到落
+        // `posted_unresolved` 待人工确认。403/404 和空回包仍有明确含义，不走这条。
+        if is_unconfirmed_http_200(&last_err) {
+            return Ok(UploadResult {
+                detail_url: None,
+                message: format!(
+                    "上传回包未识别（{last_err}）；未确认发布，继续按名称+总大小站内核对"
+                ),
+                duplicate: false,
+                uncertain: true,
+                body,
+                final_url,
+            });
+        }
         if looks_like_lost_post(&last_err) && attempt == 0 {
             thread::sleep(Duration::from_secs(2));
             continue; // 同字节重投
@@ -7141,6 +7203,9 @@ fn run_reseed_inner(
         Err(e) => return Err(e),
     };
     log(&format!("上传结果：{}", up.message));
+    if up.uncertain {
+        log("上传回包未识别：不直接判失败，先站内按名称+总大小核对是否已经收下");
+    }
 
     // 站点回包带 duplicate 标志时，回包链接可能只是 existed 跳转（不可信），
     // 但不能只落 ReviewPending 就完事：目标站已有条目同样要下载目标种挂到本地数据上，
@@ -8481,6 +8546,23 @@ Frame rate : 25</pre>
     }
 
     #[test]
+    fn http_200_unrecognized_response_is_unconfirmed_not_a_failure() {
+        // city13/hdvideo 这类站会回 HTTP 200，但页面既不是详情页也不是错误框。
+        // 这种回包不能直接判失败，先交给站内检索核对；403/空回包仍有明确含义。
+        let body = "<html><body><h2>页面没有可识别的成功或失败结构</h2></body></html>";
+        let msg = extract_upload_error(body, 200);
+        assert_eq!(msg, "HTTP 200 未识别的返回");
+        assert!(is_unconfirmed_http_200(&msg));
+        assert!(is_unconfirmed_http_200(&format!(
+            "{msg}；回包已存 /tmp/bsend-upload-city13-1.html"
+        )));
+        assert!(!is_unconfirmed_http_200("HTTP 403 未识别的返回"));
+        assert!(!is_unconfirmed_http_200(
+            "HTTP 200 空回包（站点后端没有返回内容，通常是处理超时或崩溃；本次未确认发布）"
+        ));
+    }
+
+    #[test]
     fn error_extraction() {
         let body = r#"<div id="errorbox">请填写必填项目</div>"#;
         assert_eq!(extract_upload_error(body, 200), "请填写必填项目");
@@ -9090,6 +9172,73 @@ Height : 1080</pre></div>"#;
         assert_eq!(match_option(&opts, "1080p").as_deref(), Some("11"));
         // 词元不存在
         assert_eq!(match_option(&opts, "x264"), None);
+    }
+
+    #[test]
+    fn remux_medium_prefers_exact_remux_then_bluray() {
+        // hdfans/kufei：BD Remux；hdvideo/ptzone/city13：Remux；ptsbao 没有 Remux 档
+        let hdfans = vec![
+            ("21".into(), "BD原盘".into()),
+            ("22".into(), "BD DIY".into()),
+            ("23".into(), "BD Remux".into()),
+            ("19".into(), "UHD Remux".into()),
+            ("1".into(), "H.264/AVC".into()),
+        ];
+        let hdvideo = vec![
+            ("10".into(), "UHD Blu-ray".into()),
+            ("12".into(), "Remux".into()),
+            ("13".into(), "Encode".into()),
+        ];
+        let kufei = vec![
+            ("4".into(), "BD 原盘".into()),
+            ("5".into(), "BD DIY".into()),
+            ("6".into(), "BD Remux".into()),
+            ("3".into(), "UHD Remux".into()),
+        ];
+        let ptzone = vec![
+            ("1".into(), "Blu-ray".into()),
+            ("3".into(), "Remux".into()),
+            ("10".into(), "UHD".into()),
+        ];
+        let ptsbao = vec![
+            ("1".into(), "BluRay".into()),
+            ("2".into(), "WEB-DL".into()),
+            ("5".into(), "HDTV".into()),
+        ];
+        let city13 = vec![
+            ("3".into(), "Remux".into()),
+            ("1".into(), "Blu-ray".into()),
+            ("11".into(), "BluRay".into()),
+        ];
+        let hd = "A.Touch.of.Zen.1971.Blu-ray.REMUX.1080p.AVC.LPCM.1.0-WScode";
+        let uhd = "Movie.2024.UHD.BluRay.2160p.REMUX.HEVC.DTS-HD.MA.5.1-GRP";
+        assert_eq!(pick_remux_option(&hdfans, hd).as_deref(), Some("23"));
+        assert_eq!(pick_remux_option(&hdfans, uhd).as_deref(), Some("19"));
+        assert_eq!(pick_remux_option(&kufei, hd).as_deref(), Some("6"));
+        assert_eq!(pick_remux_option(&kufei, uhd).as_deref(), Some("3"));
+        assert_eq!(pick_remux_option(&hdvideo, hd).as_deref(), Some("12"));
+        assert_eq!(pick_remux_option(&ptzone, hd).as_deref(), Some("3"));
+        assert_eq!(pick_remux_option(&city13, hd).as_deref(), Some("3"));
+        assert_eq!(pick_remux_option(&ptsbao, hd).as_deref(), Some("1"));
+    }
+
+    #[test]
+    fn remux_select_is_filled_for_hdfans_style_form() {
+        let form = r#"<form action="takeupload.php">
+<select name="medium_sel[4]"><option value="0">请选择一项</option>
+<option value="21">BD原盘</option><option value="22">BD DIY</option>
+<option value="23">BD Remux</option><option value="19">UHD Remux</option></select>
+<select name="codec_sel[4]"><option value="0">请选择一项</option><option value="1">H.264/AVC</option></select>
+<select name="audiocodec_sel[4]"><option value="0">请选择一项</option><option value="7">LPCM</option></select>
+<select name="standard_sel[4]"><option value="0">请选择一项</option><option value="3">1080P</option></select>
+</form>"#;
+        let info = ReleaseInfo {
+            name: "A.Touch.of.Zen.1971.Blu-ray.REMUX.1080p.AVC.LPCM.1.0-WScode".into(),
+            ..Default::default()
+        };
+        let (fs, _picked, notes) = build_upload_fields(&info, form, &[]);
+        assert_eq!(field_lookup(&fs, "medium_sel"), Some("23"), "{notes:?}");
+        assert_eq!(field_lookup(&fs, "audiocodec_sel"), Some("7"));
     }
 
     #[test]
@@ -9879,6 +10028,19 @@ Language : Chinese"));
     }
 
     #[test]
+    fn form_action_does_not_fall_back_to_donation_form() {
+        // longpt 实测：upload.php 里只有 bonusrain.php 捐款表单，没有上传表单。
+        // 不能退回整页取第一个 form，否则会把种子 POST 到捐款接口。
+        let page = r#"<form action="bonusrain.php" method="post">
+<input type="hidden" name="action" value="donate"><input type="number" name="amount"></form>"#;
+        assert!(upload_form_block(page).is_none());
+        assert_eq!(
+            form_action(page, &Url::parse("https://longpt.org/upload.php").unwrap()),
+            None
+        );
+    }
+
+    #[test]
     fn checkbox_grid_does_not_bleed_into_neighbor() {
         // 密集标签网格：第一个复选框的 80 字节窗口会盖住邻格「中字」，不能误配
         let page = r#"<input type="checkbox" name="tags[]" value="10"> 原创首发高清首发字幕首发
@@ -10085,7 +10247,7 @@ Language : Chinese"));
             ..Default::default()
         };
         let (fs, _p, _n) = build_upload_fields(&remux, form, &[]);
-        assert_eq!(field_lookup(&fs, "medium_sel"), Some("1"));
+        assert_eq!(field_lookup(&fs, "medium_sel"), Some("3"));
     }
 
     #[test]
