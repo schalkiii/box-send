@@ -198,7 +198,7 @@ reseed/coverage_io.rs  覆盖记录读写
 | --- | --- | --- | --- |
 | baozi | 2 条已提交、已挂回，等审核 | 能全自动 | 83868 https://p.t-baozi.cc/details.php?id=83868 ；83869 https://p.t-baozi.cc/details.php?id=83869 ；均 `pending_review`，回访收尾 |
 | cangbao | 1 条已挂回等审核；1 条已有条目复核 404 | 能全自动 | 44240 https://cangbao.ge/details.php?id=44240 已挂回；1674 下载种子 HTTP 404，未判其他版本 https://cangbao.ge/details.php?id=1674 |
-| dragonhd | 1 条已做种；1 条判重检索超时 | 能全自动（检索稳定性待补） | 49038 https://www.dragonhd.xyz/details.php?id=49038 已做种；War 检索 `torrents.php?search=…` 30 秒超时后中止，未盲发 |
+| dragonhd | 1 条已做种；1 条判重检索超时 | 能全自动（超时重试已落地，真站未复测） | 49038 https://www.dragonhd.xyz/details.php?id=49038 已做种；War 检索 `torrents.php?search=…` 30 秒超时后中止，未盲发；2026-11-27 已加自动重试，单测过，真站复测未做 |
 | hdtime | 2 条已做种 | 能全自动 | 239557 https://hdtime.org/details.php?id=239557 ；239558 https://hdtime.org/details.php?id=239558 |
 | hdvideo | 1 条已挂回等审核；1 条 `existed=1` 线索未核实；1 条被 G2 拦 | 能全自动 | 79086 https://hdvideo.top/details.php?id=79086 已挂回；74646 线索 https://hdvideo.top/details.php?id=74646&existed=1 未能定位核对 |
 | kufei | 2 条已做种；1 条被 G2 拦 | 能全自动 | 142311 https://kufei.org/details.php?id=142311 ；142312 https://kufei.org/details.php?id=142312 ；被拦条目的 `medium_sel` 选档待补 |
@@ -206,7 +206,7 @@ reseed/coverage_io.rs  覆盖记录读写
 | ptcafe | 2 条已做种 | 能全自动 | 137339 https://ptcafe.club/details.php?id=137339 ；137340 https://ptcafe.club/details.php?id=137340 |
 | ptlgs | 1 条已挂回等审核 | 能全自动 | 115362 https://ptlgs.org/details.php?id=115362 ；历史 115350 已验证独立 `cover`/`screenshots` 字段填得对 |
 | ptsbao | 1 条已做种；1 条被 G2 拦 | 能全自动 | 135848 https://ptsbao.club/details.php?id=135848 ；被拦条目 `medium_sel` 选档待补 |
-| pthome | 1 条已有并做种；1 条"已存在！"被记成失败 | 能全自动（回包识别待补） | 272549 https://www.pthome.net/details.php?id=272549 已自己做种；War 回包"已存在！"目前落 `failed`，应判重复 |
+| pthome | 1 条已有并做种；1 条"已存在！"旧版记失败 | 能全自动（回包识别已落地，待实测） | 272549 https://www.pthome.net/details.php?id=272549 已自己做种；War 回包"已存在！"旧版落 `failed`，2026-11-27 已补精确提示识别，真实回包未复测 |
 | qingwa | 1 条已挂回，后续审核通过 | 能全自动（大合集走候选入口属站点侧限制） | 208804 https://qingwapt.com/details.php?id=208804 ；Poirot 合集 `torrent_too_large`，记 `pending_offers`，候选表单不代填 |
 | sbpt | 1 条命中已有 | 能全自动 | 21768 https://sbpt.link/details.php?id=21768 ；历史七条详情页作者均为本站账号，已做种或校验 100%（见 `SITES.md` 2.5.1） |
 | shuioudao | 2 条已挂回等审核 | 能全自动 | 72641 https://sewerpt.com/details.php?id=72641 ；72642 https://sewerpt.com/details.php?id=72642 |
@@ -226,7 +226,7 @@ reseed/coverage_io.rs  覆盖记录读写
 | audiences | 2 次上传失败，通用"上传失败！" | 需补适配（叠加站点侧人工依赖） | 上传页是自定义 JS 表单，`type` 以隐藏值 `0` 提交，程序没有对应选档逻辑；判重检索还依赖真实浏览器前台渲染 Turnstile，后台标签页 token 为空（`kimi.rs` 已报"标签页在后台"） |
 | longpt | 4 条中止：表单 action 落到 `bonusrain.php` | 需补适配 | 审计 error："上传表单 action 不是上传处理页：https://longpt.org/bonusrain.php（命中 bonusrain.php），已中止提交"；历史 51065 曾发成，入口识别现在仍会走错 |
 | ptfans | 本轮未发：分类归到 H 漫区；源站详情页超时 | 需补适配 | Coraline 被自动归到"H漫(动漫、漫画)"区，分类映射错误；另一条源站 `carpt.net/details.php?id=198553` 请求超时 |
-| ptzone | 1 条被 G2 拦（`audiocodec_sel` 未选）；1 条详情页复核超时 | 需补适配 | 112597 https://ptzone.xyz/details.php?id=112597 复核请求超时；历史 190916 五项检查全过、发成过 |
+| ptzone | 1 条被 G2 拦（`audiocodec_sel` 未选）；1 条详情页复核超时 | 需补适配（超时重试已落地） | 112597 https://ptzone.xyz/details.php?id=112597 复核请求超时；2026-11-27 已加自动重试，单测过，真站复测未做；历史 190916 五项检查全过、发成过 |
 | city13 | 2 条 HTTP 200 未识别失败；2 条被 G2 拦 | 需补适配 | 回包既不是详情页也不是错误框，程序认不出；历史 88256 https://13city.org/details.php?id=88256 是靠站内搜索人工兜底确认已发 |
 | qilin | 1 条已发布但挂回失败；1 条同分片跳过 | 需补适配 | 480763 https://www.hdkyl.in/details.php?id=480763 站点种子带 `hdkylin.top` 非目标 tracker，按单站策略拒绝补挂，落 `posted_unresolved`；418978 https://www.hdkyl.in/details.php?id=418978 同分片跳过 |
 | lajidui | 2 条已挂回等审核，但属安全集外误发 | 需补适配（候选范围失守） | 85084 https://pt.lajidui.top/details.php?id=85084 （人民的名义）、85085 https://pt.lajidui.top/details.php?id=85085 （伪装者）；批次备注：不在安全集内，未做人工核对 |
@@ -257,7 +257,7 @@ reseed/coverage_io.rs  覆盖记录读写
 | 缺口类型 | 涉及站点 | 本轮证据 | 修一次能覆盖几站 |
 | --- | --- | --- | --- |
 | 上传表单结构不支持（自定义 JS 表单、隐藏字段、action 落到别处） | audiences、longpt | audiences：`type` 隐藏值 0，无选档逻辑；longpt：action 误判到 `bonusrain.php` 中止 | 白名单 2 站；同一套表单解析改造还能给 hddolby、mypt、ptt、rousi、ttg 等动态站打底 |
-| 判重/详情页检索超时，或回包认不出来 | dragonhd、ptzone、pthome、city13、hdvideo、cyanbug | dragonhd 检索超时；ptzone 详情页超时；pthome"已存在！"落 failed；city13 HTTP 200 未识别；hdvideo `existed=1` 线索定位不到；cyanbug 首轮 TLS EOF | 6 站（统一加检索重试 + 错误文案/回包分类 + 站内搜索兜底确认） |
+| 判重/详情页检索超时，或回包认不出来 | dragonhd、ptzone、pthome、city13、hdvideo、cyanbug | dragonhd 检索超时（已加重试，真站未复测）；ptzone 详情页超时（同上）；pthome"已存在！"已补识别（真实回包未复测）；city13 HTTP 200 未识别；hdvideo `existed=1` 线索定位不到；cyanbug 首轮 TLS EOF | 6 站（统一加检索重试 + 错误文案/回包分类 + 站内搜索兜底确认）；2026-11-27 已部分落地 |
 | G2 选档下拉匹配不上（`medium_sel`/`audiocodec_sel` 未选） | hdfans、kufei、hdvideo、ptsbao、city13、ptzone | 今日被 G2 拦下的条目，片源/音频 token 对不上站点真实选项；同站另有条目发成，说明是偶发或单类型映射缺口 | 6 站（补选档映射和 `selectPicks`；匹配不上仍落人工，不硬填） |
 | 分类映射错误 | ptfans | Coraline 被归到"H漫(动漫、漫画)"区 | 1 站；分类文案映射表是全站共用，修正后其他站同类问题一并受益 |
 | 挂回时 tracker 别名识别不全 | qilin | 480763 站点种子带 `hdkylin.top` announce，和页面域 `hdkyl.in` 是同站别名，被单站策略当非目标 tracker 拒绝 | 1 站；别名归一逻辑可复用给其他多 announce 站 |
