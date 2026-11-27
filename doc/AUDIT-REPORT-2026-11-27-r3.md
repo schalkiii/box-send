@@ -56,7 +56,7 @@
 ### 7. 工程规范
 
 - `.gitignore` 已挡住 `artifacts/`、`rust/target/`、根目录一次性证据；`git status` 干净（本报告写完后待提交）。
-- `artifacts/` 当前 281 个文件、28.42 MB；其中 8 个 `.torrent` 含站点 `passkey`，虽然被 ignore，打包/备份/误拷贝仍会泄露。
+- `artifacts/` 当前 334 个文件、39.79 MB；其中 8 个 `.torrent` 含站点 `passkey`，虽然被 ignore，打包/备份/误拷贝仍会泄露。
 - 分支 `main`、`rust/coverage` 已完全合入 `master`，但远端正地保留；worktree 只有当前一个。
 - GitHub push 在 schannel/openssl 下会被 reset；实测根因是全局 `http.proxy=http://127.0.0.1:7890`，用 `git -c http.proxy= -c http.sslBackend=openssl push origin master` 直连可通，已写进 `AGENTS.md` 的常用命令。
 
@@ -70,7 +70,7 @@
 | A4 | `rust/crates/bsend/tests/coverage_e2e.rs`、`doc/OPERATIONS.md` | 真站验收只有人工证据，无只读巡检脚本 | 中 | 回归时无法快速复核站点状态 |
 | A5 | `rust/crates/bsend/src/coverage.rs`、`index.rs` | `coverage.json` 单文件 23 MB，整文件序列化落盘 | 中 | 启动/保存变慢，手工合并易冲突 |
 | A6 | `index.rs`、`report.rs`、`reseed/upload.rs`、`detail.rs`、`sites/nexusphp/upload.rs`、`commands.rs`、`bsend-gui/src/main.rs` | 生产路径仍有 10 处 `unwrap/expect`，GUI 锁未做 poison 恢复 | 低 | 极端 panic 会中断单轮任务 |
-| A7 | `artifacts/` | 281 文件 / 28.42 MB，8 个 torrent 含 passkey | 中 | 备份、打包、误拷贝泄露站点凭据 |
+| A7 | `artifacts/` | 334 文件 / 39.79 MB，8 个 torrent 含 passkey | 中 | 备份、打包、误拷贝泄露站点凭据 |
 | A8 | Git 分支 | `main`、`rust/coverage` 已合入未删除 | 低 | 分支列表噪音 |
 | A9 | `bsend-gui/src/main.rs` | 13 条 GUI 测试只覆盖纯状态，不覆盖窗口交互 | 低 | 界面回归靠手工 |
 | A10 | `AGENTS.md`、推送流程 | 全局 `http.proxy` 会让 git TLS reset；已写直连命令（本轮已修） | 低 | 换机器重复排障 |

@@ -11,7 +11,7 @@
 | 文档 | `changed-and-verified` | 536/最近 CI 79.87%/77% 已同步；`README`、`AGENTS` 的死引用已修；`SITES` hdvideo 已改 `reseeded`；新增 r3 审计本报告 |
 | 规则 | `changed-and-verified` | `AGENTS.md` 补 `sites/nexusphp/` 子模块，删除“历史报告不再保留”的矛盾表述；ROADMAP 第 6 节并发风险改成当前写集 |
 | 记忆 | `not-applicable` | 本项目没有可手工维护的项目记忆文件；平台长期偏好只读，不在本次范围 |
-| 工作区 | `pending` | `artifacts/` 281 文件 / 28.42 MB；根目录 49 个 ignored 条目（其中 `.workbuddy/`、`rust/target/` 是工作/构建目录，不删，剩余 47 个一次性证据）；`main`、`rust/coverage` 已合入未删；清场待确认 |
+| 工作区 | `pending` | `artifacts/` 334 文件 / 39.79 MB；根目录 50 个 ignored 条目（其中 `.workbuddy/`、`artifacts/`、`rust/target/` 是工作/构建目录，不删，剩余 47 个一次性证据）；`main`、`rust/coverage` 已合入未删；清场待确认 |
 
 ## 二、当前代码/运行事实
 
