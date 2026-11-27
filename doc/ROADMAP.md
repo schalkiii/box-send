@@ -143,7 +143,7 @@ reseed/tests.rs     原 168 条 reseed 测试整体移出（3,433 行）
 reseed/title.rs     标题角标裁剪与标题归一化
 ```
 
-CLI 侧 `main.rs` 从 2,380 行降到 129 行，只留 `main`、连接 qB、构建适配器；`cli.rs` 放参数定义，`commands.rs` 放全部 `cmd_*` 和格式化辅助（1,998 行）。拆分只移动代码，不改行为；拆分后核心库 456、CLI 23 + 冒烟 3、coverage 34、GUI 13，全量 533 条通过；`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings` 通过。`reseed.rs` 剩余 3.6k 行是主流程编排和共享解析，继续硬拆收益低于回归成本，暂不再拆。
+CLI 侧 `main.rs` 从 2,380 行降到 129 行，只留 `main`、连接 qB、构建适配器；`cli.rs` 放参数定义，`commands.rs` 放全部 `cmd_*` 和格式化辅助（1,998 行）。拆分只移动代码，不改行为；拆分时核心库 456、CLI 23 + 冒烟 3、coverage 34、GUI 13，全量 533 条通过，后续新增 2 条后当前为 535；`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings` 通过。`reseed.rs` 剩余 3.6k 行是主流程编排和共享解析，继续硬拆收益低于回归成本，暂不再拆。
 
 ### 4.6 MSRV 与覆盖率 CI（已完成 2026-11-27）
 
