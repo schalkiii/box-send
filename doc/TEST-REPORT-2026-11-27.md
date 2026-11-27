@@ -1,11 +1,11 @@
 # 测试改进报告（2026-11-27）
 
-本次走 `software-improvement` 的**测试分支**：只改测试和测试辅助代码，不改生产行为。
-基线 `db9e16b`；5 条测试随 `7046f4d`、tracker 第 6 条随 `a81b568` 提交并推送。目标不是把覆盖率刷成好看数字，而是补上本轮审计里最容易产生假绿/假阳性的边界。
+本次走 `software-improvement` 的**测试分支**：先只改测试和测试辅助代码，不改生产行为。
+基线 `db9e16b`；6 条测试随 `7046f4d`、`a81b568` 提交并推送。之后在同一分支上补了 S1 的 tracker 终态（生产行为改动）和 S7 的 10 条 GUI 纯状态测试，全量基线更新为 **523 条**。目标不是把覆盖率刷成好看数字，而是补上本轮审计里最容易产生假绿/假阳性的边界。
 
 ## 一、基线
 
-- 改动后 `cargo test --workspace`：513 条全绿（核心库 454、coverage_e2e 33、其余 2/2/16/3/3）。
+- 改动后 `cargo test --workspace`：**523 条全绿**（核心库 454、coverage_e2e 33、其余 2/2/16/3/13）。
 - `cargo fmt --check` 通过；`cargo clippy --workspace --all-targets -- -D warnings` 通过（只有 `proc-macro-error2` 的 future-incompat 提示，不是本项目代码）。
 - 覆盖率工具：GNU 工具链缺 `profiler_builtins`，`cargo llvm-cov` 失败；MSVC + `rust-lld` 方案需要 `llvm-tools-preview`，下载组件长时间无响应，本轮停止，未产生行覆盖率数字。下面用“测试/函数比”和缺口清单量化，不伪造百分比。
 
@@ -13,18 +13,18 @@
 
 | 模块 | 生产行数（近似） | 函数/测试 | 测试/函数比 | 主要缺口 |
 |---|---:|---:|---:|---|
-| `reseed.rs` | 11,857 | 345 / 168 | 0.49 | 标题/别名/判重分支多，上传回包与状态迁移覆盖不均；tracker 真值没有测试（生产也缺状态方法） |
+| `reseed.rs` | 11,857 | 345 / 168 | 0.49 | 标题/别名/判重分支多，上传回包与状态迁移覆盖不均；tracker 终态已补共享判定，轮询 2-3 次的真实回包仍靠站点 |
 | `sites/nexusphp.rs` | 3,091 | — / 36 | — | 名称判定的年份/分辨率冲突缺显式用例；审核页面变体未穷举 |
-| `coverage.rs` | 2,164 | — / 26 | — | `collect_verifying` tracker 状态、并发超时、旧 miss 路径 |
+| `coverage.rs` | 2,164 | — / 26 | — | `collect_verifying` 已接 tracker 真值；并发超时、旧 miss 路径仍缺 |
 | `bsend-cli/main.rs` | 2,380 | — / 16 | — | 命令参数组合；另有 `tests/cli_smoke.rs` 3 条，合计 19 |
-| `bsend-gui` | 3,298 | — / 3 | — | 视图状态、按钮可用性、错误提示 |
+| `bsend-gui` | 3,298 | — / 13 | — | 纯状态文案/配色/路径已覆盖；按钮可用性、真实窗口仍靠手工 |
 | `qbittorrent.rs` | 1,627 | — / 23 | — | `tracker_info()` 已能返回 status；50,000 条上限只告警，队列拥塞仍是运维问题 |
 | `autopost.rs` | 1,804 | — / 25 | — | 手动审计只测过 `posted`，未测重复/失败 |
 | `config.rs` | 1,167 | — / 18 | — | 测试临时目录按进程号共用（本次修） |
 | `gates.rs` | 962 | — / 20 | — | 真实站点组合仍靠 e2e |
 | `report.rs` | 1,501 | — / 27 | — | 大索引、空索引、异常状态聚合 |
 
-缺口优先级：`reseed` 的 tracker 终态（本轮已补 status 读取和 note，完整状态机仍缺）、`coverage` 的收尾终态、`autopost` 的手动审计异常路径、`config` 的测试隔离、`nexusphp` 的判别词冲突。GUI 和 CLI 命令组合放到下一轮，本轮不硬凑。
+缺口优先级：`reseed` 的 tracker 终态已落共享判定（复用 `Verifying` 继续复核），轮询窗口仍只有一轮；`coverage` 的收尾已接同一判定；`autopost` 的手动审计异常路径、`config` 的测试隔离、`nexusphp` 的判别词冲突已补；GUI 纯状态已补 10 条，CLI 命令组合和真实窗口放到下一轮。
 
 ## 三、测试计划（新增 6 条）
 
@@ -77,7 +77,19 @@
 
 补 `parse_tracker_entries` + `tracker_status_note` 单测：`status=2` 翻成“tracker 已回包（做种 3 / 下载 14）”，`status=1` 翻成“tracker 还没回包”，`status=4` 带报错原文。生产侧同时把 `trackers()` 拆出 `tracker_info()`，并在 reseed/coverage 的 100% 收尾里写 tracker 状态；`same_hash_on_target` 增加 `status=2` 条件，tracker 没回包时不再记 `seeding`。
 
-验证：单测通过；全 workspace 513 条通过（`artifacts/workspace-test-20261127-final3.log`）；clippy 通过。真实站点侧 pthome 16:32 变成 `status=2`，city13 长时间 `status=1`、恢复 qB 诊断配置后变 `status=4` 且手动 announce TLS reset，见 `SITES.md` 2.10。
+验证：单测通过；当期 workspace 513 条通过（`artifacts/workspace-test-20261127-final3.log`）；补 GUI 测试后 523 条（`final5.log`）；clippy 通过。真实站点侧 pthome 16:32 变成 `status=2`，city13 长时间 `status=1`、恢复 qB 诊断配置后变 `status=4` 且手动 announce TLS reset，见 `SITES.md` 2.10。
+
+### 4.7 tracker 终态不再只看 progress（S1，生产行为）
+
+`tracker_confirms_seeding()` 成为 reseed 和 coverage 共用的唯一判定：`progress >= 0.999` 且至少一条 tracker `status=2` 才写 `Reseeded/Assisted`；`status=1/4` 或读不到时写 `Verifying`，note 带“已发布并挂回 100%，但 tracker 还没确认，下一轮复核”。这比新增独立状态改动小，且复用现有收尾循环：下一轮 `collect_verifying` 会再问 tracker，直到 `status=2` 或用户手工处理。
+
+验证：`cargo test --workspace` 523 条全绿（`artifacts/workspace-test-20261127-final5.log`）；`coverage_e2e` 33 条；`clippy` 通过（`artifacts/clippy-20261127-final4.log`）。
+
+### 4.8 GUI 纯状态测试（S7）
+
+`bsend-gui` 补 10 条不依赖 GPUI 窗口的测试：全部 17 个 `CoverageStatus` 的文案唯一性、审核三态配色、状态计数、`short_path` 只留末两段、配置路径优先级。GUI 测试从 3 条增到 13 条，达到审计 S7 的“至少 13 个测试”门槛。
+
+验证：`cargo test -p bsend-gui` 13 条全绿（`artifacts/gui-test-20261127-final2.log`）；Windows CI 的 `cargo test --workspace` 会跑。
 
 ## 五、新增用例结果
 
@@ -89,11 +101,14 @@
 | `autopost::tests::manual_duplicate_audit_is_manual_but_not_counted_as_posted` | 通过 |
 | `sites::nexusphp::tests::search_names_match_rejects_conflicting_discriminating_tokens` | 通过 |
 | `qbittorrent::tests::tracker_info_keeps_status_and_turns_it_into_an_honest_note` | 通过 |
+| `bsend-gui::tests::status_chip_labels_*`（8 组状态文案/配色） | 通过 |
+| `bsend-gui::tests::status_chip_labels_are_unique`、`status_chip_keeps_review_colors_distinct` | 通过 |
+| `bsend-gui::tests::short_path_keeps_only_the_last_two_components` | 通过 |
 
 ## 六、覆盖率提升与限制
 
-- 测试总数 507 → 513，新增 6 条；`reseed` 166 → 168，`config` 17 → 18，`autopost` 24 → 25，`nexusphp` 35 → 36，`qbittorrent` 22 → 23。
-- 新增覆盖：16 种角标的全量分支、IMDb 无 title 锚点、手动重复审计、名称判别词冲突、配置测试线程隔离、tracker status 1/2/4 的文案与同 hash 条件。
+- 测试总数 507 → 523，新增 16 条：5 条测试分支 + tracker 真值 1 条 + GUI 纯状态 10 条。`reseed` 166 → 168，`config` 17 → 18，`autopost` 24 → 25，`nexusphp` 35 → 36，`qbittorrent` 22 → 23，`bsend-gui` 3 → 13。
+- 新增覆盖：16 种角标的全量分支、IMDb 无 title 锚点、手动重复审计、名称判别词冲突、配置测试线程隔离、tracker status 1/2/4 的文案与同 hash 条件、tracker 终态进 `Verifying`、GUI 全状态文案和配置路径。
 - 没有行覆盖率数字：GNU 工具链缺 profiler runtime，MSVC 组件下载无响应。下一轮按审计 S8 在 CI 里预装 `llvm-tools-preview`，再补真实百分比。
 - 没有引入随机 fuzzing：本轮缺口都是有限枚举或固定输入，随机化不会增加判别力；标题角标已做 16 种穷举。后续若要 fuzzing，优先对 `strip_site_title_badges` 和 `search_names_match` 做约束输入生成，并固定可打印种子。
 
@@ -110,6 +125,6 @@
 
 ## 八、后续建议
 
-1. ~~先做审计 S1（tracker 真值），再补 `qbittorrent` status=1/2/4 的 mock 测试~~（本轮已完成读取和单测；整状态机仍只做到“记录真值”，没有新增独立状态）。
-2. 下一轮测试分支再补 CLI 有效配置路径、GUI 纯状态函数、`all_tracker_urls` 50,000 条上限。
+1. ~~先做审计 S1（tracker 真值），再补 `qbittorrent` status=1/2/4 的 mock 测试~~（本轮已完成：共享 `tracker_confirms_seeding`，reseed/coverage 100% 后 tracker 未回包落 `Verifying`；status 1/2/4 断言已进 `qbittorrent` 单测）。
+2. 下一轮测试分支补 CLI 有效配置路径、`reseed.rs` 的真实轮询窗口（2-3 次 announce）、`all_tracker_urls` 50,000 条上限。
 3. 覆盖率接入 CI 后再更新本报告，不在本地反复尝试工具链。

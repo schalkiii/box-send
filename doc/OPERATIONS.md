@@ -74,12 +74,12 @@ status / at / url / note / verifyHash
 | 结果 | 实际意思 |
 | --- | --- |
 | `skipped_duplicate` | 目标站已经有同分片条目，不是站点拒绝上传 |
-| `same_hash_skip` | 目标种子和 qB 已有种子完全同 `info hash`，但不满足“只挂目标站 tracker 且 progress=1”（没挂目标站、挂了别站、或还没下完/校验完）；不改原种子、不 add 第二条。满足条件时记 `seeding`，不记这个 |
+| `same_hash_skip` | 目标种子和 qB 已有种子完全同 `info hash`，但不满足“只挂目标站 tracker、progress=1 且 tracker `status=2`”（没挂目标站、挂了别站、还没下完或 tracker 没回包）；不改原种子、不 add 第二条。满足条件时记 `seeding`，不记这个 |
 | `pending_review` | 站上已发布，但站点还没审完或还没放行下载；等回访，不算失败 |
 | `other_version` | 站上同内容但分片不同，不是“重复” |
 | `existed_pending` | 回包说重复，但回包里没有可核对的详情页/下载链接；回包 id 经常是错的。note 以 `existed_unresolved` 开头时，表示站上已有、下载/挂回 qB 失败 |
 | `posted_unresolved` | 站上已发布（新发或 existed），但下载目标种、校验或挂回 qB 失败；待人工补挂，不记失败、不进失败冷却、不占发布额度 |
-| `posted_verifying` | 上传成功、种子已加入 qB，但校验没跑完；界面不写“转种完成”，下一轮接着收尾。算一次发布额度，但还不算已做种 |
+| `posted_verifying` | 上传成功、种子已加入 qB，但校验没跑完，或校验到 100% 但 tracker 还没回包；界面不写“转种完成”，下一轮接着收尾。算一次发布额度，但还不算已做种 |
 | `wait_source` | 没有任何可用成员种子，导不出源文件 |
 | `review_pending` | 站上命中了，但清单或 hash 对不上，等人核对 |
 | `pending_offers` | 站点要求改走候选入口（`offers.php`），程序不自动重试；等人工去候选页提交，`status` 里单列“待跟进” |
@@ -132,7 +132,7 @@ at / started_at / key / name / source_site / source_url
 target_site / result / url / note / cell_status / seeded
 ```
 
-`seeded=false` 表示当前不能算“已在做种”：可能是站上已发布、但本机没挂上种子；也可能是 `posted_verifying`，种子已经加入 qB，但校验还没跑完。先看同一条记录的 `cell_status` 和 `result` 区分：`verifying` / `posted_verifying` 去等校验，其他情况再查目标种下载和添加时的目录布局，不要先怀疑上传。日志写失败只会打印错误，不影响发种结论。**注意 `seeded=true` 只证明“已经挂回 qB”，不证明站点 tracker 已回包**：还要看覆盖格 note 里的 tracker 状态，或直接查 qB `torrents/trackers` 的 `status`。`status=2` 才是站点已看见，`status=1` 只是还没联系上，`status=4` 是 tracker 报错。
+`seeded=false` 表示当前不能算“已在做种”：可能是站上已发布、但本机没挂上种子；也可能是 `posted_verifying`，种子已经加入 qB，但校验还没跑完，或校验到 100% 而 tracker 还没回包。先看同一条记录的 `cell_status` 和 `result` 区分：`verifying` / `posted_verifying` 去下一轮复核，其他情况再查目标种下载和添加时的目录布局，不要先怀疑上传。日志写失败只会打印错误，不影响发种结论。**注意 `seeded=true` 只证明“已经挂回 qB”，不证明站点 tracker 已回包**：还要看覆盖格 note 里的 tracker 状态，或直接查 qB `torrents/trackers` 的 `status`。`status=2` 才是站点已看见，`status=1` 只是还没联系上，`status=4` 是 tracker 报错。
 
 当前口径：手动跑 `bsend reseed --yes` 成功后也会往 `auto-audit.jsonl` 追加一条 `manual=true` 的记录，并计入当天 `posted` 额度；重复、被拦、失败同样落审计，方便和自动队列按同一套日限额/失败冷却口径排查。`manual` 字段就是用来区分人工补发和自动发种的。
 

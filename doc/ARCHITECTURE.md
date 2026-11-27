@@ -44,8 +44,8 @@ qB 没有 tracker，也不等于站上一定没发过。可能是站上已经有
 | --- | --- |
 | `seeding` | 这个站在 qB 里已经有种子在做种 |
 | `assisted` | 旧辅种流程挂上的种子；新流程不再产生带多个站点 tracker 的记录 |
-| `reseeded` | 已经发布，并从目标站下载种子挂回 qB，校验完成 |
-| `verifying` | 已挂回 qB，还在校验文件；不能算已做种 |
+| `reseeded` | 已经发布，并从目标站下载种子挂回 qB；校验 100% 且目标 tracker `status=2`，才算站点看见做种 |
+| `verifying` | 已挂回 qB，但校验还没到 100%，或校验到 100% 而目标 tracker 还没回包；都不能算已做种 |
 | `failed` | 这次失败，过一段时间才能重试 |
 | `review_pending` | 站内检索命中，但清单或 hash 对不上，等人核对；其中 note 以 `posted_unresolved` 或 `existed_unresolved` 开头的，是“站上已发、qB 没挂回”，应去补挂而不是重发 |
 | `wait_source` | 本地没有可用的源种子，导不出文件 |
@@ -201,7 +201,7 @@ audiences 的 `torrents.php` 有 Cloudflare Turnstile，无头 HTTP 拿不到搜
 
 同 `info hash` 的种子在 qB 里只能有一条。若目标种同 hash 的那条只挂目标站 tracker、`progress=1` 且 qB 显示的 tracker 状态是 2（已回包），才记 `Seeding`（站点已看见做种）；tracker 状态 1（未联系）只能算“已挂回、待确认”。否则按策略不改原种、不加第二条，记 `SameHashSkip`。**`SameHashSkip` 不是发布成功**：站上已发布但 qB 没有做种，审计词是 `same_hash_skipped`，note 写“当前没做种，待人工处理”，不能包成 `posted`。
 
-上传成功、种子已加入 qB，但等到校验窗口结束还没到 100% 时，格子落 `Verifying`，结果走 `PostedVerifying`，审计词是 `posted_verifying`，界面写“已发布，种子已加入下载器，校验还没跑完，不能算已在做种”，下一轮接着收尾。它算一次发布额度（上传确实发生了），但不算已做种。旧版把它和 `Reseeded` 一起包成 `Posted`，界面会直接写“转种完成”。
+上传成功、种子已加入 qB，但还没确认做种时（校验窗口结束没到 100%，或到了 100% 但 tracker 还没回包），格子落 `Verifying`，结果走 `PostedVerifying`，审计词是 `posted_verifying`，界面写“已发布，种子已加入下载器，还没确认做种”，下一轮接着收尾。它算一次发布额度（上传确实发生了），但不算已做种。旧版把它和 `Reseeded` 一起包成 `Posted`，界面会直接写“转种完成”；更旧的版本还会把 progress=1 直接写 `Reseeded`。
 
 站点上其实已经发布（新发成功或 existed），但下载目标种、校验或挂回 qB 失败时，不记发种失败：格子落 `ReviewPending`，note 前缀 `posted_unresolved` 或 `existed_unresolved`，不进失败冷却、不占发布额度，下一轮或人工按详情页补挂。
 
@@ -217,7 +217,7 @@ audiences 的 `torrents.php` 有 Cloudflare Turnstile，无头 HTTP 拿不到搜
 
 ### 5.7 校验
 
-种子加进 qB 后等它校验到 100%。到了就记 `reseeded`（只代表已挂回 qB、本地数据完整），没到就记 `verifying`，下一轮继续查，不重复发。**校验 100% 不代表站点 tracker 已回包。** 现在写覆盖记录时会同时读取目标 tracker 的 qB 状态并写进 note：`status=2` 写“tracker 已回包”，`status=1` 写“tracker 还没回包”，`status=4` 带报错原文。2026-11-27 city13 [88464](https://13city.org/details.php?id=88464) 就是 `progress=1`、站点页 0 做种者、tracker 先 `status=1` 后变 `status=4` 的反例；对用户汇报时必须拆成“已发布 / 已挂回 / 站点已看见做种”三件事。
+种子加进 qB 后等它校验到 100%。到了且目标 tracker `status=2` 才记 `reseeded`；只到 100% 但 tracker 没回包，或还没到 100%，都记 `verifying`，下一轮继续查，不重复发。**校验 100% 不代表站点 tracker 已回包。** 现在写覆盖记录时会同时读取目标 tracker 的 qB 状态：`status=2` 落 `reseeded/assisted`，`status=1/4` 或读不到落 `verifying`，note 写“tracker 还没确认，下一轮复核”。2026-11-27 city13 [88464](https://13city.org/details.php?id=88464) 就是 `progress=1`、站点页 0 做种者、tracker 先 `status=1` 后变 `status=4` 的反例；对用户汇报时必须拆成“已发布 / 已挂回 / 站点已看见做种”三件事。
 
 ## 6. 一个种子只挂一个站点
 

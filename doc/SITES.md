@@ -360,10 +360,12 @@ xingyunge, agsvpt, panda, iloli, muxuege, fenghuang, gtk
 | 站点 | 详情页 | 发布 | qB 挂回 | qB tracker | 站点页 | 结论 |
 |---|---|---|---|---|---|---|
 | iloli | https://mua.xloli.cc/details.php?id=56513 | 已发布 | hash `5d8dff96e44b5d640529268a8adc840224356e9b`，progress=1 | 16:33 `status=2`；16:34 一次 `status=4: stream truncated` | 页面 3 个做种者 / 14 个下载者 | **目前唯一完整闭环**：有真实 announce、有 131,072 字节上传、站点页有做种者 |
-| pthome | https://www.pthome.net/details.php?id=285040 | 已发布 | hash `8085a48748cbf4888a688ac74eaebcfa696ae7f6`，progress=1 | 16:32 `status=2`，`num_seeds=0`、`num_leeches=0`，下次 announce 17:07 | 页面仍被 Cloudflare challenge 挡住，未读到做种者数 | **tracker 已回包，站点已看见 announce**；没有下载者，uploaded=0，页面侧未复核 |
+| pthome | https://www.pthome.net/details.php?id=285040 | 已发布 | hash `8085a48748cbf4888a688ac74eaebcfa696ae7f6`，progress=1 | 16:32 `status=2`；17:19 真实浏览器复核站点页：`1 做种者`（Schalkiii IPv4，100%，客户端 qBittorrent/5.3.0，连接 42:13），`0 下载者`，完成 0 次 | 页面已确认 | **站点已看见做种**：有自己 1 个做种者、100%；但没有下载者，上传 0，只能算“已挂回并被站点登记做种”，不能算有流量 |
 | city13 | https://13city.org/details.php?id=88464 | 已发布 | hash `cd74e178f63a4a90348c90af5fb993438515e285`，progress=1 | 长时间 `status=1`（未联系）；恢复诊断配置后变成 `status=4`（tracker 报错，msg 空）；手动带 passkey announce 被 TLS 连接重置，代理也重置 | 页面 `0 个做种者 / 2 个下载者` | **已挂回但没做种**：tracker 域名从本机连不上，不能写“已在做种”；覆盖格已人工改成 `review_pending`（待人工确认） |
 
 qB 4 万多条种子重启后 announce 队列拥塞：`max_concurrent_http_announces=200` 时 pthome 等了约 50 分钟仍是 status=1；临时调到 1000 后 pthome 在 90 秒内变成 status=2。city13 不是排队问题，调到 1000 后仍不联系，手动 announce 直接 TLS reset，说明是 tracker 域名/链路侧拒绝。诊断完把并发恢复 200，`current_interface_address` 恢复为空、`file_log_enabled` 恢复 false，避免长期高压。
+
+从这次起，`push_target_torrent` 和 `collect_verifying` 不再把 progress=1 直接写成 `reseeded/assisted`：目标 tracker `status=2` 才落已做种；`status=1/4` 或读不到时落 `verifying`，note 写“已发布并挂回 100%，但 tracker 还没确认，下一轮复核”。city13 的历史格因此按 `review_pending` 保留，等站点侧真回包或人工处理。
 
 ## 3. 全部站点（147 个）
 
@@ -467,7 +469,7 @@ qB 4 万多条种子重启后 announce 队列拥塞：`max_concurrent_http_annou
 | panda | 熊猫 | pandapt.net | NexusPHP | 是 | — | — | ok | source_sel[4] 未选 | ok | 5 | 2026-11-27 闭环跑通：141840《Liar Game S01 2007 2160p WEB-DL》上传后立刻挂回 qB 校验 100%、只挂熊猫一个 tracker，7 图逐张 200、简介六段齐全，`pending_review` 等审核（见 2.8、2.7⑤）。已撤销发种暂停，留在 `autoReseedSites`。历史 141276 是候选种子 24 小时没做种被系统删的；qB 里残留 `3f8ed774…` 挂失效 tracker，待人工清理 |
 | ptba | 1PT | 1ptba.com | NexusPHP | 是 | — | — | ok | processing_sel[4] 未选 | ok | 2 | 2026-11-23 已实发 106718，`abf4…`；站点改写 `info.source`，已加入 hash 改写白名单，挂回校验 100% |
 | ptcafe | 咖啡 | ptcafe.club | NexusPHP | 是 | — | — | ok | source_sel[4] 未选 | ok | 1 | 2026-11-25 核对《人民的名义》`137241`：站点种 `info hash` 与 qB 原种相同，qB progress=1、只挂 `tracker.ptcafe.club`，按 `bsend pull` 复核记 `seeding`；不是没挂上 |
-| pthome | 铂金家 | pthome.net | NexusPHP | 是 | — | — | ok | team_sel 未选 | unsupported | 6 | 2026-11-24 首次实发 `284701`（《人民的名义》，源 hdfans）；2026-11-27 实发 `285040`（《A Touch of Zen》，源 1ptba 9321），已挂回 qB 校验 100%，tracker 16:32 变 `status=2`、`num_seeds=0`，页面被 Cloudflare 挡住，见 2.10 |
+| pthome | 铂金家 | pthome.net | NexusPHP | 是 | — | — | ok | team_sel 未选 | unsupported | 6 | 2026-11-24 首次实发 `284701`（《人民的名义》，源 hdfans）；2026-11-27 实发 `285040`（《A Touch of Zen》，源 1ptba 9321），已挂回 qB 校验 100%，tracker 16:32 变 `status=2`；17:19 真实浏览器详情页确认 `1 做种者`（自己，100%，qBittorrent/5.3.0）、`0 下载者`，见 2.10 |
 | ptlgs | 劳改所 | ptlgs.org | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | 未测 | 6 |  |
 | ptsbao | 烧包 | ptsbao.club | NexusPHP | 是 | — | — | ok | processing_sel[1] 未选 | ok | 1 | 2026-11-23 已实发 135787，`0b0087…`；`source_sel[1]` 二级分类已自动填 `剧集-大陆`；站点改写 hash，已加入白名单，挂回校验 100%；表单无“完结”标签需人工补；2026-11-27 草稿 82 已落 `medium_sel[1]=1`（BluRay）+ processing=Remux + source=电影-Remux |
 | ptzone | 葡萄汁 | ptzone.xyz | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 1 | 2026-11-26：详情页访问超时、`audiocodec_sel` 未选被门禁拦下；2026-11-27 已加检索/详情页超时重试，单测过，真站复测未做；真实下拉 `medium_sel[4]=3` 是 Remux，选档已覆盖；早期 190916 的“五项检查全过”是 11-22 实测，选档缺口此前没记 |

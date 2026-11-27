@@ -88,13 +88,13 @@ python scripts\replay-reseed.py --draft 56 --expect 'source_sel[4] = 10' --expec
 
 现在用“测试数 / 模块行数”和“具体未覆盖路径”衡量缺口，不能把它当成行覆盖率。修好工具链后再把 `cargo llvm-cov --workspace --exclude bsend-gui --summary-only` 接进 CI，并设置不低于当前基线的门槛。
 
-**2026-11-27 当前基线**：`cargo test --workspace` 共 513 条全绿（核心库 454、`coverage_e2e` 33、其余 2/2/16/3/3）；`cargo fmt --check` 和 `cargo clippy --workspace --all-targets -- -D warnings` 都通过。GUI 不再需要排除，直接跑 workspace 测试。
+**2026-11-27 当前基线**：`cargo test --workspace` 共 **523 条**全绿（核心库 454、`coverage_e2e` 33、其余 2/2/16/3/13）；`cargo fmt --check` 和 `cargo clippy --workspace --all-targets -- -D warnings` 都通过。GUI 不再需要排除，直接跑 workspace 测试；其中 GUI 的 13 条是不依赖窗口的纯状态测试。
 
 ## 6. 当前缺口
 
 - `qbittorrent.rs`：`all_tracker_urls` 的 50000 条上限告警只靠日志目测；tracker `status` 已能读，但扫描 4 万条种子的批量路径还没逐条核对 status。
 - `bsend-cli`：`cmd_status`、`cmd_report`、`cmd_audit`、`cmd_autopost`、`cmd_pull`、`cmd_followup` 的命令处理本身仍缺；集成冒烟只覆盖版本号、缺配置、坏配置三条退出路径，加 `cli_smoke.rs` 的 3 条一共 19 条。
-- `bsend-gui`：`jobs.rs`、`views/*`、`widgets.rs`、`theme.rs`、`types.rs` 基本没有行为断言。
+- `bsend-gui`：状态文案、审核三态配色、状态计数、配置路径和短路径已有 13 条纯状态测试；`jobs.rs`、`views/*` 的按钮可用性和真实窗口渲染仍没有自动化。
 - `kimi.rs`：`prepare_search_page` 的 40 轮等待、后台标签 `visibilityState=hidden` 分支仍缺。
 - `coverage_e2e.rs`：审核状态链路已覆盖上传被拦截、候选入口、回访的“未审 / 审核不通过 / 站上已找不到”，以及审核通过后下载站点种子并挂回 qB；仍缺的是其他业务分支，不是审核状态本身。
 - `scripts/`：参数解析、坏输入、原子写、dry-run；现在只有 `scripts.yml` 的语法门禁。
