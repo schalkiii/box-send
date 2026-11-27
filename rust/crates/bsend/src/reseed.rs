@@ -5137,17 +5137,6 @@ pub fn review_reseed(
 /// 发后自检：重读新种详情页，核对标题 / MediaInfo / 条目链接真的落上了。
 /// 只出警告不推翻上传结论（抓不到页面也算一条警告）。
 /// 标题归一化：大小写 + 非字母数字统一成点（站点常把 `.`/空格互换写法）
-fn norm_post_title(s: &str) -> String {
-    s.to_lowercase()
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '.' })
-        .collect::<String>()
-        .split('.')
-        .filter(|x| !x.is_empty())
-        .collect::<Vec<_>>()
-        .join(".")
-}
-
 /// 目标站 IMDb 区判重：很多站按条目判重（同片不同版本也算 existed）。
 /// 返回 (详情页链接, 页面标题)；无 IMDb/无命中返回 None。
 fn target_has_imdb(
@@ -5570,45 +5559,9 @@ fn locate_existing_target(
     }
 }
 
-/// 详情页标题常被站点追加促销/剩余时间等后缀（如 `[免费] 剩余时间：23时59分钟`）。
-/// 这些不是标题正文，比对 existed 线索前先裁掉，避免把真重复误判成“标题不符”。
-fn strip_site_title_badges(title: &str) -> &str {
-    const BADGES: [&str; 16] = [
-        "[免费]",
-        "[免費]",
-        "[Free]",
-        "[FREE]",
-        "[2X免费]",
-        "[2x免费]",
-        "[2X免費]",
-        "[2x免費]",
-        "[2x]",
-        "[2X]",
-        "[50%]",
-        "[促销]",
-        "[Promotion]",
-        "[HR]",
-        "[官方]",
-        "剩余时间",
-    ];
-    // 裁在标题里最早出现的角标上，而不是内置列表里靠前的那个：
-    // 标题是 `X [2X] [Free]` 时若先按列表顺序裁 [Free]，会留下 `X [2X]` 仍带着角标。
-    let mut cuts: Vec<usize> = BADGES.iter().filter_map(|b| title.find(b)).collect();
-    cuts.sort_unstable();
-    cuts.dedup();
-    for pos in cuts {
-        // 位置 0 的角标没有标题前缀；落在另一个方括号内部的命中（如
-        // `[2X免费]` 里的 `[免费]`）裁出来只会留下半截角标，跳过。
-        if pos == 0 || title[..pos].ends_with('[') {
-            continue;
-        }
-        let core = title[..pos].trim();
-        if !core.is_empty() {
-            return core;
-        }
-    }
-    title.trim()
-}
+mod title;
+
+use title::{norm_post_title, strip_site_title_badges};
 
 /// 发后自检：回读新种页核对标题/MediaInfo/链接。同一次请求顺带带回页面上明写的审核结论
 /// （未审 / 审核不通过），不额外打站点。抓不到页面时只返回一条警告，审核结论为 `None`。
