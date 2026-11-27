@@ -133,7 +133,7 @@ xingyunge, agsvpt, panda, iloli, muxuege, fenghuang, gtk
 | itzmx | 大种 403 / 超 266,240 字节；11-26 再出 403 | https://pt.itzmx.com/details.php?id=13134 | 2026-11-26 Coraline 403、War 通用上传失败；403 是新现象，根因待查，选种先看种子文件大小 |
 | audiences | 判重已接 Kimi WebBridge；当前卡在验证框不渲染 + 上传表单结构 | — | 2026-11-25 重试：Kimi 能选中已打开的 audiences 标签页，但浏览器把页面判为 `visibilityState=hidden`（窗口最小化或不在前台），Turnstile 一直不生成 iframe、token 为空；显式 `turnstile.render` 也没有 token。同源 `fetch` 搜索仍返回“搜索人机验证未通过”。需要把该标签页切到前台、让页面可见后再试；程序明确报“标签页在后台”，不把验证页当站内没有，也不盲发。2026-11-26 另记一条缺口：上传表单是自定义 JS 表单，`type` 是隐藏值 0，静态解析不到可提交结构，这条之前没记 |
 
-### 2.5 逐站适配经验与门禁（45 个自动发种站）
+### 2.5 逐站适配经验与门禁（46 个自动发种站）
 
 2026-11-25 汇总。先说清三层，不要把“代码能拦”“配置要填”“站点就是不给”混成一件事。
 
