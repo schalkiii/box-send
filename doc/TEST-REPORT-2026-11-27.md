@@ -77,7 +77,7 @@
 
 补 `parse_tracker_entries` + `tracker_status_note` 单测：`status=2` 翻成“tracker 已回包（做种 3 / 下载 14）”，`status=1` 翻成“tracker 还没回包”，`status=4` 带报错原文。生产侧同时把 `trackers()` 拆出 `tracker_info()`，并在 reseed/coverage 的 100% 收尾里写 tracker 状态；`same_hash_on_target` 增加 `status=2` 条件，tracker 没回包时不再记 `seeding`。
 
-验证：单测通过；全 workspace 513 条通过；clippy 通过。真实站点侧 pthome 16:32 变成 `status=2`，city13 一直 `status=1` 且手动 announce TLS reset，见 `SITES.md` 2.10。
+验证：单测通过；全 workspace 513 条通过（`artifacts/workspace-test-20261127-final3.log`）；clippy 通过。真实站点侧 pthome 16:32 变成 `status=2`，city13 长时间 `status=1`、恢复 qB 诊断配置后变 `status=4` 且手动 announce TLS reset，见 `SITES.md` 2.10。
 
 ## 五、新增用例结果
 

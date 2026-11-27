@@ -217,7 +217,7 @@ audiences 的 `torrents.php` 有 Cloudflare Turnstile，无头 HTTP 拿不到搜
 
 ### 5.7 校验
 
-种子加进 qB 后等它校验到 100%。到了就记 `reseeded`；没到就记 `verifying`，下一轮继续查，不重复发。**校验 100% 只说明本地数据完整、已经挂回 qB，不等于站点 tracker 已回包。** 现在写覆盖记录时会同时读取目标 tracker 的 qB 状态并写进 note：`status=2` 写“tracker 已回包”，`status=1` 写“tracker 还没回包”，`status=4` 带报错原文。2026-11-27 city13 [88464](https://13city.org/details.php?id=88464) 就是 `progress=1`、站点页 0 做种者、tracker 一直 `status=1` 的反例；对用户汇报时必须拆成“已发布 / 已挂回 / 站点已看见做种”三件事。
+种子加进 qB 后等它校验到 100%。到了就记 `reseeded`（只代表已挂回 qB、本地数据完整），没到就记 `verifying`，下一轮继续查，不重复发。**校验 100% 不代表站点 tracker 已回包。** 现在写覆盖记录时会同时读取目标 tracker 的 qB 状态并写进 note：`status=2` 写“tracker 已回包”，`status=1` 写“tracker 还没回包”，`status=4` 带报错原文。2026-11-27 city13 [88464](https://13city.org/details.php?id=88464) 就是 `progress=1`、站点页 0 做种者、tracker 先 `status=1` 后变 `status=4` 的反例；对用户汇报时必须拆成“已发布 / 已挂回 / 站点已看见做种”三件事。
 
 ## 6. 一个种子只挂一个站点
 

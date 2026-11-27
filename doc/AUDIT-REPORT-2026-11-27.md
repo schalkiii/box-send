@@ -1,13 +1,13 @@
 # BoxSend 项目审计报告（2026-11-27）
 
-审计对象：`C:\Users\Schal\WorkBuddy\2026-11-17-20-52-34`，Git 基线 `1c666a7`（`master`），2026-11-27 16:30 按 `7046f4d` + 后续 tracker 状态改动复核。
+审计对象：`C:\Users\Schal\WorkBuddy\2026-11-17-20-52-34`，Git 基线 `a81b568`（`master`，在 `1c666a7` 审计后合入 `7046f4d` 测试分支和 `a81b568` tracker 真值修复），2026-11-27 16:30 开始、17:00 复核。
 审计范围：Rust workspace、发布流程、站点适配、测试、文档、脚本和当前运行态。审计只记录问题与建议，不改代码。
 
 ## 结论摘要
 
-项目当前可以构建、测试和真实发种，但“发种成功”的判定存在一个会误导人的缺口：**qB 校验到 100% 就写“已在做种”，没有核对 tracker 是否真的联系过站点**。本轮城市 13 的 `88464` 就是典型：程序记了 `reseeded`，qB 进度 100%，但站点详情页显示 `0 个做种者 | 2 个下载者`，qB tracker 状态仍是 1（未联系）。这会把“已挂回”误报成“站点已看见我在做种”。
+项目当前可以构建、测试和真实发种，但“发种成功”的判定存在一个会误导人的缺口：**qB 校验到 100% 就写“已在做种”，没有核对 tracker 是否真的联系过站点**。本轮城市 13 的 `88464` 就是典型：程序记了 `reseeded`，qB 进度 100%，但站点详情页显示 `0 个做种者 | 2 个下载者`，qB tracker 状态先是 1（未联系）、恢复诊断配置后变 4（报错）。这会把“已挂回”误报成“站点已看见我在做种”。覆盖格已人工改成 `review_pending`（待人工确认）。
 
-本轮已经走通的真实链路是 iloli `56513`：站点详情正常、qB tracker 状态 2、目标种已有 131,072 字节上传，站点页 3 个做种者 / 14 个下载者。pthome `285040` 也完成了发布和挂回，16:32 tracker 变成 `status=2`，站点已看见 announce，但 `num_seeds=0`、`uploaded=0`，页面被 Cloudflare 挡住，不能写“页面已确认做种”。city13 `88464` 完成了发布和挂回，但 tracker 一直 `status=1`，手动带 passkey announce 被 TLS 连接重置，站点页 0 做种者，不能按“已做种”汇报。
+本轮已经走通的真实链路是 iloli `56513`：站点详情正常、qB tracker 状态 2、目标种已有 131,072 字节上传，站点页 3 个做种者 / 14 个下载者。pthome `285040` 也完成了发布和挂回，16:32 tracker 变成 `status=2`，站点已看见 announce，但 `num_seeds=0`、`uploaded=0`，页面被 Cloudflare 挡住，不能写“页面已确认做种”。city13 `88464` 完成了发布和挂回，但 tracker 长时间 `status=1`、恢复诊断配置后变 `status=4`，手动带 passkey announce 被 TLS 连接重置，站点页 0 做种者，不能按“已做种”汇报。
 
 优先级建议：
 
@@ -20,7 +20,7 @@
 
 ### 1.1 规模与结构
 
-- Git：`master`，审计基线 `1c666a7`；报告落盘后代码到 `7046f4d`，测试和 tracker 状态收尾在 `7046f4d` 之后。
+- Git：`master`，审计开始基线 `1c666a7`；最终收尾在 `a81b568`（含 `7046f4d` 的 5 条测试分支和 tracker 真值修复），远端最新仍是 `db9e16b`，`7046f4d`、`a81b568` 尚未推送。
 - Rust 源文件 45 个，合计 42,353 行；按 `#[cfg(test)]` 估算生产代码约 31,237 行。
 - 测试属性 513 个（本报告初稿写 507，后续补了 6 条：5 条测试分支 + 1 条 tracker 状态）。`cargo test --workspace` 实测：核心库 454、`coverage_e2e` 33、其余 2/2/16/3/3，全部通过。
 - 最大模块：`reseed.rs` 11,857 行、345 个函数、49 个公开函数、168 个测试；`coverage_e2e.rs` 3,582 行、33 个测试；`sites/nexusphp.rs` 3,091 行、36 个测试；`bsend-cli/main.rs` 2,380 行、16 个内联测试，加 `tests/cli_smoke.rs` 3 条共 19 条。
@@ -54,8 +54,10 @@
 | D2 | `README.md:55`、`doc/SITES.md:8-9` | 写自动发种白名单 45 站；`SITES.md:15` 又写 46 站；配置实际 46 站 | 中 | 运维按 45 站核对会漏掉一个站 |
 | D3 | `doc/OPERATIONS.md:137` | 仍写“手动 `bsend reseed --yes` 只写 reseed-log，不写 auto-audit，日限额看不到” | 高 | 与 `1c666a7` 的新行为相反；按文档排查会误判手动发布不占额度 |
 | D4 | `doc/TESTING.md:89-92` | 初稿时仍写全 workspace 测试会卡在 GUI 链接，建议 `--exclude bsend-gui`；收尾已改成 `cargo test --workspace`，最终 513 条全绿 | 中 | 新环境按旧命令会少跑 GUI；也会误以为所有测试已覆盖 |
-| D5 | `doc/TEST-REPORT-2026-11-25.md:30-31` | 仍写 396/432 条基线，和当前 507 条不一致；没有记录本轮新增的手动审计、AC3、IMDb 侧栏和标题角标测试 | 中 | 测试报告不能作为当前质量证据 |
+| D5 | `doc/TEST-REPORT-2026-11-25.md:30-31` | 仍写 396/432 条基线，和当前 513 条不一致；没有记录本轮新增的手动审计、AC3、IMDb 侧栏和标题角标测试 | 中 | 测试报告不能作为当前质量证据 |
 | D6 | `doc/ARCHITECTURE.md:59,202,220,248` | 把“qB progress=1”直接等价为“已在做种”，没有区分 tracker 是否已联系站点 | 高 | 支撑了本轮 city13 的假阳性结论 |
+
+> 上表是 16:30 审计时的现场。D1–D5 已在同日 `7046f4d`/`a81b568` 的文档收尾里改掉（D4 最终按 workspace 全量跑）、D6 已在 `ARCHITECTURE.md` 改成“progress=1 只代表本地校验，tracker status=2 才是站点已回包”；保留原发现是为了对照审计过程。G1–G3 也已在 `ARCHITECTURE.md` 5.7 和 `OPERATIONS.md` 4.0/手动审计节补齐。
 
 ### 维度 2：文档缺漏
 
@@ -141,7 +143,7 @@
 
 ### S1（P0）把“已在做种”改成 tracker 真值判定
 
-**2026-11-27 落地状态：部分完成。** `qbittorrent::tracker_info()` 已能返回 `url/status/msg/num_seeds/num_leeches/num_downloaded`，reseed 和 coverage 的 100% 收尾都会把 tracker 状态写进 note；`same_hash_on_target` 已增加 `status=2` 条件。还没有做的是“状态机”：tracker 没回包时仍然落 `Reseeded/Assisted`（只是 note 不再说“已在做种”），没有新增独立状态，也没有在 100% 后轮询 2-3 次。下面第 2/3/4 条的完整状态改造仍待做。
+**2026-11-27 落地状态：部分完成。** `qbittorrent::tracker_info()` 已能返回 `url/status/msg/num_seeds/num_leeches/num_downloaded`，reseed 和 coverage 的 100% 收尾都会把 tracker 状态写进 note；`same_hash_on_target` 已增加 `status=2` 条件。还没有做的是“状态机”：tracker 没回包时仍然落 `Reseeded/Assisted`（只是 note 不再说“已在做种”），没有新增独立状态，也没有在 100% 后轮询 2-3 次。下面第 2/3/4 条的完整状态改造仍待做。本轮已把 city13 `88464` 的历史格人工改成 `review_pending`，pthome `285040` 的 note 改成 tracker 16:32 已回包。
 
 **具体做法：**
 
@@ -321,5 +323,5 @@ G1 内文件交集为空：S1（`qbittorrent/reseed/coverage/tests`）、S2（`.
 - 测试：`cargo test --workspace` 513 条全绿；`cargo fmt --check` 通过；`cargo clippy --workspace --all-targets -- -D warnings` 通过（只有 future-incompat 提示）。
 - 真实发种：`artifacts/pthome-zen-upload-20261127.log`、`artifacts/city13-poirot-upload3-20261127.log`、`artifacts/iloli-56513.torrent`。
 - 站点页面：`artifacts/13city_org-details.txt` 显示 `0 个做种者 | 2 个下载者`；iloli 详情页 `https://mua.xloli.cc/details.php?id=56513`。
-- qB：`http://127.0.0.1:9091`；city13 详情 `https://13city.org/details.php?id=88464` 对应的 qB 目标种 progress=1、tracker status=1；pthome 目标种 hash `8085a487...`、iloli 目标种 hash `5d8dff96...` 的 tracker 状态见本轮命令输出。
+- qB：`http://127.0.0.1:9091`；city13 详情 `https://13city.org/details.php?id=88464` 对应的 qB 目标种 progress=1、tracker 先 status=1、恢复诊断配置后 status=4；pthome 目标种 hash `8085a487...` 为 status=2、iloli 目标种 hash `5d8dff96...` 本轮见过 status=2。
 - 覆盖率：`artifacts/coverage-20261127.log`（GNU 失败）、`artifacts/coverage-msvc-rustlld-20261127b.log`（MSVC 方案，待完成）。

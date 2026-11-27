@@ -7,7 +7,9 @@ PT 站自动发种/跨站辅种工具：读 qB 里的内容组和 tracker，找�
 ```powershell
 Set-Location rust
 cargo fmt --all -- --check                           # 提交前必跑；CI 第一条就是它，格式不对直接红
-cargo test -p bsend                                  # 单测 + e2e
+cargo test --workspace                              # 全量门禁：当前 513 条；提交前必跑
+cargo clippy --workspace --all-targets -- -D warnings  # 全量门禁：提交前必跑
+cargo test -p bsend                                  # 单测 + e2e（快速回路）
 cargo test -p bsend --lib reseed::tests::exist_marker # 跑单条用例
 cargo build --release -p bsend-cli                   # 产物 rust/target/release/bsend.exe
 
@@ -55,5 +57,5 @@ Rust 2021；crate：`bsend`（引擎）、`bsend-cli`、`bsend-gui`。错误用 
 - **上传成功就立刻把站点种子挂回 qB 做种**（2026-11-24 起是硬步骤，没有开关）：上传后立即从站点下载 `.torrent`、按分片核对、作为独立种子加入 qB；站点刚建种时常先回 `torrent not registered`，程序固定重试 4 轮（每轮 15 秒），仍拿不到才落“待人工确认”，回访用 `bsend pull` 补。站点要先审才给下载的，落 `pending_review`，审完由 `bsend followup` 自动挂回。
 - 发种前门禁按站点配置执行：`titleNoCjk` 拦主标题汉字，`descrOrder` 校验简介标题顺序，`requireLinks` / `requireMediainfo` 校验必填。**剪死图是所有站点无条件执行的硬规则**（不再读 `assist.pruneDeadImages`）：提交前逐图探测，打不开的图直接剪掉；`hdsky.me` / `img.hdsky.me` / `imgur.com` 热链即使本机 200 也按死图处理，UBits 另把 `imgbox.com` 按死图处理。**要图的站有硬性最低图数**也是硬规则（藏宝阁/优堡/太乙/麒麟 3 张，熊猫 4 张 + 段序，ptlgs 4 张 = 1 张海报 + 3 张截图；写在 `gates::image_floor`，配置里写多少都不算）。图床统一用 pixhost：先跑 `scripts/rehost-descr-images.py` 把简介里所有非 pixhost 图片转存，再用 `scripts/swap-descr-images.py` 按顺序换链接，最后改简介；不能靠关掉门禁绕过。源站简介本来就没有图时，用 `scripts/seed-images.py` 从本地视频抽帧，或按豆瓣条目自动取海报，上传 pixhost 后写入 `screenshot-overrides.json`。同一部剧有 HDTV/WEB-DL 等多个内容键时，用 `seed-images.py --for-name` 或 `--also-content` 一次写齐，不能只补一个键；`screenshot-overrides.json` 不手改。发布时程序会自动追加，不许手工在简介里编图。
 - **每轮批量发种前先扫各站收件箱**：审核拒绝、删种、管理员留言都要在 `messages.php` 里看一遍，不能只看 `followup` 已经记录的种子状态；漏看的拒绝消息按站点逐条落 `review_rejected` 并修种子。
-- **熊猫暂停发种**（2026-11-24 起）：`panda` 已从 `assist.autoReseedSites` 摘掉并列入 `assist.reseedPausedSites`；站上那条 141276 是候选种子 24 小时没做种被系统删的，重发必须先“上传→立刻挂回 qB 做种”，当前不自动发。
+- **熊猫发种暂停已撤销（2026-11-27）**：`panda` 已从 `assist.reseedPausedSites` 移出并留在 `autoReseedSites`；141840 已真发并挂回 qB 校验 100%、等审核。历史 141276 是候选种子 24 小时没做种被系统删的，旧账残留 `3f8ed774…` 挂失效 tracker，待人工清理；重发仍必须先“上传→立刻挂回 qB 做种”。
 - 详细规则见 `doc/ARCHITECTURE.md`；运行数据与巡检见 `doc/OPERATIONS.md`；站点清单见 `doc/SITES.md`；未完成项见 `doc/ROADMAP.md`。历史审计与批次报告已并入这些文档，不再单独保留。

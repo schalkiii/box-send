@@ -268,7 +268,7 @@ reseed/coverage_io.rs  覆盖记录读写
 
 1. **修回包识别和检索超时重试**（解锁 dragonhd、ptzone、pthome、city13、hdvideo、cyanbug 6 站）
    - 把"已存在！"这类站点明文判重归入重复，不再记失败；检索/详情页 30 秒超时允许重试 1–2 次；HTTP 200 但页面认不出来时，先站内搜索或看账号上传列表确认到底发没发，再决定重试。
-   - **2026-11-27 代码已落地**：`exist_marker` 认“该种子已存在！”/“该种子已经存在！”精确完整句，重填页（仍带 multipart 表单）和超过 8KB 的长页面都能识别；只写“已存在！”的长页面也兜底认。错误框原有口径不变，帮助文案反例有单测。检索、详情页、上传页抓取遇到超时/连接重置/连接关闭/管道断开时最多再试 2 次，403/登录墙/限流不重试。HTTP 200 未识别回包不再直接记失败，先按名称 + 总大小站内核对，核对不到落 `posted_unresolved`。`cargo test -p bsend --lib` 当时 440 条通过，`cargo clippy -D warnings` 通过；当前全量 513 条见 `TEST-REPORT-2026-11-27.md`。2026-11-27 下午已用真实回包补测 pthome `285040` 和 city13 `88464`：pthome 发布后挂回成功、tracker 在 16:32 变成 `status=2`；city13 发布后挂回成功但 tracker 一直 `status=1`，手动 announce 被 TLS 连接重置，站点页 `0 个做种者 / 2 个下载者`，属于 tracker 链路阻塞，不是回包识别问题。qingwa 真实回包、dragonhd/ptzone 真站超时复测仍未做。
+   - **2026-11-27 代码已落地**：`exist_marker` 认“该种子已存在！”/“该种子已经存在！”精确完整句，重填页（仍带 multipart 表单）和超过 8KB 的长页面都能识别；只写“已存在！”的长页面也兜底认。错误框原有口径不变，帮助文案反例有单测。检索、详情页、上传页抓取遇到超时/连接重置/连接关闭/管道断开时最多再试 2 次，403/登录墙/限流不重试。HTTP 200 未识别回包不再直接记失败，先按名称 + 总大小站内核对，核对不到落 `posted_unresolved`。`cargo test -p bsend --lib` 当时 440 条通过，`cargo clippy -D warnings` 通过；当前全量 513 条见 `TEST-REPORT-2026-11-27.md`。2026-11-27 下午已用真实回包补测 pthome `285040` 和 city13 `88464`：pthome 发布后挂回成功、tracker 在 16:32 变成 `status=2`；city13 发布后挂回成功但 tracker 长时间 `status=1`，恢复 qB 诊断配置后变 `status=4`，手动 announce 被 TLS 连接重置，站点页 `0 个做种者 / 2 个下载者`，属于 tracker 链路阻塞，不是回包识别问题。qingwa 真实回包、dragonhd/ptzone 真站超时复测仍未做。
    - 验收：city13 一条演练回包能正确归类；dragonhd、ptzone 检索超时自动重试后拿到结果；pthome"已存在！"落重复而不是失败；有单测覆盖这几类回包，一轮 dry-run 没有未识别回包。
 2. **补 G2 选档映射**（hdfans、kufei、hdvideo、ptsbao、city13、ptzone 6 站）
    - 把今日被拦条目的片源、音频 token 对到站点真实选项；站点列表里没有的选项落人工，不硬填。
@@ -353,7 +353,7 @@ reseed/coverage_io.rs  覆盖记录读写
 4. **望雪这类"引擎走不了、只能走站点接口/浏览器"的站**：要长期维护一套浏览器提交流程，还是每次人工处理，待决定。
 5. **freefarm 镜像入口（已定）**：`pt.0ff.cc` 和 `farmm.cc` 是同一站点的镜像；配置维持 `pt.0ff.cc`，不切 `farmm.cc`，也不再为切域补 cookie。该站仍在 `pausedSites`，本轮不动。
 6. **gtk 知否等窗口 + 判重风险**：账号是 User 等级，站规限周六 12:00–周日 23:59 发布，本次周五早上不能发；站内已有 5 个其他版本《知否》（18185 UBWEB、13068 DBTV、9015 QHstudIo、8611 HHWEB、5230 OurTV，都 78 集），本条 73 集 119.58GB，窗口内提交前要再核一次是否判重。
-7. **city13 的 tracker 链路**：`88464` 已发布、已挂回 qB 校验 100%，但 `tracker.13city.org` 一直 `status=1`；手动带 passkey announce 和本地代理都 TLS 连接重置，站点页显示 0 做种者。先把覆盖格从 `reseeded` 改成“已挂回待 tracker 确认”，网络恢复后重试 announce；不要把这条算成做种成功。
+7. **city13 的 tracker 链路**：`88464` 已发布、已挂回 qB 校验 100%，但 `tracker.13city.org` 先 `status=1`、恢复 qB 诊断配置后变 `status=4`；手动带 passkey announce 和本地代理都 TLS 连接重置，站点页显示 0 做种者。覆盖格已从 `reseeded` 人工改成 `review_pending`（待人工确认），网络恢复后重试 announce；不要把这条算成做种成功。
 
 ## 8. 相关文档
 

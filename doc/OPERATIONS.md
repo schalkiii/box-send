@@ -142,7 +142,7 @@ qB 里有 4 万多条种子时，重启后会把所有种子重新排队 announc
 
 - 先看目标种的 `last_activity` 是否还等于 `added_on`；是的话说明一次 announce 都还没发出去。
 - 再看 qB 日志和 tracker 域名本身；`status=1` 同时手动请求也 TLS reset/超时的，是网络或站点 tracker 侧问题，不是队列。
-- 队列拥塞可以临时把 `max_concurrent_http_announces` 调到 1000，观察目标种是否变成 `status=2`；诊断完恢复 200，别长期高压。
+- 队列拥塞可以临时把 `max_concurrent_http_announces` 调到 1000，观察目标种是否变成 `status=2`；诊断完恢复 200，别长期高压。本轮还临时设过 `current_interface_address=192.168.10.111` 和 `file_log_enabled=true`，诊断完已分别恢复为空和 `false`，避免绑定错网卡或日志暴涨。
 - 2026-11-27 实测：pthome 在 200 并发下等了约 50 分钟仍是 `status=1`，调到 1000 后 90 秒内变成 `status=2`；city13 调到 1000 仍不联系，手动 announce 被 TLS reset，属于站点 tracker 链路阻塞。
 
 ### 4.1 上传回包怎么分六类
