@@ -70,6 +70,6 @@
 ## 五、保留现场
 
 - `artifacts/` 最近的门禁日志：`workspace-full-test-20261127-final29.log`、`clippy-20261127-final28.log`、`fmt-check-20261127-final28.log`。
-- 真实站点证据：`status-20261127-final22.txt`、`followup-hdvideo-20261127-final24.txt`、`followup-city13-20261127-final25.txt`。
+- 真实站点证据：`status-20261127-final30.txt`、`followup-hdvideo-20261127-final24.txt`、`followup-city13-20261127-final25.txt`。
 - 覆盖数据备份：`C:\Users\Schal\AppData\Local\BoxSend\coverage.json.bak-20261127-2045`（本轮人工纠正前）。
 - 清场候选未动；等用户明确确认后再删，并重新审计一次。

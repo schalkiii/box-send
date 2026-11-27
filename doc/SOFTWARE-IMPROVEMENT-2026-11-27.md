@@ -24,7 +24,7 @@
 - 改 `reseed.rs` 后跑 `cargo test -p bsend --lib reseed::`：168 条通过。
 - 全量 `cargo test --workspace`：535 条全绿（`artifacts/workspace-full-test-20261127-final29.log`）。
 - `cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`：通过（`artifacts/fmt-check-20261127-final28.log`、`artifacts/clippy-20261127-final28.log`）。
-- 真实运行：新 release 跑 `bsend status`，覆盖分布从“已辅种 28 / 已转种 116”变为“已辅种 27 / 已转种 117”，与 hdvideo 79168 人工纠正后的语义一致（`artifacts/status-20261127-final22.txt`）。
+- 真实运行：新 release 跑 `bsend status`，覆盖分布从“已辅种 28 / 已转种 116”变为“已辅种 27 / 已转种 117”，与 hdvideo 79168 人工纠正后的语义一致（`artifacts/status-20261127-final30.txt`，最终 release 为 `build-release-20261127-final30.log`）。
 
 ## 四、未做与理由
 
