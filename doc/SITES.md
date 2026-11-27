@@ -267,7 +267,7 @@ xingyunge, agsvpt, panda, iloli, muxuege, fenghuang, gtk
 | 站点 | 保留原因（实测） |
 | --- | --- |
 | hudbt、hdclone | 登录成立，但上传页都回「你没有发布种子的权限」，要走候选区或升等级 |
-| freefarm | 旧域 `pt.0ff.cc`、新域 `farmm.cc` 都回 200、都已登录（Schalkiii / UID 5481，LV1 User）；上传页主表单 POST `takeupload.php`，38 input + 18 select + 2 textarea，全页 62 控件；会话 cookie 是 HttpOnly，两域是否共享需人工在 DevTools 核 |
+| freefarm | 旧域 `pt.0ff.cc` 和新域 `farmm.cc` 是同一站点的镜像；配置维持 `pt.0ff.cc`，不切 `farmm.cc`。两域都已登录（Schalkiii / UID 5481，LV1 User）；上传页主表单 POST `takeupload.php`，38 input + 18 select + 2 textarea，全页 62 控件 |
 | u2 | 门户登录墙没建立会话，需要账号密码 + 两步验证/验证码 |
 | shadow | 服务端判 cookie 失效（`error=cookie`），要重登 |
 | sunny | 前端改版成单页应用，旧 `upload.php` 404；新上传路由 `/torrent-new` 表单完整但走 JSON 接口，当前版本没适配 |
@@ -331,7 +331,7 @@ xingyunge, agsvpt, panda, iloli, muxuege, fenghuang, gtk
 
 - **tracker 真相**：announce 主机是独立域 `a.x-anime.cc`，不是站点同域；完整 announce 从站内两条种子（56406、56211）的 .torrent bencode 里取出，两条一致，74 字符；qB 里本来就有 163 条挂这个主机的种子（passkey 一致）。
 - **由此暴露的 bug，已修**：引擎按站点域名匹配 tracker，会把这个站的已有做种认不出来，于是把两条本来 100% 在做种的内容（Poirot、周星驰合集）当成缺口；上传守卫又因为配置的 announce 主机不在允许清单里而拒绝上传，客观上挡住了重复上传。修法：配置里填了 `overrides.announceURL` 就自动把该主机并入允许清单（和页面 host、内置别名、手写 `announceHosts` 去重合并），识别已有做种和上传守卫两处消费同一份清单；没填 announceURL 的站行为不变。修完后这两条假缺口从草稿里消失。
-- **修完后出现两条真缺口，拒因已查清**：《知否》两次提交都被站点拒绝、未建种、未挂回，`reseed-log.jsonl` 记 failed；第二次回包正文被留档抓到，错误框原文：`发布者二次元浓度不足，无法发布该类型资源。当前数量浓度 0.00%（须不低于 50%），体积浓度 0.00%（须不低于 40%）。` 也就是这个站按账号的动画做种占比卡门槛：条数占比低于 50%、体积占比低于 40% 就不许发非动画资源。这是账号级站侧阻塞，不是表单问题，也不是同剧重复（站上虽有同剧另一版本 31565 UBWEB 2160p，但回包没说重复）。回包留档 `artifacts\iloli-upload-1795736380253.html`。要在这站发非动画内容，得先把账号动画类做种占比养到门槛以上；是否这么做待定，见 ROADMAP 待办。《广告狂人》没提交：iloli 的 audiocodec_sel 里 AC3 有多个同名候选（`DD/AC3`、`DD/AC-3`、`AC3` 这类），引擎判歧义留空不猜，被 G2 质量档门禁拦住。这两条不是"站点不可用"。
+- **修完后出现两条真缺口，拒因已查清**：《知否》两次提交都被站点拒绝、未建种、未挂回，`reseed-log.jsonl` 记 failed；第二次回包正文被留档抓到，错误框原文：`发布者二次元浓度不足，无法发布该类型资源。当前数量浓度 0.00%（须不低于 50%），体积浓度 0.00%（须不低于 40%）。` 站点上传页规则原文是：在种子区发布非二次元时，二次元条数须 ≥50%、体积须 ≥40%；二次元只算漫画/CG杂图/动漫杂志和动画（Animation），非二次元算电视剧、综艺、纪录片、电影，来源写日本（JPN）的不计入。这里的比例按账号的**发布记录**算，不是当前做种：这个号当前做种 163 条（其中动画 15 条、232.94GB），发布记录仍是 0 条，所以数量/体积都是 0.00%。这是账号级站侧阻塞，不是表单问题，也不是同剧重复（站上虽有同剧另一版本 31565 UBWEB 2160p，但回包没说重复）。回包留档 `artifacts\iloli-upload-1795736380253.html`。要在这站发非动画内容，得先从这个号发出二次元素材（动画/漫画/CG/动漫杂志），把发布记录里的二次元条数和体积养到门槛以上；是否这么做待定，见 ROADMAP 待办。《广告狂人》没提交：iloli 的 audiocodec_sel 里 AC3 有多个同名候选（`DD/AC3`、`DD/AC-3`、`AC3` 这类），引擎判歧义留空不猜，被 G2 质量档门禁拦住。这两条不是"站点不可用"。
 
 **三个站点侧硬阻塞（都做过真实浏览器复核，不是静态解析失败就放弃）**
 
@@ -348,7 +348,7 @@ xingyunge, agsvpt, panda, iloli, muxuege, fenghuang, gtk
 
 **freefarm（农场）**
 
-- 旧域 `pt.0ff.cc` 和新域 `farmm.cc` 都回 200，都已登录 Schalkiii / UID 5481（LV1 User）。上传页两域一致：主表单 POST `takeupload.php`，38 input + 18 select + 2 textarea；另两个搜索表单各 1 input + 1 select，全页 62 个控件；无权限拒绝字样，页面 tracker 提示 `tracker.0ff.cc/announce.php`。JS 可见 cookie 旧域 1 个哈希名、新域 0 个；会话 cookie 是 HttpOnly、页面读不到域作用域，需人工在 DevTools 核两域是否共享会话。它仍在 `pausedSites` 里，本轮没解除。
+- 旧域 `pt.0ff.cc` 和新域 `farmm.cc` 是同一站点的镜像，配置维持 `pt.0ff.cc`，不切 `farmm.cc`。两域都已登录 Schalkiii / UID 5481（LV1 User）。上传页两域一致：主表单 POST `takeupload.php`，38 input + 18 select + 2 textarea；另两个搜索表单各 1 input + 1 select，全页 62 个控件；无权限拒绝字样，页面 tracker 提示 `tracker.0ff.cc/announce.php`。它仍在 `pausedSites` 里，本轮没解除。
 
 ## 3. 全部站点（147 个）
 
@@ -374,7 +374,7 @@ xingyunge, agsvpt, panda, iloli, muxuege, fenghuang, gtk
 | daxiangjiao | 大香蕉 | pt.daxiangjiao.org | NexusPHP | 是 | — | 是 | fail | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://pt.daxiangjiao.org/upload.php | ok | 1 |  |
 | discfan | 蝶粉 | discfan.net | NexusPHP | 是 | — | 是 | fail | 该账号无发布权限（页面提示含「沒有發布種子的許可權」）：https://discfan.net/upload.php | ok | 2 |  |
 | dstudio | Depth Studio | dstudio.me | NexusPHP | 是 | — | 是 | fail | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://dstudio.me/upload.php | 未测 | 1 |  |
-| freefarm | 农场 | pt.0ff.cc | NexusPHP | 是 | 是 | — | fail | 抓目标站上传表单失败: 请求没通：https://pt.0ff.cc/upload.php: error sending request for url (https://pt.0ff.cc/upload.php): operation timed out | 未测 | 1 | 2026-11-27 复核：旧域 `pt.0ff.cc`、新域 `farmm.cc` 都回 200、都已登录 Schalkiii / UID 5481（LV1 User）；上传页两域一致，主表单 POST `/takeupload.php`（38 input + 18 select + 2 textarea，另两个搜索表单各 1 input + 1 select，全页 62 控件），无权限拒绝字样，页面 tracker 提示 `tracker.0ff.cc/announce.php`。JS 可见 cookie 旧域 1 个哈希名、新域 0 个，会话 cookie 是 HttpOnly、页面读不到域作用域，需人工在 DevTools 核两域是否共享会话。仍在 `pausedSites`，是否把站点 URL 切到 `farmm.cc` 并补该域 cookie 见 ROADMAP |
+| freefarm | 农场 | pt.0ff.cc | NexusPHP | 是 | 是 | — | fail | 抓目标站上传表单失败: 请求没通：https://pt.0ff.cc/upload.php: error sending request for url (https://pt.0ff.cc/upload.php): operation timed out | 未测 | 1 | 2026-11-27 复核：`pt.0ff.cc` 和 `farmm.cc` 是同一站点的镜像，配置维持 `pt.0ff.cc`，不切 `farmm.cc`。两域都已登录 Schalkiii / UID 5481（LV1 User）；上传页两域一致，主表单 POST `/takeupload.php`（38 input + 18 select + 2 textarea，另两个搜索表单各 1 input + 1 select，全页 62 控件），无权限拒绝字样，页面 tracker 提示 `tracker.0ff.cc/announce.php`。仍在 `pausedSites` |
 | ggpt | GGPT | gamegamept.com | NexusPHP | 是 | — | 是 | fail | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://www.gamegamept.com/upload.php | ok | 1 |  |
 | gtk | GTK | pt.gtkpw.xyz | NexusPHP | 是 | — | — | fail | 抓目标站上传表单失败: 请求没通：https://pt.gtkpw.xyz/upload.php: error sending request for url (https://pt.gtkpw.xyz/upload.php): operation timed out | 未测 | 2 | 2026-11-27：已配 `overrides.proxy=http://127.0.0.1:7890` 与 `overrides.announceURL`，走代理链路可达，已临时加进 `autoReseedSites`。两条候选都停在提交前：波洛合集站内真重复（7696，pieces `c058abaab5de65186b26418911db9d77af1af93e`、155 文件、294,270,271,759 字节，2024-05-18 匿名、8 人做种），不重发；知否字段已补齐（草稿 17 未提交，13→15 字段，简介 8663 字节、4 图 200，预检无阻断），但账号是 User 等级，站规限周六 12:00–周日 23:59 发布，周五早上不能发，等窗口；站内已有 5 个其他版本知否（78 集），本条 73 集 119.58GB，有审核判重风险。announce 是共享主机 `t.myaltbox.com`（76 字符，qB 里 170 条同 passkey），页面不印完整 announce，要从 .torrent 或 qB 抄。见 2.9 |
 | hdarea | 高清视界 | hdarea.club | NexusPHP | 是 | — | 是 | fail | 该账号无发布权限（页面提示含「没有发布种子的权限」）：https://hdarea.club/upload.php | 未测 | 6 |  |
@@ -521,8 +521,8 @@ xingyunge, agsvpt, panda, iloli, muxuege, fenghuang, gtk
 | --- | --- | --- | --- |
 | 账号没有发布权限 | hdsky、pter、hdarea、hhanclub、btschool 等 29 站，另有 ttg、ptt、hudbt、hdclone | 页面提示“没有发布种子的权限”（ttg、ptt 的写法都收进权限词表，ptt 是板块级） | 只停发种，辅种保留；权限不是代码能解决的 |
 | 动态上传界面 | hdcity、mypt、rousi、haoxue | 两段式表单 / 时段限制 + 人机验证 / 单页应用走 JSON 接口 | 当前版本不支持，记录站点形态；二段字段与建种接口需真实浏览器核对；haoxue 2026-11-27 已走站点接口真发一条，是否长期维护浏览器提交流程见 ROADMAP |
-| 连接不通 | hdclone、hudbt、u2、shadow、piggo、tu88 | 权限 / 登录墙 / 会话失效 / 需验证码 | 留在整站暂停；freefarm 两域都活、都已登录，单列下行 |
-| 两域可登录、会话待核 | freefarm | 旧域 `pt.0ff.cc`、新域 `farmm.cc` 都回 200、都已登录 Schalkiii / UID 5481（LV1 User），62 控件静态表单；会话 cookie 是 HttpOnly，两域是否共享需人工在 DevTools 核 | 仍在 `pausedSites`；是否切站点 URL 到 `farmm.cc` 并补该域 cookie 待人工（见 ROADMAP） |
+| 连接不通 | hdclone、hudbt、u2、shadow、piggo、tu88 | 权限 / 登录墙 / 会话失效 / 需验证码 | 留在整站暂停；freefarm 的镜像入口都活、都已登录，单列下行 |
+| 镜像双入口 | freefarm | `pt.0ff.cc` 和 `farmm.cc` 是同一站点的镜像，配置维持 `pt.0ff.cc`、不切 `farmm.cc`；两域都已登录 Schalkiii / UID 5481（LV1 User），62 控件静态表单 | 仍在 `pausedSites`，本轮不改 URL |
 | 类目不符 | haitang、kelu、vclib、nicept、ziran、soulvoice、musopia、dicmusic、xingtan | 曲艺、有声书、音乐、电子书；xingtan 是学术教材方向，无电影/剧集类目（书籍/PDF 类目 2026-11-27 手动发成一条 456304，见 2.8） | 影视只做提示，不算表单缺口 |
 | 关站或换形态 | momentpt、ptlao、movie52、yinghua | 告别页、404、域名解析失败 | 已从暂停名单摘除，保持 `enabled:false`，备注写 `statusNote` |
 | 源站故障/过载 | aling、hdu | aling 首页/登录页/上传页全 HTTP 500（`cfOrigin;dur` 241/238/234 ms、`cfEdge;dur` 3–8 ms，源站报错，不是 WAF）；hdu 四个页面都回 200 但都是 253–264 字节「服务器负载过高，正在重试，请稍后...」刷新壳，页面上的 `[EASY-UPLOAD]` 是本机浏览器扩展注入，不是站点组件 | 待恢复后复测，不伪造字段 |

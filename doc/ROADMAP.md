@@ -246,7 +246,7 @@ reseed/coverage_io.rs  覆盖记录读写
 | 账号没有发布权限（站点侧，程序改不了） | btschool、carpt、chdbits、cmct、daxiangjiao、discfan、dstudio、ggpt、hdarea、hdhome、hdsky、hhanclub、hitpt、kamept、keepfrds、march、njtupt、okpt、playlet、pt52、pter、ptskit、siqi、tccf、tokyo、ultrahd、wtsakura、xingwan、zmpt | 上传页明示"没有发布种子的权限"；只有账号升级权限后才谈得上适配 |
 | 权限待实证（旧"无权限"结论可能过时） | ~~agsvpt~~ | 2026-11-26 GET `upload.php` 返回完整上传表单、没有权限拒绝字样；2026-11-27 已启用并进白名单，见 7.8 |
 | 动态/JS 上传界面，当前程序不支持 | hddolby、mypt、ptt、rousi、ttg、haoxue、hdcity | 拿不到可解析的静态表单（自定义 JS、SPA、隐藏字段）；haoxue 是 Next.js/Flux 单页应用，要按前端接口重做。iloli、muxuege、fenghuang 2026-11-27 已落地并实发，见 7.9；iloli 另被账号浓度门槛拦下，见下；aling 源站 500、hdu 全站过载、xingtan 类目不符，见下两组 |
-| 连不通 / 超时 / 403（网络或登录态） | hdclone、hudbt、u2、shadow、sunny、piggo、tu88 | 域名、TLS、连接超时或跳登录页；整站暂停，不写"站上没有"的记录。freefarm 两域都活、都已登录，会话是否共享待人工核；gtk 已配按站代理、临时进白名单等窗口，见 7.9 |
+| 连不通 / 超时 / 403（网络或登录态） | hdclone、hudbt、u2、shadow、sunny、piggo、tu88 | 域名、TLS、连接超时或跳登录页；整站暂停，不写"站上没有"的记录。freefarm 的 `pt.0ff.cc` 与 `farmm.cc` 是镜像，维持 `pt.0ff.cc`，见 7.9；gtk 已配按站代理、临时进白名单等窗口，见 7.9 |
 | 类目不符（不转影视） | haitang、kelu、vclib、nicept、ziran、soulvoice、musopia、dicmusic、xingtan | 只有曲艺、有声书、音乐、电子书类目；xingtan 是学术教材方向，影视无处归档（书籍/PDF 类目 11-27 手动发成一条 456304，见 7.9） |
 | 已关站或换形态 | momentpt、ptlao、movie52、yinghua | 告别页、404 或域名解析失败 |
 | 其他站点程序，适配器未接入、未验证 | aither、alpharatio、animez、anthelion、azusa、beyondhd、bitporn、blutopia、brokenstones、byr、clearjav、empornium、exoticaz、fappaizuri、filelist、generationfree、gpw、haidan、happyfappy、hdspace、hdtorrents、huno、iptorrents、jpopsuki、lst、milkie、monika、mteam、myanonamouse、nebulance、oldtoons、opencd、orpheus、ourbits、ptneko、sjtu、sportscult、tlf、torrentleech、yemapt、yzyy、zhuque | Gazelle / Unit3D / Blu / XBTIT / custom / Discuz / TNode / YemaPT / Haidan 等程序，当前只有 NexusPHP 上传链路；未测过，不推断能不能发 |
@@ -296,7 +296,7 @@ reseed/coverage_io.rs  覆盖记录读写
 | audiences | 判重依赖真实浏览器前台渲染 Turnstile；上传页是自定义 JS 表单 | 检索走 Kimi WebBridge；后台标签页明确报错，不盲发；表单选档未接 |
 | panda | 2026-11-27 闭环已跑通并恢复发种 | 141840 上传后立刻挂回 qB 校验 100%、只挂单站 tracker，等站点审核；旧账 141276 已删，残留 `3f8ed774…` 待人工清理 |
 | hddolby、mypt、ptt、rousi、ttg、haoxue 等动态表单站 | 静态表单拿不到，适配器形态不支持 | 只能记录站点形态，要按前端接口重做；haoxue 2026-11-27 已走站点接口发一条，长期是否维护浏览器流程见 7.9 待办 |
-| 连不通站（hdclone、hudbt、u2、shadow、sunny、piggo、tu88） | 网络/TLS/登录态不通 | 整站暂停，连通后再测；freefarm 两域都活、都已登录，会话是否共享待人工核，是否切 URL 见 7.9 |
+| 连不通站（hdclone、hudbt、u2、shadow、sunny、piggo、tu88） | 网络/TLS/登录态不通 | 整站暂停，连通后再测；freefarm 的 `pt.0ff.cc` 与 `farmm.cc` 是镜像，维持 `pt.0ff.cc`，见 7.9 |
 | 类目不符站（haitang、kelu、vclib、nicept、ziran、soulvoice、musopia、dicmusic、xingtan） | 没有影视类目 | 影视只做提示，不转种；xingtan 书籍/PDF 类目手动发成一条 456304，见 7.9 |
 | 已关站（momentpt、ptlao、movie52、yinghua） | 告别页/404/域名失效 | 暂停并记 `statusNote` |
 | 外文程序站（Gazelle/Unit3D/Blu/XBTIT/Discuz/TNode 等） | 适配器未接入 | 未验证，不在自动发种范围 |
@@ -322,7 +322,7 @@ reseed/coverage_io.rs  覆盖记录读写
 
 - **未启用 47 站里只有 agsvpt 真能启用，已经启用**：`sourceSites.enabled=true` + 进 `autoReseedSites` + `team_sel` 兜底 Other=22；`gatecheck` 全绿（17 字段 / 9 下拉 / 7 项检查）；qB 里 806 条该站 tracker 种子可抄 passkey（tracker 主机 `tracker.agsvpt.cn`）。它不再是"权限待实证"，而是"已启用、等 546963 复审"。
 - **剩下 46 个未启用站的原因收窄成四类**：差登录 3（azusa、tlf、generationfree）；校外被拦 1（byr，CERNET IPv6 + wengine 网关 403）；已关站 1（yinghua）；其余是**框架不支持**——Unit3D 13 / custom 8 / Gazelle 6 / XBTIT 5 / Blu 2 / Haidan 1 / YemaPT 1 / Discuz 1 / TNode 1。代码 `search_capable()` 只对 NexusPHP 为真，配置加载阶段就过滤，改 `enabled` 没用。要解锁这批等于新增框架适配器，属新能力，不是配置活。
-- **整站暂停从 13 降到 8**：保留 hudbt、hdclone（无发布权限）、freefarm（迁 farmm.cc，域名是否切、cookie 怎么补待人工，见 7.9）、u2（登录墙 + 两步验证）、shadow（cookie 失效）、sunny（改版 SPA 走 JSON 接口）、piggo（WAF + 会话失效）、tu88（cookie 失效 + 图形验证码）；摘掉 gtk 与四个已关站（momentpt、movie52、ptlao、yinghua）。
+- **整站暂停从 13 降到 8**：保留 hudbt、hdclone（无发布权限）、freefarm（`pt.0ff.cc` 与 `farmm.cc` 是镜像，维持 `pt.0ff.cc`，见 7.9）、u2（登录墙 + 两步验证）、shadow（cookie 失效）、sunny（改版 SPA 走 JSON 接口）、piggo（WAF + 会话失效）、tu88（cookie 失效 + 图形验证码）；摘掉 gtk 与四个已关站（momentpt、movie52、ptlao、yinghua）。
 - **gtk 的卡点已用按站代理解决（2026-11-27）**：站点实测可用（登录态有效、共享 tracker `t.myaltbox.com` 有 170 条可抄 passkey，`overrides.announceURL` 已填）。配置 `overrides.proxy=http://127.0.0.1:7890` 后走代理链路可达；两条候选都停在提交前——波洛合集站内真重复不重发，知否字段补齐但 User 等级限发布窗口。已临时加进 `autoReseedSites`，等窗口，见 7.9。
 - **6 个"动态界面"站里只有 3 个真动态**：hddolby 其实标准静态表单（17 字段 / 9 下拉，只是要过 2FA）；hdcity 两段式（首段 5 字段，二段编辑页要真实上传后才拿得到）；mypt 时段禁传 + Cloudflare；rousi 是 SPA 需逆建种接口；ptt、ttg 是账号/板块没权限。
 - **7 个表单缺口站里 3 个已落地配置并实发**：iloli（team Other=5）、muxuege（team Other=52 + 普通 AAC=6）、fenghuang（team other=1）；代码侧补了通用地区匹配、同名候选取首个、年代档匹配、分类联动行不计缺口。2026-11-27 复核：xingtan 影视类目不收、书籍/PDF 手动发成一条；haoxue 单页应用走站点接口发一条；hdu 全站过载；aling 源站 500。
@@ -348,10 +348,10 @@ reseed/coverage_io.rs  覆盖记录读写
 **待办（还没决定怎么做）**：
 
 1. **手动发布要不要进审计**：手动 `bsend reseed --yes` 只往 `reseed-log.jsonl` 记，不往 `auto-audit.jsonl` 追加；按日限额、失败冷却的判定因此看不到这批手动发布。权威口径在 `OPERATIONS.md` 4，需要决定是否统一写进审计。
-2. **iloli 账号浓度门槛**：这站按账号动画做种占比卡发布——数量浓度须 ≥50%、体积浓度须 ≥40%，当前都是 0.00%，非动画资源发不出去。要在这站发非动画内容，得先把账号动画类做种占比养到门槛以上；是否这么做待定。在此之前 iloli 不再试发非动画条目。
+2. **iloli 账号浓度门槛**：这站按账号的**发布记录**算二次元占比——在种子区发非二次元时，二次元条数须 ≥50%、体积须 ≥40%；当前发布记录 0 条，所以数量/体积都是 0.00%（当前做种 163 条里有 15 条动画也不计入）。要在这站发非动画内容，得先从这个号发出二次元素材（动画/漫画/CG/动漫杂志），把发布记录里的条数和体积养到门槛以上；是否这么做待定。在此之前 iloli 不再试发非动画条目。
 3. **iloli 的 AC3 同名候选**：audiocodec_sel 里 AC3 有多个同名候选（`DD/AC3`、`DD/AC-3`、`AC3` 这类），引擎判歧义留空不猜，被 G2 拦。先读表单真实 value，在 `reseedRules.selectPicks` 钉住普通 AC3 档，或在代码里补音频选档映射。
 4. **望雪这类"引擎走不了、只能走站点接口/浏览器"的站**：要长期维护一套浏览器提交流程，还是每次人工处理，待决定。
-5. **freefarm 域名切换与会话核对**：新旧域都能登录，但会话 cookie 是 HttpOnly、页面读不到域作用域；先人工在 DevTools 核两域是否共享会话，再决定是否把配置里的站点 URL 从 `pt.0ff.cc` 切到 `farmm.cc` 并补该域 cookie。
+5. **freefarm 镜像入口（已定）**：`pt.0ff.cc` 和 `farmm.cc` 是同一站点的镜像；配置维持 `pt.0ff.cc`，不切 `farmm.cc`，也不再为切域补 cookie。该站仍在 `pausedSites`，本轮不动。
 6. **gtk 知否等窗口 + 判重风险**：账号是 User 等级，站规限周六 12:00–周日 23:59 发布，本次周五早上不能发；站内已有 5 个其他版本《知否》（18185 UBWEB、13068 DBTV、9015 QHstudIo、8611 HHWEB、5230 OurTV，都 78 集），本条 73 集 119.58GB，窗口内提交前要再核一次是否判重。
 
 ## 8. 相关文档

@@ -4673,6 +4673,34 @@ pub fn submit_upload(
 }
 
 /// 上传未成功时提取错误（errorbox → 常见错误特征 → 兜底）
+/// 站点把失败原因放在 `<h1>上传失败！</h1>` 后面的 `<p>` 里（UBits 实测）。
+/// 这种页面的 `<title>` 也含“上传失败”，按普通关键词截取只会拿到标题，
+/// 必须从 h1 后面取正文，才能把“黑名单图床”这类真实原因带进审计。
+fn upload_failure_detail(body: &str) -> Option<String> {
+    let h1 = body.find("<h1")?;
+    let open_end = h1 + body[h1..].find('>')?;
+    let close = open_end + body[open_end..].find("</h1>")?;
+    let heading = strip_tags(&body[open_end + 1..close]);
+    if !heading.contains("上传失败") && !heading.contains("发布失败") {
+        return None;
+    }
+    let tail = &body[close + 5..];
+    let end = tail
+        .find("</td>")
+        .or_else(|| tail.find("</div>"))
+        .unwrap_or_else(|| tail.len().min(800));
+    let text = strip_tags(&tail[..end]);
+    let line = text.lines().map(str::trim).find(|l| !l.is_empty())?;
+    if line.is_empty()
+        || line == "上传失败！"
+        || line == "发布失败！"
+        || line.contains("Powered by NexusPHP")
+    {
+        return None;
+    }
+    Some(format!("站点拒绝：{line}"))
+}
+
 fn extract_upload_error(body: &str, status: u16) -> String {
     // 种子过大：NexusPHP 系不回错误框，而是回一个 `torrent_too_large` 表单自动跳
     // offers.php（候选区）。这是结构性信号，优先于空壳判断：表单本身没有可见文本，
@@ -4695,6 +4723,9 @@ fn extract_upload_error(body: &str, status: u16) -> String {
         if !t.is_empty() {
             return t;
         }
+    }
+    if let Some(detail) = upload_failure_detail(body) {
+        return detail;
     }
     // 缺必填项类拒绝：站点明写某项没填（tjupt 编辑页实测回“有项目没有填写”）。
     // 和后端超时分开报：这是站点明确的校验拒绝，回包里有正文；超时是没有结论。
@@ -8620,6 +8651,21 @@ Frame rate : 25</pre>
             note: msg,
         });
         assert_eq!(outcome.audit_result(), "pending_offers");
+    }
+
+    #[test]
+    fn upload_failure_reason_after_h1_is_preserved() {
+        // UBits 实测：标题也写“上传失败”，真正原因在 h1 后面的 p 里。
+        let body = r#"<html><head><title>UBits :: 上传失败！ - Powered by NexusPHP</title></head>
+<body><div class="main"></div><h1>上传失败！</h1>
+<p>检测到种子简介中包含黑名单图床,请将图片重新上传至其他图床(例如 https://pixhost.to/)</p>
+</td></tr></table></body></html>"#;
+        let msg = extract_upload_error(body, 200);
+        assert!(
+            msg.contains("黑名单图床"),
+            "应保留 h1 后面的真实原因，实际：{msg}"
+        );
+        assert!(msg.starts_with("站点拒绝："), "{msg}");
     }
 
     #[test]
