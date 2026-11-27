@@ -4689,6 +4689,19 @@ fn exist_marker(final_url: &str, body: &str) -> Option<&'static str> {
     if final_url.to_ascii_lowercase().contains("existed=1") {
         return Some("跳转 URL 带 existed=1");
     }
+    // 有些站把「该种子已存在！」放在重填页的提示区，正文仍带 multipart 上传表单；
+    // 单看 errorbox 或短页面会漏掉。这里只认带「该种子」的完整句子，避免把
+    // 上传页帮助文案里的「重复资源会提示种子已存在」误判成重复。
+    const EXACT_NOTICES: &[&str] = &[
+        "该种子已存在！",
+        "该种子已经存在！",
+        "该种子已存在",
+        "该种子已经存在",
+        // 少数站只写“已存在！”；带感叹号比裸“已存在”更像站点提示，
+        // 放在精确句后面兜底，避免长页面/重填页漏判。
+        "已存在！",
+        "已经存在！",
+    ];
     const MARKERS: &[&str] = &[
         "已经上传",
         "已存在",
@@ -4703,8 +4716,12 @@ fn exist_marker(final_url: &str, body: &str) -> Option<&'static str> {
             return Some(*m);
         }
     }
-    // 返回体还是上传表单（multipart）：这是校验失败重填，不是重复提示
+    // 返回体还是上传表单（multipart）：这是校验失败重填，不是重复提示；
+    // 但若重填页的普通提示区写着带「该种子」的完整句子，仍要认成重复。
     if body.contains("multipart/form-data") {
+        if let Some(m) = EXACT_NOTICES.iter().find(|m| body.contains(**m)) {
+            return Some(*m);
+        }
         return None;
     }
     // 提示页通常很短；长页面里的零散措辞多半是模板/简介文本
@@ -4712,6 +4729,11 @@ fn exist_marker(final_url: &str, body: &str) -> Option<&'static str> {
         if let Some(m) = MARKERS.iter().find(|m| body.contains(**m)) {
             return Some(*m);
         }
+    }
+    // 有的站长页面（带页头页脚、超过 8KB）只放一句「该种子已存在！」，
+    // 没有 errorbox 也没有 multipart；这时仍按精确完整句认重复。
+    if let Some(m) = EXACT_NOTICES.iter().find(|m| body.contains(**m)) {
+        return Some(*m);
     }
     None
 }
@@ -8094,6 +8116,40 @@ Frame rate : 25</pre>
         assert_eq!(
             exist_marker("https://x/takeupload.php", body),
             Some("已存在")
+        );
+    }
+
+    #[test]
+    fn exist_marker_reads_exact_notice_even_when_form_is_rerendered() {
+        // 有的模板把「该种子已存在！」写在普通提示区，不是 errorbox；
+        // 页面仍带 multipart 上传表单，不能因此丢掉重复结论。
+        let body = r#"<form action="takeupload.php" method="post" enctype="multipart/form-data">
+<div class="notice">该种子已存在！</div></form>"#;
+        assert_eq!(
+            exist_marker("https://x/takeupload.php", body),
+            Some("该种子已存在！")
+        );
+        // 帮助文案里的泛化「提示种子已存在」不算重复。
+        let boilerplate = r#"<form action="takeupload.php" method="post" enctype="multipart/form-data">
+<p>请先搜索站内是否已有该资源；重复资源会提示种子已存在。</p></form>"#;
+        assert_eq!(exist_marker("https://x/takeupload.php", boilerplate), None);
+        // 普通长页面（>8KB，没有重填表单）只写这一句，也要认重复。
+        let long_notice = format!(
+            "<html><body>{}<div>该种子已存在！</div></body></html>",
+            " ".repeat(9000)
+        );
+        assert_eq!(
+            exist_marker("https://x/takeupload.php", &long_notice),
+            Some("该种子已存在！")
+        );
+        // 只写“已存在！”的长页面同样要认，不依赖“该种子”前缀。
+        let plain_long = format!(
+            "<html><body>{}<div>已存在！</div></body></html>",
+            " ".repeat(9000)
+        );
+        assert_eq!(
+            exist_marker("https://x/takeupload.php", &plain_long),
+            Some("已存在！")
         );
     }
 

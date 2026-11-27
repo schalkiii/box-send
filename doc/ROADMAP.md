@@ -268,6 +268,7 @@ reseed/coverage_io.rs  覆盖记录读写
 
 1. **修回包识别和检索超时重试**（解锁 dragonhd、ptzone、pthome、city13、hdvideo、cyanbug 6 站）
    - 把"已存在！"这类站点明文判重归入重复，不再记失败；检索/详情页 30 秒超时允许重试 1–2 次；HTTP 200 但页面认不出来时，先站内搜索或看账号上传列表确认到底发没发，再决定重试。
+   - **2026-11-27 部分落地**：`exist_marker` 认“该种子已存在！”/“该种子已经存在！”精确完整句，重填页（仍带 multipart 表单）和超过 8KB 的长页面都能识别；只写“已存在！”的长页面也兜底认。错误框原有口径不变，帮助文案反例有单测。检索、详情页、上传页抓取遇到超时/连接重置/连接关闭/管道断开时最多再试 2 次，403/登录墙/限流不重试。`cargo test --workspace --exclude bsend-gui` 491 条通过，`cargo clippy -D warnings` 通过。**尚未完成**：pthome/qingwa 真实回包重跑、dragonhd/ptzone 真站超时复测、city13/hdvideo 未识别回包归类、一轮 dry-run 无未识别回包。
    - 验收：city13 一条演练回包能正确归类；dragonhd、ptzone 检索超时自动重试后拿到结果；pthome"已存在！"落重复而不是失败；有单测覆盖这几类回包，一轮 dry-run 没有未识别回包。
 2. **补 G2 选档映射**（解锁 hdfans、kufei、hdvideo、ptsbao、city13、ptzone 6 站，部分与第 1 件重叠）
    - 把今日被拦条目的片源、音频 token 对到站点真实选项；站点列表里没有的选项落人工，不硬填。

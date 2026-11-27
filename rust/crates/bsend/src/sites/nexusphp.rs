@@ -285,9 +285,15 @@ impl NexusPhp {
         Ok(resp)
     }
 
+    /// 页面请求失败时只对明确的超时/断连重试；cookie 失效、403、登录墙不重试。
+    /// 检索和详情页共用这一条：站点偶发 30 秒超时不应直接把一次判重判成失败。
+    fn get_with_retry(&self, url: &str, referer: &str) -> Result<reqwest::blocking::Response> {
+        retry_fetch(url, |u| self.get(u, referer))
+    }
+
     /// 抓任意页面的原始 HTML（转种流水线用：上传表单页 / 详情页全文）
     pub fn fetch_html(&self, url: &str, referer: &str) -> Result<String> {
-        let resp = self.get(url, referer)?;
+        let resp = self.get_with_retry(url, referer)?;
         let status = resp.status().as_u16();
         let html = resp.text().unwrap_or_default();
         if status != 200 {
@@ -521,7 +527,7 @@ impl NexusPhp {
                 return Ok(SearchOutcome::BudgetExhausted);
             }
             let url = self.build_search_url(&tmpl, &q, imdb);
-            let (status, html) = fetch(&url)?;
+            let (status, html) = retry_fetch(&url, &mut fetch)?;
             if status != 200 {
                 let head: String = html.chars().take(120).collect();
                 return Err(anyhow!("HTTP {status} 检索 {url}：{head}"));
@@ -580,7 +586,7 @@ impl NexusPhp {
         &self,
         detail_url: &str,
     ) -> Result<(TorrentPage, Option<(ReviewMark, String)>)> {
-        let resp = self.get(detail_url, self.base.as_str())?;
+        let resp = self.get_with_retry(detail_url, self.base.as_str())?;
         let status = resp.status().as_u16();
         let html = resp.text().unwrap_or_default();
         if status == 404 {
@@ -680,6 +686,39 @@ impl NexusPhp {
         }
         Ok(data)
     }
+}
+
+/// 只有明确的网络超时/断连才值得重试；登录墙、403、HTTP 业务错误不重试。
+fn retryable_page_error(msg: &str) -> bool {
+    let lower = msg.to_ascii_lowercase();
+    [
+        "timed out",
+        "timeout",
+        "connection reset",
+        "connection closed",
+        "broken pipe",
+    ]
+    .iter()
+    .any(|m| lower.contains(m))
+}
+
+/// 一次请求失败后最多再试 2 次（共 3 次），只对超时/断连生效。
+fn retry_fetch<T>(url: &str, mut fetch: impl FnMut(&str) -> Result<T>) -> Result<T> {
+    let mut last: Option<anyhow::Error> = None;
+    for attempt in 0..3u64 {
+        match fetch(url) {
+            Ok(value) => return Ok(value),
+            Err(err) => {
+                if attempt < 2 && retryable_page_error(&format!("{err:#}")) {
+                    last = Some(err);
+                    std::thread::sleep(Duration::from_millis(500 * (attempt + 1)));
+                } else {
+                    return Err(err);
+                }
+            }
+        }
+    }
+    Err(last.expect("retry loop must record an error"))
 }
 
 /// 详情页明说“没有这条种子”（NexusPHP 的报错页）或 HTTP 404。
@@ -2486,6 +2525,36 @@ mod tests {
             None
         )
         .is_none());
+    }
+
+    #[test]
+    fn search_retries_transient_timeout_then_hits() {
+        let adapter = NexusPhp::new("test", "Test", "https://test.example/", None, None).unwrap();
+        let name = "Black.Lagoon.S01.1080p.Blu-ray.DTS-HD.MA.5.1-GROUP";
+        let html = format!(r#"<a href="details.php?id=42">{name}</a>"#);
+        let mut calls = 0usize;
+        let outcome = adapter
+            .search_sized_with(name, "", false, "", None, &mut || true, |_url| {
+                calls += 1;
+                if calls == 1 {
+                    Err(anyhow::anyhow!("请求没通：operation timed out"))
+                } else {
+                    Ok((200, html.clone()))
+                }
+            })
+            .unwrap();
+        assert!(matches!(outcome, SearchOutcome::Hit(_)));
+        assert_eq!(calls, 2, "一次超时后应重试并命中");
+    }
+
+    #[test]
+    fn page_retry_only_matches_transient_network_errors() {
+        assert!(retryable_page_error("请求没通：operation timed out"));
+        assert!(retryable_page_error("connection reset by peer"));
+        assert!(!retryable_page_error(
+            "站点回 HTTP 403（多半是 cookie 失效）"
+        ));
+        assert!(!retryable_page_error("站点限流（请求过于频繁）"));
     }
 
     #[test]
