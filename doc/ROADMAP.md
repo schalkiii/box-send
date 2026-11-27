@@ -162,7 +162,15 @@ sites/nexusphp/detail.rs  结果页/详情页解析、大小/上传者/审核标
 sites/nexusphp/upload.rs  页面请求重试、限流/拦截页识别、站点提示页（119 行）
 ```
 
-拆分只移动代码，不改行为；全量 533 条、`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings` 通过。
+拆分只移动代码，不改行为；当前全量 535 条、`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings` 通过。
+
+### 4.8 后续优化（r3 审计给出，尚未开工）
+
+- **P1 qB 种子列表分页**：`qbittorrent.rs` 三处 `torrents/info?limit=50000` 改成“满页继续按 offset 取”，避免 42,473 条继续增长后截断；改 `rust/crates/bsend/src/qbittorrent.rs`，验证用假服务端造 50,001 条。详见 `AUDIT-REPORT-2026-11-27-r3.md` S1。
+- **P2 真站只读巡检脚本**：新增 `scripts/live-smoke.ps1`，只读查 city13/hdvideo/pthome 的详情页、tracker、上传量、审核标记，不发布、不挂种；配合 `doc/OPERATIONS.md`。详见 r3 S2。
+- **P2 覆盖率落盘基准**：先测 23 MB `coverage.json` 的加载/保存耗时和峰值内存，再决定是否分片或增量写；涉及 `coverage.rs`、`index.rs`、`config.rs`。详见 r3 S3。
+- **P3 剩余生产路径 `unwrap/expect`**：按 r3 S5 的逐处判断清理，先改一处跑一处测试。
+- **P3 清场与分支**：`artifacts/` 的 28.42 MB 证据、8 个含 passkey 的 torrent、三个 `reseed.rs` 备份、根目录 47 个一次性 ignored 文件（`.workbuddy/`、`rust/target/` 不删），以及已合并的 `main`/`rust/coverage` 分支，等用户看完 r3 与洁癖汇报后明确确认再删。
 
 ## 5. 已知问题
 
@@ -170,7 +178,7 @@ sites/nexusphp/upload.rs  页面请求重试、限流/拦截页识别、站点�
 
 - **ptlgs**：上传页把海报、截图放在独立字段 `cover` / `screenshots`，页面写明“至少需要 3 张原始截图”。2026-11-25 查看已发布 `115117`、`115313`，详情页 `ktorrentcover` 是 `<img src=''/>`、简介 0 张图，说明旧版 Rust 没填独立字段；已补 `posterField` / `screenshotField`，从最终简介按顺序抽图填字段，并把 ptlgs 最低总图数设为 4 张（1 海报 + 3 截图）。2026-11-25 用《苦月亮》真发一条 `115350`（https://ptlgs.org/details.php?id=115350 ）验证：详情页 `ktorrentcover` 有海报、`ktorrentscreenshots` 有 3 张截图，qB 校验 100%，站点标“未审”；这条是有图源的真实样本，不是只跑单测。
 - **sbpt**：2026-11-25 核实 21764、21767、21768、21780、21782、21783、21784 七条详情页作者都是本站账号 `Schalkiiii`。`existed=1` 只证明同 `info hash` 判重，不能说明是谁先发；21764 曾被旧同 hash 判断误记，后按 qB tracker/progress 复核为做种，其余已下载目标种、校验 pieces 后挂回。Aquarela、The Intern 仍缺“中字”标签，需人工补。
-- **hdvideo**：必填项已补（`region_sel[4]=2`、`style_sel[4][]=6`），站上已发布 78856；发后定位取错旧种 14469（缺陷已修）。2026-11-23 已手工补挂 78856，qB hash `dd7f6097…` 校验 100%。2026-11-27 晚实发 79168（《人民的名义》），挂回 100%；强制 reannounce 后主 announce `status=2`、`tracker.hdvideo.top` 仍 `status=1`，0 peers/0 上传，站点未审。
+- **hdvideo**：必填项已补（`region_sel[4]=2`、`style_sel[4][]=6`），站上已发布 78856；发后定位取错旧种 14469（缺陷已修）。2026-11-23 已手工补挂 78856，qB hash `dd7f6097…` 校验 100%。2026-11-27 晚实发 79168（《人民的名义》），挂回 100%；2026-11-27 21:00 复查主 announce `status=2`、`tracker.hdvideo.top` `status=4`（stream truncated），0 peers/0 上传，站点未审；覆盖格按新发种语义记为 `reseeded`。
 - **luckpt**：截图和 BDRip 选档还没完全过。豆瓣图床防盗链补 `Referer` 已解决；`img.pterclub.com` 在本机 TLS 连不上，截图数量仍不足。BDRip 的媒介档已确认是 `Encode(7)`。
 - **qingwa**：未覆盖的是成人合集和多片合集，属于内容黑名单范围，不是适配器故障。
 - **haitang**：只有曲艺、有声书类目，和影视范围不匹配，已移出白名单。

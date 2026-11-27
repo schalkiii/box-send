@@ -89,7 +89,7 @@
 
 `tracker_confirms_seeding()` 成为 reseed 和 coverage 共用的唯一判定：`progress >= 0.999` 且至少一条 tracker `status=2` 才写 `Reseeded/Assisted`；`status=1/4` 或读不到时写 `Verifying`，note 带“已发布并挂回 100%，但 tracker 还没确认，下一轮复核”。这比新增独立状态改动小，且复用现有收尾循环：下一轮 `collect_verifying` 会再问 tracker，直到 `status=2` 或用户手工处理。
 
-验证：`cargo test --workspace` 533 条全绿（`artifacts/workspace-test-20261127-final15.log`）；`coverage_e2e` 34 条；CLI 23 + 冒烟 3；`clippy` 通过（`artifacts/clippy-20261127-final17.log`）。
+验证：`cargo test --workspace` 533 条全绿（当时基线；后续新增 2 条后为 535，见 4.9）；`coverage_e2e` 34 条；CLI 23 + 冒烟 3；`clippy` 通过（`artifacts/clippy-20261127-final17.log`）。
 
 ### 4.8 GUI 纯状态测试（S7）
 

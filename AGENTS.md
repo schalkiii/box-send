@@ -26,7 +26,7 @@ cargo build --release -p bsend-cli                   # 产物 rust/target/releas
 Rust 2021；crate：`bsend`（引擎）、`bsend-cli`、`bsend-gui`。错误用 `anyhow`，HTTP 用 `reqwest`（默认跟随重定向），种子文件格式（Bencode）自实现于 `bencode.rs`。
 
 ## 目录与约定
-- `rust/crates/bsend/src/`：`reseed.rs`（审阅/上传/挂回主流程，约 3.6k 行；表单解析、预审、上传、发后写回、测试已拆到 `reseed/{form,audit,upload,post,tests,title}.rs`）、`autopost.rs`（自动发种编排）、`coverage.rs` / `report.rs`（覆盖记录与统计）、`matcher.rs`（判重）、`sites/nexusphp.rs`（站点适配）、`config.rs`、`gates.rs`；CLI 参数定义在 `bsend-cli/src/cli.rs`，命令处理在 `bsend-cli/src/commands.rs`。MSRV 1.88（`rust/Cargo.toml` 声明，CI 有 `MSRV 1.88` job）。
+- `rust/crates/bsend/src/`：`reseed.rs`（审阅/上传/挂回主流程，约 3.6k 行；表单解析、预审、上传、发后写回、测试已拆到 `reseed/{form,audit,upload,post,tests,title}.rs`）、`autopost.rs`（自动发种编排）、`coverage.rs` / `report.rs`（覆盖记录与统计）、`matcher.rs`（判重）、`sites/nexusphp.rs`（站点适配模块根；文本工具、检索、详情页解析、请求重试已拆到 `sites/nexusphp/{text,search,detail,upload}.rs`）、`config.rs`、`gates.rs`；CLI 参数定义在 `bsend-cli/src/cli.rs`，命令处理在 `bsend-cli/src/commands.rs`。MSRV 1.88（`rust/Cargo.toml` 声明，CI 有 `MSRV 1.88` job）。
 - 注释语言跟随所在文件既有习惯（现状以中文为主）；日志与文档用中文。
 
 ## 不能违反的规则
@@ -58,5 +58,5 @@ Rust 2021；crate：`bsend`（引擎）、`bsend-cli`、`bsend-gui`。错误用 
 - 发种前门禁按站点配置执行：`titleNoCjk` 拦主标题汉字，`descrOrder` 校验简介标题顺序，`requireLinks` / `requireMediainfo` 校验必填。**剪死图是所有站点无条件执行的硬规则**（不再读 `assist.pruneDeadImages`）：提交前逐图探测，打不开的图直接剪掉；`hdsky.me` / `img.hdsky.me` / `imgur.com` 热链即使本机 200 也按死图处理，UBits 另把 `imgbox.com` 按死图处理。**要图的站有硬性最低图数**也是硬规则（藏宝阁/优堡/太乙/麒麟 3 张，熊猫 4 张 + 段序，ptlgs 4 张 = 1 张海报 + 3 张截图；写在 `gates::image_floor`，配置里写多少都不算）。图床统一用 pixhost：先跑 `scripts/rehost-descr-images.py` 把简介里所有非 pixhost 图片转存，再用 `scripts/swap-descr-images.py` 按顺序换链接，最后改简介；不能靠关掉门禁绕过。源站简介本来就没有图时，用 `scripts/seed-images.py` 从本地视频抽帧，或按豆瓣条目自动取海报，上传 pixhost 后写入 `screenshot-overrides.json`。同一部剧有 HDTV/WEB-DL 等多个内容键时，用 `seed-images.py --for-name` 或 `--also-content` 一次写齐，不能只补一个键；`screenshot-overrides.json` 不手改。发布时程序会自动追加，不许手工在简介里编图。
 - **每轮批量发种前先扫各站收件箱**：审核拒绝、删种、管理员留言都要在 `messages.php` 里看一遍，不能只看 `followup` 已经记录的种子状态；漏看的拒绝消息按站点逐条落 `review_rejected` 并修种子。
 - **熊猫发种暂停已撤销（2026-11-27）**：`panda` 已从 `assist.reseedPausedSites` 移出并留在 `autoReseedSites`；141840 已真发并挂回 qB 校验 100%、等审核。历史 141276 是候选种子 24 小时没做种被系统删的，旧账残留 `3f8ed774…` 挂失效 tracker，待人工清理；重发仍必须先“上传→立刻挂回 qB 做种”。
-- 详细规则见 `doc/ARCHITECTURE.md`；运行数据与巡检见 `doc/OPERATIONS.md`；站点清单见 `doc/SITES.md`；未完成项见 `doc/ROADMAP.md`。历史审计与批次报告已并入这些文档，不再单独保留。
+- 详细规则见 `doc/ARCHITECTURE.md`；运行数据与巡检见 `doc/OPERATIONS.md`；站点清单见 `doc/SITES.md`；未完成项见 `doc/ROADMAP.md`。按日期的审计和测试报告保留作证据，结论以最新一份为准；日常说明已经并进常驻文档，不再单独维护零散手册。
 

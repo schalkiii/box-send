@@ -342,7 +342,7 @@ Windows 计划任务只给命令示例，不自动创建。需要常驻时用任
 | `bsend-cli/src/commands.rs` | `status`、`report`、`autopost`、`audit` 等命令处理与格式化辅助 |
 | `bsend-gui/src/*` | 桌面界面、后台任务、配置与诊断视图 |
 
-`reseed.rs` 2026-11-27 已从 11,889 行拆到 3,585 行：表单、预审、上传、发后写回、测试分别拆到 `reseed/{form,audit,upload,post,tests}.rs`，`reseed.rs` 只保留共享类型、标题/简介解析和主流程。CLI 的 `main.rs` 同步从 2,380 行降到 129 行，参数在 `cli.rs`、命令处理在 `commands.rs`。拆分只移动代码，不改行为；全量 533 条测试、fmt、clippy 都通过。剩下的主流程编排继续硬拆收益低于回归成本，暂不再拆。
+`reseed.rs` 2026-11-27 已从 11,889 行拆到 3,585 行：表单、预审、上传、发后写回、测试分别拆到 `reseed/{form,audit,upload,post,tests}.rs`，`reseed.rs` 只保留共享类型、标题/简介解析和主流程。CLI 的 `main.rs` 同步从 2,380 行降到 129 行，参数在 `cli.rs`、命令处理在 `commands.rs`。拆分只移动代码，不改行为；当前全量 535 条测试、fmt、clippy 都通过。剩下的主流程编排继续硬拆收益低于回归成本，暂不再拆。
 
 ## 12. 已经踩过的坑
 
