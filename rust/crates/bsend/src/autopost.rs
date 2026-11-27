@@ -659,6 +659,34 @@ pub fn audit_path_of(cfg: &Config) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("auto-audit.jsonl"))
 }
 
+/// 手动发布（`bsend reseed --yes`）也写进同一份审计。
+///
+/// 自动发种靠 `auto-audit.jsonl` 做日限额和失败冷却；手动发布过去只写
+/// `reseed-log.jsonl`，这部分额度在自动队列里看不见。这里把结果按同一 schema
+/// 追加，让“手动发了几条”与“自动发了几条”在审计口径上一致。
+pub fn append_manual_audit(
+    cfg: &Config,
+    site: &str,
+    key: &str,
+    result: &str,
+    url: Option<&str>,
+    note: &str,
+) -> Result<()> {
+    let mut entry = serde_json::json!({
+        "site": site,
+        "key": key,
+        "result": result,
+        "manual": true,
+    });
+    if let Some(url) = url.filter(|u| !u.is_empty()) {
+        entry["url"] = serde_json::Value::String(url.to_string());
+    }
+    if !note.trim().is_empty() {
+        entry["note"] = serde_json::Value::String(note.trim().to_string());
+    }
+    append_audit(&audit_path_of(cfg), entry)
+}
+
 /// 各站今日 posted 计数（北京时间日界，UTC+8）
 pub type PostedToday = HashMap<String, u32>;
 /// (内容, 站点) → (最近一次拦截/失败时间, 是否门禁拦截)，失败冷却判定用
@@ -1201,6 +1229,26 @@ mod tests {
             "at 必须是写入时刻（差 {} 秒）",
             now_unix() - at
         );
+    }
+
+    #[test]
+    fn manual_publish_audit_counts_as_posted_for_daily_limit() {
+        let dir = temp_dir("manual-audit");
+        let cfg = cfg_with_drafts(&dir, 2, 0);
+        append_manual_audit(
+            &cfg,
+            "sbpt",
+            "m:manual-test",
+            "posted",
+            Some("https://sbpt.link/details.php?id=1"),
+            "手动发布",
+        )
+        .unwrap();
+        let text = std::fs::read_to_string(audit_path_of(&cfg)).unwrap();
+        let (posted_today, _) = parse_audit(&text, now_unix());
+        assert_eq!(posted_today.get("sbpt").copied(), Some(1));
+        let v: serde_json::Value = serde_json::from_str(text.trim()).unwrap();
+        assert_eq!(v.get("manual").and_then(|m| m.as_bool()), Some(true));
     }
 
     #[test]

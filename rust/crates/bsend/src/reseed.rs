@@ -2545,7 +2545,8 @@ fn token_aliases(token: &str) -> &'static [&'static str] {
             "DDP Atmos/EAC3",
         ],
         // AC3 不能靠子串：会同时命中 DD/AC3 与 DDP/E-AC3
-        "ac3" => &["DD/AC3", "DD/AC-3", "AC3"],
+        // iloli 的表单把顺序写成 AC3/DD，不能只认 DD/AC3 一种写法。
+        "ac3" => &["DD/AC3", "DD/AC-3", "AC3/DD", "AC3"],
         "truehd" => &["TrueHD", "TrueHD Atmos", "TrueHD_Atmos"],
         "dtshdma" => &["DTS-HD MA", "DTS-HD", "DTS_HD|MA", "DTS"],
         "dtshd" => &["DTS-HD", "DTS_HD|HR", "DTS"],
@@ -5152,6 +5153,7 @@ fn norm_post_title(s: &str) -> String {
 fn target_has_imdb(
     target: &NexusPhp,
     imdb: Option<&str>,
+    expected_name: &str,
     log: &mut dyn FnMut(&str),
 ) -> Result<Option<(String, String)>> {
     let Some(tt) = imdb else {
@@ -5173,7 +5175,13 @@ fn target_has_imdb(
         }
     };
     // 只认搜索结果锚点：<a title="..." href="details.php?id=N...">。
-    // 侧栏/用户信息里也有 details.php?id=，不能当判重结果（曾误抓 id=10230）。
+    // 侧栏/用户信息里也有 details.php?id=，不能当判重结果（曾误抓 id=10230）；
+    // 侧栏推荐位还可能带 title（13city 的 “Old Fox”），所以还要复核标题。
+    Ok(first_imdb_hit(&html, &target.base, expected_name))
+}
+
+/// 从 IMDb 搜索页里取第一条与发布名对得上的详情链接。
+fn first_imdb_hit(html: &str, base: &Url, expected_name: &str) -> Option<(String, String)> {
     let lower = html.to_ascii_lowercase();
     let mut from = 0usize;
     while let Some(p) = lower[from..].find("<a") {
@@ -5196,18 +5204,21 @@ fn target_has_imdb(
                 if !digits.is_empty() {
                     let detail = format!(
                         "{}/details.php?id={digits}",
-                        target.base.as_str().trim_end_matches('/')
+                        base.as_str().trim_end_matches('/')
                     );
                     let title = attr(tag, "title").unwrap_or_default().to_string();
-                    if !title.is_empty() {
-                        return Ok(Some((detail, title)));
+                    // 侧栏/推荐位也会出现带 title 的 details.php 锚点（例如 13city
+                    // 推荐“Old Fox”），只按路径过滤会把它们误当判重命中；这里必须
+                    // 再用发布名复核，名称对不上就当没搜到。
+                    if !title.is_empty() && search_names_match(&title, expected_name, false) {
+                        return Some((detail, title));
                     }
                 }
             }
         }
         from = end;
     }
-    Ok(None)
+    None
 }
 
 // ---------------- 发后定位（只认上传回包自带链接，不做站内检索） ----------------
@@ -5562,11 +5573,15 @@ fn locate_existing_target(
 /// 详情页标题常被站点追加促销/剩余时间等后缀（如 `[免费] 剩余时间：23时59分钟`）。
 /// 这些不是标题正文，比对 existed 线索前先裁掉，避免把真重复误判成“标题不符”。
 fn strip_site_title_badges(title: &str) -> &str {
-    const BADGES: [&str; 12] = [
+    const BADGES: [&str; 16] = [
         "[免费]",
         "[免費]",
         "[Free]",
         "[FREE]",
+        "[2X免费]",
+        "[2x免费]",
+        "[2X免費]",
+        "[2x免費]",
         "[2x]",
         "[2X]",
         "[50%]",
@@ -5582,6 +5597,11 @@ fn strip_site_title_badges(title: &str) -> &str {
     cuts.sort_unstable();
     cuts.dedup();
     for pos in cuts {
+        // 位置 0 的角标没有标题前缀；落在另一个方括号内部的命中（如
+        // `[2X免费]` 里的 `[免费]`）裁出来只会留下半截角标，跳过。
+        if pos == 0 || title[..pos].ends_with('[') {
+            continue;
+        }
         let core = title[..pos].trim();
         if !core.is_empty() {
             return core;
@@ -6518,6 +6538,22 @@ impl ReseedOutcome {
         }
     }
 
+    /// 这次结果对应的站点详情页（判重命中或发布成功时可能有）。
+    pub fn url(&self) -> Option<&str> {
+        match self {
+            ReseedOutcome::Posted(url) | ReseedOutcome::PostedVerifying(url) => Some(url),
+            ReseedOutcome::Duplicate(d) => d.url.as_deref(),
+        }
+    }
+
+    /// 这次结果的说明文字（审计 note 用；发布成功返回空）。
+    pub fn note(&self) -> &str {
+        match self {
+            ReseedOutcome::Posted(_) | ReseedOutcome::PostedVerifying(_) => "",
+            ReseedOutcome::Duplicate(d) => &d.note,
+        }
+    }
+
     /// 人工可读的一句话（CLI/GUI 共用）
     pub fn display(&self) -> String {
         match self {
@@ -6977,7 +7013,7 @@ fn run_reseed_inner(
     // qB 没有该站 tracker 并不一定是辅种漏了：文件清单不同（1080p vs 2160p）时
     // 辅种臂会正确拒绝跨种。这里不上传，落 ReviewPending 交人工确认。
     let imdb_for_search = rel.info.imdb.as_deref();
-    let dup = match target_has_imdb(&rel.tgt, imdb_for_search, log) {
+    let dup = match target_has_imdb(&rel.tgt, imdb_for_search, &rel.info.name, log) {
         Ok(Some(hit)) => Some(hit),
         Ok(None) => match rel.tgt.search_sized(
             &rel.info.name,
@@ -8220,6 +8256,24 @@ pub fn request_from_draft(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn imdb_search_ignores_sidebar_title_without_name_match() {
+        let base = Url::parse("https://13city.org/").unwrap();
+        let html = r#"
+<a title="Lao hu li AKA Old Fox 2023 1080p TWN Blu-ray AVC DTS-HD MA 7.1-CMCT" href="details.php?id=47197">Old Fox</a>
+<a title="Agatha Christies Poirot S01-S13 Collection 1080p Bluray x265 10bit MNHD-FRDS" href="details.php?id=18000">Poirot</a>"#;
+        let hit = first_imdb_hit(
+            html,
+            &base,
+            "Agatha Christies Poirot S01-S13 Collection 1080p Bluray x265 10bit MNHD-FRDS",
+        )
+        .expect("应取到名称匹配的 Poirot");
+        assert_eq!(hit.0, "https://13city.org/details.php?id=18000");
+        assert!(
+            first_imdb_hit(html, &base, "Some.Other.Movie.2024.1080p.BluRay.x265-GRP").is_none()
+        );
+    }
 
     const PAGE: &str = r#"
 <html><head><title>x</title></head><body>
@@ -9716,6 +9770,13 @@ Height : 1080</pre></div>"#;
             strip_site_title_badges("Some Pack 2020 1080p [50%] [Promotion] 剩余时间：1时"),
             "Some Pack 2020 1080p"
         );
+        // 13city 的合并角标：[2X免费] 不能因为包含 [免费] 被裁成半截
+        assert_eq!(
+            strip_site_title_badges(
+                "Agatha Christies Poirot S01-S13 Collection 1080p Bluray x265 10bit MNHD-FRDS [2X免费] 剩余时间：23时59分钟"
+            ),
+            "Agatha Christies Poirot S01-S13 Collection 1080p Bluray x265 10bit MNHD-FRDS"
+        );
         // 角标在最前面时没有可返回的标题前缀，保持原样
         assert_eq!(
             strip_site_title_badges("[Free] Some Pack 2020 1080p"),
@@ -9935,6 +9996,18 @@ Language : English"
         };
         let (fs, _p, notes) = build_upload_fields(&info, form, &[]);
         assert_eq!(field_lookup(&fs, "audiocodec_sel"), Some("12"), "{notes:?}");
+    }
+
+    #[test]
+    fn ac3_slash_dd_label_maps_to_ac3_option() {
+        // iloli 的真实标签顺序是 AC3/DD（不是 DD/AC3）
+        let form = r#"<select name="audiocodec_sel[4]"><option value="0">请选择一项</option><option value="6">AAC</option><option value="13">AC3/DD</option><option value="20">DDP/E-AC3</option><option value="3">DTS</option></select>"#;
+        let info = ReleaseInfo {
+            name: "Ghiblies.Episode.2.2002.1080p.BluRay.10bit.DD5.1.x265-MNHD-FRDS".into(),
+            ..Default::default()
+        };
+        let (fs, _p, notes) = build_upload_fields(&info, form, &[]);
+        assert_eq!(field_lookup(&fs, "audiocodec_sel"), Some("13"), "{notes:?}");
     }
 
     #[test]

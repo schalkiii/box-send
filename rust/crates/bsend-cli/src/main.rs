@@ -857,6 +857,17 @@ fn cmd_reseed(
     let qb = connect_qb(cfg)?;
     let outcome = bsend::reseed::run_reseed(cfg, &qb, &req, &mut index, &mut log, None)?;
     println!("{}", outcome.display());
+    // 手动发布同样要进 auto-audit：自动队列的日限额/失败冷却不能漏看这批。
+    if let Err(e) = bsend::autopost::append_manual_audit(
+        cfg,
+        &req.target_site,
+        &req.content_key,
+        outcome.audit_result(),
+        outcome.url(),
+        &outcome.display(),
+    ) {
+        eprintln!("写发种审计失败（本次发布已成功，审计缺口需人工补）：{e}");
+    }
     Ok(())
 }
 
