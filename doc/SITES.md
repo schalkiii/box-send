@@ -8,7 +8,7 @@
 - 参与扫描的 **101** 个（2026-11-27 按配置 `enabled=true` 实测）；
 - 允许自动发种的 **46** 个（`assist.autoReseedSites`）。
 
-白名单只是“允许发”，不等于“一定发得出去”。实际发布还要过站点权限、字段检查、当天额度和失败冷却（默认关闭）。**表里写“qB 校验 100%”只表示种子已挂回下载器、本地校验完成，不等于站点 tracker 已回包、更不等于站点页已显示做种**；站点侧真值看详情页做种者数和 qB tracker `status=2`。2026-11-27 city13 [88464](https://13city.org/details.php?id=88464) 就是“已挂回 100%、站点页 0 做种者、tracker 一直没回包”的反例，详见 2.10。
+白名单只是“允许发”，不等于“一定发得出去”。实际发布还要过站点权限、字段检查、当天额度和失败冷却（默认关闭）。**表里写“qB 校验 100%”只表示种子已挂回下载器、本地校验完成，不等于站点 tracker 已回包、更不等于站点页已显示做种**；站点侧真值看详情页做种者数和 qB tracker `status=2`。2026-11-27 city13 [88464](https://13city.org/details.php?id=88464) 先是“已挂回 100%、站点页 0 做种者、tracker 没回包”的反例；17:50 复核站点页已显示 1 个做种者（自己）、上传 70.08 MB，才按人工证据改成已做种，详见 2.10。
 
 2026-11-22 起，不再为了判断“站上有没有”逐个搜索，也不再日常批量跑表单检查。表单检查只在新站第一次接入时做一次，用来拿上传页字段和下拉选项。以前的检查结论只作参考，站点改版后可能失效。
 
@@ -361,11 +361,11 @@ xingyunge, agsvpt, panda, iloli, muxuege, fenghuang, gtk
 |---|---|---|---|---|---|---|
 | iloli | https://mua.xloli.cc/details.php?id=56513 | 已发布 | hash `5d8dff96e44b5d640529268a8adc840224356e9b`，progress=1 | 16:33 `status=2`；16:34 一次 `status=4: stream truncated` | 页面 3 个做种者 / 14 个下载者 | **目前唯一完整闭环**：有真实 announce、有 131,072 字节上传、站点页有做种者 |
 | pthome | https://www.pthome.net/details.php?id=285040 | 已发布 | hash `8085a48748cbf4888a688ac74eaebcfa696ae7f6`，progress=1 | 16:32 `status=2`；17:19 真实浏览器复核站点页：`1 做种者`（Schalkiii IPv4，100%，客户端 qBittorrent/5.3.0，连接 42:13），`0 下载者`，完成 0 次 | 页面已确认 | **站点已看见做种**：有自己 1 个做种者、100%；但没有下载者，上传 0，只能算“已挂回并被站点登记做种”，不能算有流量 |
-| city13 | https://13city.org/details.php?id=88464 | 已发布 | hash `cd74e178f63a4a90348c90af5fb993438515e285`，progress=1 | 长时间 `status=1`（未联系）；恢复诊断配置后变成 `status=4`（tracker 报错，msg 空）；手动带 passkey announce 被 TLS 连接重置，代理也重置 | 页面 `0 个做种者 / 2 个下载者` | **已挂回但没做种**：tracker 域名从本机连不上，不能写“已在做种”；覆盖格已人工改成 `review_pending`（待人工确认） |
+| city13 | https://13city.org/details.php?id=88464 | 已发布 | hash `cd74e178f63a4a90348c90af5fb993438515e285`，progress=1 | 长时间 `status=1`（未联系）；恢复诊断配置后变成 `status=4`（stream truncated）；17:50 强制 reannounce 仍 `status=4`，但 tracker 返回 `num_seeds=1`、qB 有上传 | 17:20 页面 `0 个做种者 / 2 个下载者`；17:50 页面 `1 个做种者 / 2 个下载者`，做种者 `Schalkiii`，上海·中国[v6]，100%，上传 70.08 MB，45.33 KB/s，连接 30:24，客户端 qBittorrent/5.3.0 | **已做种（人工按站点页确认）**：站点已把自己登记为 1 个做种者且有上传；qB tracker `status=4` 是部分回包/stream truncated，不代表没做种。覆盖格已从 `review_pending` 改成 `reseeded`（人工证据，自动判定仍会保守留在 verifying） |
 
 qB 4 万多条种子重启后 announce 队列拥塞：`max_concurrent_http_announces=200` 时 pthome 等了约 50 分钟仍是 status=1；临时调到 1000 后 pthome 在 90 秒内变成 status=2。city13 不是排队问题，调到 1000 后仍不联系，手动 announce 直接 TLS reset，说明是 tracker 域名/链路侧拒绝。诊断完把并发恢复 200，`current_interface_address` 恢复为空、`file_log_enabled` 恢复 false，避免长期高压。
 
-从这次起，`push_target_torrent` 和 `collect_verifying` 不再把 progress=1 直接写成 `reseeded/assisted`：目标 tracker `status=2` 才落已做种；`status=1/4` 或读不到时落 `verifying`，note 写“已发布并挂回 100%，但 tracker 还没确认，下一轮复核”。city13 的历史格因此按 `review_pending` 保留，等站点侧真回包或人工处理。
+从这次起，`push_target_torrent` 和 `collect_verifying` 不再把 progress=1 直接写成 `reseeded/assisted`：目标 tracker `status=2` 才落已做种；`status=1/4` 或读不到时落 `verifying`，note 写“已发布并挂回 100%，但 tracker 还没确认，下一轮复核”。city13 的历史格先按 `review_pending` 保留；17:50 站点页明确出现自己 1 个做种者、上传 70.08 MB 后，人工改成 `reseeded`，并在 note 里写明 tracker 仍是 `status=4`，避免把自动判定和人工复核混在一起。
 
 ## 3. 全部站点（147 个）
 
@@ -439,7 +439,7 @@ qB 4 万多条种子重启后 announce 队列拥塞：`max_concurrent_http_annou
 | audiences | 观众 | audiences.me | NexusPHP | 是 | — | — | ok |  | unsupported | 6 | 2026-11-23 判重检索被人机验证拦住，按“未确认重复不上传”中止，未发布；无头 HTTP 复用不了浏览器会话。2026-11-24 晚 Kimi WebBridge 可行性实验通过：真实 Chrome 已登录 `Schalkiii`，页面内 `fetch('/torrents.php?search=…')` 返回 200、命中 2 个详情页、无验证码；只做只读检索，尚未接进程序，暂仍按只人工发处理（见 2.3 末尾）。**2026-11-26 复核：除 Turnstile 和后台标签页问题外，上传表单结构本身也是缺口——自定义 JS 表单、`type` 为隐藏值 0，当前静态解析交不出可提交字段，此前文档没记这条** |
 | baozi | 包子 | p.t-baozi.cc | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 1 |  |
 | cangbao | 藏宝阁 | cangbao.ge | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 3 | 43994 图片死链已修。两次核对说法不一致，分别记录：2026-11-24 回访时详情页审核图标标 `title="通过"`；2026-11-26 复核页面仍标“未审”，qB 已 100% 做种。当前以 11-26 页面标记为准，11-24 的“通过”不作定论，待下次回访再确认。另：[44189](https://cangbao.ge/details.php?id=44189) 是另一条，11-26 回访判定干净、`reseeded` 已做种，见 2.6 |
-| city13 | 13City | 13city.org | NexusPHP | 是 | — | — | ok | processing_sel[4] 未选 | ok | 1 | 2026-11-27 实发 88464（《波洛合集》，源 carpt 532），已发布并挂回 qB 校验 100%；但 `tracker.13city.org` 先 `status=1`，恢复 qB 诊断配置后变 `status=4`，手动 announce 被 TLS reset，站点页 0 做种者，不能算做种成功，见 2.10 |
+| city13 | 13City | 13city.org | NexusPHP | 是 | — | — | ok | processing_sel[4] 未选 | ok | 1 | 2026-11-27 实发 88464（《波洛合集》，源 carpt 532），已发布并挂回 qB 校验 100%；`tracker.13city.org` 先 `status=1`，恢复 qB 诊断配置后变 `status=4`（stream truncated）；17:50 站点页出现自己 1 个做种者、上传 70.08 MB、45 KB/s、连接 30:24，按人工证据判已做种，见 2.10 |
 | crabpt | 蟹黄堡 | crabpt.vip | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 1 | 2026-11-23 已实发 240242，`732e…`；此前候选源站 hdfans 502，被失败冷却挡住，改选 hdsky 源后成功；站点改写 hash，已加入白名单，挂回校验 100%；2026-11-24 晚《伪装者》简介 9 张 `i13.tietuku.com` 死图已换 imgbox（复查 0 旧图 / 9 新图） |
 | cspt | 财神 | cspt.top | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 5 | 2026-11-23 已实发 259870，`cf56…`；tracker 在 `tracker.cspt.cc`，已补别名；站点改写 hash，挂回校验 100%。**2026-11-26 复核：当天 4 条审计都是“该账号无发布权限”，发布权限疑似已被收回**；259870 的“可发”是 11-23 旧结论，能否再发待权限确认 |
 | cyanbug | 大青虫 | cyanbug.net | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 5 |  |

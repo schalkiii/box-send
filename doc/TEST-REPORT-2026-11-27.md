@@ -1,11 +1,11 @@
 # 测试改进报告（2026-11-27）
 
 本次走 `software-improvement` 的**测试分支**：先只改测试和测试辅助代码，不改生产行为。
-基线 `db9e16b`；6 条测试随 `7046f4d`、`a81b568` 提交并推送。之后在同一分支上补了 S1 的 tracker 终态（生产行为改动）和 S7 的 10 条 GUI 纯状态测试，全量基线更新为 **523 条**。目标不是把覆盖率刷成好看数字，而是补上本轮审计里最容易产生假绿/假阳性的边界。
+基线 `db9e16b`；6 条测试随 `7046f4d`、`a81b568` 提交并推送。之后在同一分支上补了 S1 的 tracker 终态（生产行为改动）和 S7 的 10 条 GUI 纯状态测试，再把 CLI 参数定义拆到 `cli.rs` 并新增 4 条解析测试，全量基线更新为 **527 条**。目标不是把覆盖率刷成好看数字，而是补上本轮审计里最容易产生假绿/假阳性的边界。
 
 ## 一、基线
 
-- 改动后 `cargo test --workspace`：**523 条全绿**（核心库 454、coverage_e2e 33、其余 2/2/16/3/13）。
+- 改动后 `cargo test --workspace`：**527 条全绿**（核心库 454、coverage_e2e 33、其余 2/2/20/3/13）。
 - `cargo fmt --check` 通过；`cargo clippy --workspace --all-targets -- -D warnings` 通过（只有 `proc-macro-error2` 的 future-incompat 提示，不是本项目代码）。
 - 覆盖率工具：GNU 工具链缺 `profiler_builtins`，`cargo llvm-cov` 失败；MSVC + `rust-lld` 方案需要 `llvm-tools-preview`，下载组件长时间无响应，本轮停止，未产生行覆盖率数字。下面用“测试/函数比”和缺口清单量化，不伪造百分比。
 
@@ -13,10 +13,10 @@
 
 | 模块 | 生产行数（近似） | 函数/测试 | 测试/函数比 | 主要缺口 |
 |---|---:|---:|---:|---|
-| `reseed.rs` | 11,857 | 345 / 168 | 0.49 | 标题/别名/判重分支多，上传回包与状态迁移覆盖不均；tracker 终态已补共享判定，轮询 2-3 次的真实回包仍靠站点 |
+| `reseed.rs` | 11,889 | 345 / 168 | 0.49 | 标题/别名/判重分支多，上传回包与状态迁移覆盖不均；本轮已把标题角标裁剪和标题归一化拆到 `reseed/title.rs`，tracker 终态已补共享判定，轮询 2-3 次的真实回包仍靠站点 |
 | `sites/nexusphp.rs` | 3,091 | — / 36 | — | 名称判定的年份/分辨率冲突缺显式用例；审核页面变体未穷举 |
 | `coverage.rs` | 2,164 | — / 26 | — | `collect_verifying` 已接 tracker 真值；并发超时、旧 miss 路径仍缺 |
-| `bsend-cli/main.rs` | 2,380 | — / 16 | — | 命令参数组合；另有 `tests/cli_smoke.rs` 3 条，合计 19 |
+| `bsend-cli/main.rs` | 2,188 | — / 20 | — | 命令参数组合；参数定义已拆到 `cli.rs`（4 条解析测试），另有 `tests/cli_smoke.rs` 3 条，合计 23 |
 | `bsend-gui` | 3,298 | — / 13 | — | 纯状态文案/配色/路径已覆盖；按钮可用性、真实窗口仍靠手工 |
 | `qbittorrent.rs` | 1,627 | — / 23 | — | `tracker_info()` 已能返回 status；50,000 条上限只告警，队列拥塞仍是运维问题 |
 | `autopost.rs` | 1,804 | — / 25 | — | 手动审计只测过 `posted`，未测重复/失败 |
@@ -77,13 +77,13 @@
 
 补 `parse_tracker_entries` + `tracker_status_note` 单测：`status=2` 翻成“tracker 已回包（做种 3 / 下载 14）”，`status=1` 翻成“tracker 还没回包”，`status=4` 带报错原文。生产侧同时把 `trackers()` 拆出 `tracker_info()`，并在 reseed/coverage 的 100% 收尾里写 tracker 状态；`same_hash_on_target` 增加 `status=2` 条件，tracker 没回包时不再记 `seeding`。
 
-验证：单测通过；当期 workspace 513 条通过（`artifacts/workspace-test-20261127-final3.log`）；补 GUI 测试后 523 条（`final5.log`）；clippy 通过。真实站点侧 pthome 16:32 变成 `status=2`，city13 长时间 `status=1`、恢复 qB 诊断配置后变 `status=4` 且手动 announce TLS reset，见 `SITES.md` 2.10。
+验证：单测通过；当期 workspace 513 条通过（`artifacts/workspace-test-20261127-final3.log`）；补 GUI 测试后 523 条（`final5.log`）；clippy 通过。真实站点侧 pthome 16:32 变成 `status=2`；city13 长时间 `status=1`、恢复 qB 诊断配置后变 `status=4`（stream truncated），但 17:50 站点页显示自己 1 个做种者、上传 70.08 MB、45.33 KB/s、连接 30:24，人工按站点页证据改成 `reseeded`，见 `SITES.md` 2.10。
 
 ### 4.7 tracker 终态不再只看 progress（S1，生产行为）
 
 `tracker_confirms_seeding()` 成为 reseed 和 coverage 共用的唯一判定：`progress >= 0.999` 且至少一条 tracker `status=2` 才写 `Reseeded/Assisted`；`status=1/4` 或读不到时写 `Verifying`，note 带“已发布并挂回 100%，但 tracker 还没确认，下一轮复核”。这比新增独立状态改动小，且复用现有收尾循环：下一轮 `collect_verifying` 会再问 tracker，直到 `status=2` 或用户手工处理。
 
-验证：`cargo test --workspace` 523 条全绿（`artifacts/workspace-test-20261127-final5.log`）；`coverage_e2e` 33 条；`clippy` 通过（`artifacts/clippy-20261127-final4.log`）。
+验证：`cargo test --workspace` 527 条全绿（`artifacts/workspace-test-20261127-final6.log`）；`coverage_e2e` 33 条；`clippy` 通过（`artifacts/clippy-20261127-final5.log`）。
 
 ### 4.8 GUI 纯状态测试（S7）
 
@@ -128,3 +128,4 @@
 1. ~~先做审计 S1（tracker 真值），再补 `qbittorrent` status=1/2/4 的 mock 测试~~（本轮已完成：共享 `tracker_confirms_seeding`，reseed/coverage 100% 后 tracker 未回包落 `Verifying`；status 1/2/4 断言已进 `qbittorrent` 单测）。
 2. 下一轮测试分支补 CLI 有效配置路径、`reseed.rs` 的真实轮询窗口（2-3 次 announce）、`all_tracker_urls` 50,000 条上限。
 3. 覆盖率接入 CI 后再更新本报告，不在本地反复尝试工具链。
+

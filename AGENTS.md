@@ -7,7 +7,7 @@ PT 站自动发种/跨站辅种工具：读 qB 里的内容组和 tracker，找�
 ```powershell
 Set-Location rust
 cargo fmt --all -- --check                           # 提交前必跑；CI 第一条就是它，格式不对直接红
-cargo test --workspace                              # 全量门禁：当前 523 条；提交前必跑
+cargo test --workspace                              # 全量门禁：当前 527 条；提交前必跑
 cargo clippy --workspace --all-targets -- -D warnings  # 全量门禁：提交前必跑
 cargo test -p bsend                                  # 单测 + e2e（快速回路）
 cargo test -p bsend --lib reseed::tests::exist_marker # 跑单条用例
@@ -31,7 +31,7 @@ Rust 2021；crate：`bsend`（引擎）、`bsend-cli`、`bsend-gui`。错误用 
 
 ## 不能违反的规则
 - **判断目标站有没有，以 qB 为准（2026-11-22 起）**：qB 里有目标站 tracker 就视为站上已有，没有就视为大概率没有；不再逐站搜索。只有真要发某条之前，才对目标站再确认一次。
-- **同 `info hash` 不等于已经给目标站做种，也不等于没做种**：qB 不允许同一个 `info hash` 存两份，遇到同 hash 时不能只看日志里的 `same_hash_skip`；必须查 qB 这条种子的 tracker 和 progress。`progress=1` 只代表本地校验完成；还要看目标站 tracker 的 qB 状态：`status=2` 才是 tracker 已回包，`status=1` 是还没联系上，`status=4` 是 tracker 报错。只有“只挂目标站 tracker + progress=1 + tracker status=2”才能记“站点已看见做种”；tracker 没回包只能写“已挂回、待站点确认”（2026-11-27 city13 88464 站点页 0 做种者就是反例）。只挂别站 tracker、没有 tracker，或 progress<1 都不能记“已做种”，也不能给原种补挂，更不能 add 第二条。**发后挂回返回 `SameHashSkip` 时不是发布成功**：审计要落 `same_hash_skipped`、note 写“当前没做种，待人工处理”，不能包成 `posted`；2026-11-22 熊猫 10265 就是旧版把这条报成 posted 的现场。
+- **同 `info hash` 不等于已经给目标站做种，也不等于没做种**：qB 不允许同一个 `info hash` 存两份，遇到同 hash 时不能只看日志里的 `same_hash_skip`；必须查 qB 这条种子的 tracker 和 progress。`progress=1` 只代表本地校验完成；还要看目标站 tracker 的 qB 状态：`status=2` 才是 tracker 已回包，`status=1` 是还没联系上，`status=4` 是 tracker 报错。只有“只挂目标站 tracker + progress=1 + tracker status=2”才能记“站点已看见做种”；tracker 没回包只能写“已挂回、待站点确认”（2026-11-27 city13 88464 在 17:20 站点页 0 做种者时是反例；17:50 站点页出现自己 1 个做种者、上传 70.08 MB，才按人工证据改成 `reseeded`，tracker 仍 status=4）。只挂别站 tracker、没有 tracker，或 progress<1 都不能记“已做种”，也不能给原种补挂，更不能 add 第二条。**发后挂回返回 `SameHashSkip` 时不是发布成功**：审计要落 `same_hash_skipped`、note 写“当前没做种，待人工处理”，不能包成 `posted`；2026-11-22 熊猫 10265 就是旧版把这条报成 posted 的现场。
 - **判重口径统一叫 `info hash` 和 pieces 指纹**：`info hash` 是整个 `info` 字典的 SHA1；`pieces` 是每个分片 SHA1 串；pieces 指纹（代码 `pieces_hash`）是对 `pieces` 整串再算的 SHA1，不是单个分片，也不是 `info hash`。分片长度不同会让 pieces 指纹不同，即使文件内容一样。
 - **audiences 的站内检索固定走 Kimi WebBridge**：用用户已登录的真实浏览器打开种子列表页、等 Cloudflare Turnstile token，再同源 `fetch` 搜索 URL；IMDb 区判重也走这个入口，不退回无头 HTTP，也不把“人机验证”页面当成“站内没有”。token 为空时明确报需要人工点一次验证；如果页面 `visibilityState=hidden`（窗口最小化或不在前台），Turnstile 不会渲染 iframe，要明确报“标签页在后台”并提示切到前台，不能硬等或盲发。详见 `doc/ARCHITECTURE.md` 5.5.2。
 - **一个种子只挂一个站点**：禁止 `addTrackers`，禁止把多个站的 announce 合并。上传种子时写目标站专属 `info.source`，让新 info hash 和源种子不同；发布后从目标站下载 `.torrent`，作为独立种子挂回 qB。
@@ -59,3 +59,4 @@ Rust 2021；crate：`bsend`（引擎）、`bsend-cli`、`bsend-gui`。错误用 
 - **每轮批量发种前先扫各站收件箱**：审核拒绝、删种、管理员留言都要在 `messages.php` 里看一遍，不能只看 `followup` 已经记录的种子状态；漏看的拒绝消息按站点逐条落 `review_rejected` 并修种子。
 - **熊猫发种暂停已撤销（2026-11-27）**：`panda` 已从 `assist.reseedPausedSites` 移出并留在 `autoReseedSites`；141840 已真发并挂回 qB 校验 100%、等审核。历史 141276 是候选种子 24 小时没做种被系统删的，旧账残留 `3f8ed774…` 挂失效 tracker，待人工清理；重发仍必须先“上传→立刻挂回 qB 做种”。
 - 详细规则见 `doc/ARCHITECTURE.md`；运行数据与巡检见 `doc/OPERATIONS.md`；站点清单见 `doc/SITES.md`；未完成项见 `doc/ROADMAP.md`。历史审计与批次报告已并入这些文档，不再单独保留。
+

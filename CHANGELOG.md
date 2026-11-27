@@ -7,10 +7,11 @@
 
 ### Changed
 
-- **校验到 100% 不会再自动写成“已转种/已辅种”**（2026-11-27）：`push_target_torrent` 和 `collect_verifying` 现在共用 `qbittorrent::tracker_confirms_seeding`，只有目标 tracker 明确 `status=2` 才落 `Reseeded/Assisted`；`status=1/4` 或读不到时落 `Verifying`，note 写明“已发布并挂回 100%，但 tracker 还没确认，下一轮复核”。旧行为在 city13 [88464](https://13city.org/details.php?id=88464) 上曾把 progress=1 写成已转种，站点页实际 0 做种者；新行为与站点页一致。回归测试 `coverage_e2e` 33 条全绿，全量 523 条。
+- **校验到 100% 不会再自动写成“已转种/已辅种”**（2026-11-27）：`push_target_torrent` 和 `collect_verifying` 现在共用 `qbittorrent::tracker_confirms_seeding`，只有目标 tracker 明确 `status=2` 才落 `Reseeded/Assisted`；`status=1/4` 或读不到时落 `Verifying`，note 写明“已发布并挂回 100%，但 tracker 还没确认，下一轮复核”。旧行为在 city13 [88464](https://13city.org/details.php?id=88464) 上曾把 progress=1 写成已转种，17:20 站点页实际 0 做种者；17:50 站点页出现自己 1 个做种者、上传 70.08 MB，人工按站点页证据改成 `reseeded`，note 保留 tracker 仍为 `status=4 stream truncated`。回归测试 `coverage_e2e` 33 条全绿，全量 527 条。
 - **GUI 状态文案补了 10 条纯状态测试**（2026-11-27）：`bsend-gui` 从 3 条测试增到 13 条，覆盖全部 `CoverageStatus` 的文案唯一性、审核三态配色、状态计数、配置路径优先级和状态栏短路径；不依赖 GPUI 窗口，Windows CI 的 `cargo test --workspace` 会跑。
+- **结构拆分第一批 + CLI 参数测试**（2026-11-27）：`reseed.rs` 里的标题角标裁剪和标题归一化拆到 `reseed/title.rs`；`bsend-cli` 的 clap 参数定义拆到 `cli.rs`，新增 4 条参数解析测试（默认配置、草稿+站点+yes、`--draft` 与 `--only` 冲突、`pull` 站点/URL）。CLI 从 16 条内联测试增到 20 条，加冒烟 3 条共 23 条；全量从 523 增到 527，fmt/clippy 全绿。
 
-- **“qB 校验 100%”和“站点已看见做种”拆成两件事**（2026-11-27）：`qbittorrent::tracker_info()` 现在读 qB `torrents/trackers` 的 `url/status/msg/num_seeds/num_leeches/num_downloaded`；reseed 和 coverage 的 100% 收尾会把 `status=2` 写成“tracker 已回包”、`status=1` 写成“tracker 还没回包”、`status=4` 带报错原文。`same_hash_on_target` 也要求 `status=2` 才算已做种，tracker 没回包只能落“同 hash 跳过/已挂回待确认”。2026-11-27 下午三条实测：iloli [56513](https://mua.xloli.cc/details.php?id=56513) tracker `status=2`、上传 131,072 字节、站点页 3 做种 / 14 下载；pthome [285040](https://www.pthome.net/details.php?id=285040) tracker 16:32 变 `status=2`；17:19 用真实浏览器详情页确认 `1 做种者`（自己，100%，qBittorrent/5.3.0）、`0 下载者`、完成 0 次，站点已登记做种但没有流量；city13 [88464](https://13city.org/details.php?id=88464) 长时间 `status=1`，恢复诊断配置后变 `status=4`，手动 announce 被 TLS reset，站点页 0 做种者，不能算做种成功。新增单测 `tracker_info_keeps_status_and_turns_it_into_an_honest_note`。
+- **“qB 校验 100%”和“站点已看见做种”拆成两件事**（2026-11-27）：`qbittorrent::tracker_info()` 现在读 qB `torrents/trackers` 的 `url/status/msg/num_seeds/num_leeches/num_downloaded`；reseed 和 coverage 的 100% 收尾会把 `status=2` 写成“tracker 已回包”、`status=1` 写成“tracker 还没回包”、`status=4` 带报错原文。`same_hash_on_target` 也要求 `status=2` 才算已做种，tracker 没回包只能落“同 hash 跳过/已挂回待确认”。2026-11-27 下午三条实测：iloli [56513](https://mua.xloli.cc/details.php?id=56513) tracker `status=2`、上传 131,072 字节、站点页 3 做种 / 14 下载；pthome [285040](https://www.pthome.net/details.php?id=285040) tracker 16:32 变 `status=2`；17:19 用真实浏览器详情页确认 `1 做种者`（自己，100%，qBittorrent/5.3.0）、`0 下载者`、完成 0 次，站点已登记做种但没有流量；city13 [88464](https://13city.org/details.php?id=88464) 长时间 `status=1`，恢复诊断配置后变 `status=4`（stream truncated），手动 announce 被 TLS reset，17:20 站点页 0 做种者；17:50 站点页出现自己 1 个做种者、上传 70.08 MB、45.33 KB/s、连接 30:24，按人工证据判已做种，覆盖格改成 `reseeded`，但 qB tracker 仍是 `status=4`，自动判定会保守留在 verifying。新增单测 `tracker_info_keeps_status_and_turns_it_into_an_honest_note`。
 - **调试证据目录不再进 Git**（2026-11-27）：`.gitignore` 增加 `/artifacts/`，实测目录里 7 个 `.torrent` 含 passkey；以后 `git add -A` 不会把它们带进公开仓库。
 - **文档同步当前基线**（2026-11-27）：白名单 45→46、`reseed.rs` 5k+→约 1.18 万行（待拆分）、手动 `reseed --yes` 写 `auto-audit.jsonl` 的 `manual=true` 记录并计额度、测试基线 507→523、GUI 不再从 workspace 测试排除（GUI 13 条纯状态测试已纳入）；qB 4 万条种子的 announce 队列和处置写进 `OPERATIONS.md` 4.0。
 
@@ -291,3 +292,4 @@
 
 首个 Rust 版可运行版本（引擎 + CLI + GUI）。能力与配置见 `rust/README.md`，
 站点规则/审计结论见 `doc/`。
+
