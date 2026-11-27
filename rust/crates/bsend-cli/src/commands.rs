@@ -1861,6 +1861,36 @@ mod tests {
         assert_eq!(merged.len(), 2);
     }
 
+    fn cli_test_config(tag: &str) -> Config {
+        let dir = std::env::temp_dir().join(format!("bsend-cli-{tag}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("boxsend.json");
+        let root = serde_json::json!({
+            "dataDir": dir.to_string_lossy(),
+            "downloader": {"url": "http://127.0.0.1:1"},
+            "sourceSites": [
+                {"id": "nx", "name": "NX", "url": "https://nx.example/", "framework": "NexusPHP", "enabled": true}
+            ]
+        });
+        std::fs::write(&path, root.to_string()).unwrap();
+        Config::load(&path).unwrap()
+    }
+
+    #[test]
+    fn status_with_empty_index_is_ok() {
+        assert!(cmd_status(&cli_test_config("status-empty")).is_ok());
+    }
+
+    #[test]
+    fn audit_without_file_is_ok() {
+        assert!(cmd_audit(&cli_test_config("audit-empty"), 7, None, false).is_ok());
+    }
+
+    #[test]
+    fn report_with_empty_index_is_ok() {
+        assert!(cmd_report(&cli_test_config("report-empty"), 10, None, None).is_ok());
+    }
+
     #[test]
     fn parses_pull_command() {
         let cli = Cli::try_parse_from([

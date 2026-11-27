@@ -6,16 +6,16 @@
 
 - 规模：Rust workspace 53 个 `.rs` 文件、40,770 行；`bsend` 30,783 行，`bsend-cli` 2,368 行，`bsend-gui` 3,210 行。
 - 主要模块：`reseed.rs` 3,585 行（主流程编排）；`reseed/form.rs` 2,485；`reseed/tests.rs` 3,433；`reseed/audit.rs` 753；`reseed/upload.rs` 615；`reseed/post.rs` 658；`sites/nexusphp.rs` 2,941；`coverage.rs` 2,106；`bsend-cli/commands.rs` 1,998；`bsend-cli/main.rs` 129。
-- 测试：全量 **528 条**全绿（核心库 455、coverage_e2e 33、other_version 2、skip_keywords 2、CLI 20、cli_smoke 3、GUI 13）。`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings` 通过。
+- 测试：全量 **533 条**全绿（核心库 456、coverage_e2e 34、other_version 2、skip_keywords 2、CLI 23、cli_smoke 3、GUI 13）。`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings` 通过。
 - 构建：`cargo build --release -p bsend-cli` 成功；`bsend status` 用真实配置输出 3,388 段内容、42,465 条成员种子；`bsend audit --days 1` 可读。
 - 工程：`rust/Cargo.toml` 声明 `rust-version = "1.88"`；本地 GNU 1.88 `cargo check -p bsend` 通过。GitHub Actions 已有 Linux/Windows 测试矩阵、`MSRV 1.88` job、`coverage` job（Ubuntu + `cargo-llvm-cov`，上传 `lcov.info`）。
-- 真实链路：2026-11-27 晚用重构后的 release 二进制实发 city13 `88467`、hdvideo `79168`，两条都完成上传 → 站内定位 → 下载站点种子 → qB 校验 100%；tracker 复查仍 `status=1`（42,469 条种子的 announce 队列 + 站点待审），只能记“已发布、已挂回、未确认做种”。pthome《Black》上传回包“该种子已存在！”，重复分支走通，没有重复挂种。证据见 `doc/SITES.md` 2.11。
+- 真实链路：2026-11-27 晚用重构后的 release 二进制实发 city13 `88467`、hdvideo `79168`，两条都完成上传 → 站内定位 → 下载站点种子 → qB 校验 100%；city13 在 19:52 tracker 转 `status=2`、上传 71.1 MB、2 个下载者，实际做种确认；hdvideo 仍是 `status=4 stream truncated` / `status=1`，只能记“已发布、已挂回、未确认做种”。pthome《Black》上传回包“该种子已存在！”，重复分支走通，没有重复挂种。证据见 `doc/SITES.md` 2.11。
 
 ## 二、七个维度
 
 ### 1. 文档一致性
 
-已同步：`AGENTS.md` 的模块行数、`ROADMAP.md` 4.4/4.5/4.6、`ARCHITECTURE.md` 的代码位置表、`SITES.md` 2.10/2.11、`CHANGELOG.md` 的拆分/MSRV/实发记录、`TESTING.md` 与 `TEST-REPORT-2026-11-27.md` 的 528/MSRV/覆盖率说明。
+已同步：`AGENTS.md` 的模块行数、`ROADMAP.md` 4.4/4.5/4.6、`ARCHITECTURE.md` 的代码位置表、`SITES.md` 2.10/2.11、`CHANGELOG.md` 的拆分/MSRV/实发记录、`TESTING.md` 与 `TEST-REPORT-2026-11-27.md` 的 533/MSRV/覆盖率说明。
 
 仍不一致：
 
@@ -46,9 +46,9 @@
 
 ### 5. 测试覆盖率
 
-- CI 已加覆盖率 job，但还没设阈值；本地 Windows GNU 缺 profiler runtime，不能产生行覆盖率数字。当前只有“528 条测试”这个数量基线，没有分支/行覆盖率基线。
-- 核心库测试集中在 `reseed/tests.rs`（168 条）和 `coverage_e2e`（33 条）；`sites/nexusphp.rs` 只有 36 条，详情页/审核页面变体仍是缺口。
-- CLI 20 条单测 + 3 条冒烟；`cmd_status`、`cmd_report`、`cmd_audit`、`cmd_autopost`、`cmd_pull`、`cmd_followup` 的真实配置加载和网络路径没有自动化。
+- CI 已加覆盖率 job，但还没设阈值；本地 Windows GNU 缺 profiler runtime，不能产生行覆盖率数字。当前只有“533 条测试”这个数量基线，没有分支/行覆盖率基线。
+- 核心库测试集中在 `reseed/tests.rs`（168 条）和 `coverage_e2e`（34 条）；`sites/nexusphp.rs` 只有 36 条，详情页/审核页面变体仍是缺口。
+- CLI 23 条单测 + 3 条冒烟；空索引/空审计/缺文件三条只读路径已补，但 `cmd_autopost`、`cmd_pull`、`cmd_followup` 的真实配置加载和网络路径没有自动化。
 - GUI 13 条纯状态测试；按钮可用性、真实窗口渲染仍靠手工。
 
 ### 6. 测试严谨性
@@ -61,7 +61,7 @@
 
 - CI 三块（测试矩阵、MSRV、覆盖率）已齐；本地和 CI 的工具链差异已写进 `TESTING.md`。
 - 工作区当前还有未提交的重构、`Cargo.toml`/`Cargo.lock`、coverage miss 改动，`origin/master` 仍是 `e86a616`；在提交前不能说“远端已验证”。
-- `artifacts/` 186 个文件、36.6 MB，其中 7 个 `.torrent` 含 `passkey=`；已被 `.gitignore` 挡住，但仍在磁盘上，打包/备份/误拷贝会泄露。Neat Freak 只列了候选，未删除，等用户确认。
+- `artifacts/` 277 个文件、38.34 MB，其中 7 个 `.torrent` 含 `passkey=`；已被 `.gitignore` 挡住，但仍在磁盘上，打包/备份/误拷贝会泄露。Neat Freak 只列了候选，未删除，等用户确认。
 - `Cargo.lock` 为配合 1.82 尝试把 `rust-embed` 从 8.14 降到 8.7，并把 lock 改成 `version = 3`；现在 MSRV 已定 1.88，这个降级没有注释说明，后续 `cargo update` 可能无意升回去。
 
 ## 三、问题清单
@@ -81,7 +81,7 @@
 | E2 | `bsend-cli/commands.rs` | 命令处理只有 8 条单测，真实配置/网络路径未覆盖 | 中 | `status`/`audit`/`pull` 回归只能靠手工 |
 | E3 | `sites/nexusphp.rs` | 36 条测试，详情页/审核页面变体覆盖不足 | 中 | 站点改版时容易漏解析分支 |
 | F1 | 工作区 | 重构和 Cargo 改动未提交，远端 CI 未跑 | 高 | 不能说“已完成”，也无法在远端复现 |
-| F2 | `artifacts/` | 186 文件 / 36.6 MB，7 个 torrent 含 passkey | 高 | 打包、备份、误拷贝会泄露站点凭据 |
+| F2 | `artifacts/` | 277 文件 / 38.34 MB，7 个 torrent 含 passkey | 高 | 打包、备份、误拷贝会泄露站点凭据 |
 | F3 | `rust/Cargo.lock` | `rust-embed` 8.14→8.7、lock v3 无说明 | 低 | 后续升级可能无意改变依赖基线 |
 | G1 | `doc/ROADMAP.md` 5.2 | “旧 startup.log 可以删”仍留着，但文件已不存在 | 低 | 清场清单有噪音 |
 
@@ -102,6 +102,14 @@
 - 验证：新增 poison 用例通过；`cargo test --workspace` 528+ 全绿；`cargo clippy --workspace --all-targets -- -D warnings` 通过。
 - 并行性：与 S4、S5 文件不重叠，可并行；不要和 `reseed.rs` 拆分同时改。
 
+### S2.5（P0，已执行）修“校验中”格子缺 `verifyHash` 的收尾断链
+
+- 问题：`reseed.rs` 在“progress=1、tracker 未确认”分支写 `Verifying` 后直接返回，`write_cell` 固定写 `verify_hash: None`；下一轮 `collect_verifying` 因凭据为空永久跳过。hdvideo [79168](https://hdvideo.top/details.php?id=79168) 因此卡在 `verifying`，即便主 announce 已 `status=2` 也无法收尾。
+- 做法：该分支写格后补 `verify_hash = site_hash`；`collect_verifying` 对旧格增加回填：从成员种子里找唯一挂目标站 tracker 的 hash，多条命中不猜；收尾后清空凭据。
+- 文件：`rust/crates/bsend/src/reseed.rs`、`rust/crates/bsend/src/coverage.rs`、`rust/crates/bsend/tests/coverage_e2e.rs`。
+- 验证：新增 `e2e_full_progress_without_tracker_keeps_verify_hash`、`verify_hash_backfill_uses_unique_target_tracker_only`；全量 533 条、`coverage_e2e` 34 条全绿；fmt/clippy 通过；hdvideo 现有格用 `run --sites hdvideo --limit 0` 自动补凭据并收尾为 `assisted`。
+- 并行性：与 S4-S7 文件不重叠；必须先于文档最终同步。
+
 ### S3（P1，串行，已执行）收窄 `.gitignore`
 
 - 做法：保留 `/artifacts/`；把根目录 `/*.txt`、`/*.html`、`/bsend-batch-*.md`、`/gatecheck-*.json`、`/rust/*.txt` 换成明确的证据文件名或统一移进 `artifacts/`，不要用会吃掉正式文档的通配。
@@ -109,19 +117,20 @@
 - 验证：`git check-ignore -v artifacts/<含 passkey 的 torrent>` 仍命中；在根目录临时建 `README-test.md`、`notes.txt` 确认不被忽略；`git status --ignored` 里证据文件仍在。
 - 并行性：与 S2、S4 文件不重叠，可并行。
 
-### S4（P2，串行）给覆盖率加基线门槛
+### S4（P2，串行，已执行）给覆盖率加基线门槛
 
 - 做法：等 CI 第一次 `lcov.info` 产出后，记录行覆盖率基线；在 `coverage` job 加 `--fail-under-lines <基线-2>` 或先只生成 summary 并人工对比，避免一上来就红。
 - 文件：`.github/workflows/rust.yml`。
 - 验证：本地用 CI artifact 读出的百分比与 job 日志一致；故意降一行覆盖不会误报。
+- 执行结果：从 run `45993230747` 的 `coverage-lcov` artifact 取到 `lcov.info`，行覆盖 `16842/21087 = 79.87%`；门槛设为 `77`（基线 -2 取整），写进 `cargo llvm-cov --fail-under-lines 77`。
 - 并行性：与 S2、S3 文件不重叠，可并行。
 
-### S5（P2，串行）补 CLI 命令处理测试
+### S5（P2，串行，已执行）补 CLI 命令处理测试
 
 - 做法：用临时目录生成最小 `boxsend.json`，覆盖 `cmd_status` 的空索引、`cmd_audit` 的空审计、`cmd_report` 的缺配置三条路径；不碰网络和 qB。
 - 文件：`rust/crates/bsend-cli/src/commands.rs`（测试模块）、`rust/crates/bsend-cli/tests/cli_smoke.rs`。
 - 验证：新增用例在 `cargo test -p bsend-cli` 通过；不改变现有 20+3 条。
-- 并行性：与 S2/S3/S4 文件不重叠；但和 S1 提交串行。
+- 执行结果：新增 `status_with_empty_index_is_ok`、`audit_without_file_is_ok`、`report_with_empty_index_is_ok`；CLI 单测 20→23，冒烟仍 3，全部通过。
 
 ### S6（P2，串行）给 `nexusphp.rs` 做下一轮拆分
 
@@ -159,7 +168,7 @@
 - `coverage.rs` 的转种臂关闭/暂停/禁转三种跳过场景改 `Event::ItemSkipped`，不再写新的 `CoverageStatus::Miss`；`ResolveOutcome::Miss` 仍写源种负缓存，口径已写进 ROADMAP 4.4。
 - MSRV 1.88 与 CI `msrv`/`coverage` job 已落地；本地 GNU 1.88 `cargo check` 通过。
 - 527 条测试、fmt、clippy 在最新重构上复跑通过；软件改进后增到 528 条。
-- 真实发种 city13 88467 / hdvideo 79168 已发布并挂回 100%；tracker `status=1` 与站点未审已如实记录，没有写成“已做种”。
+- 真实发种 city13 88467 / hdvideo 79168 已发布并挂回 100%；city13 tracker 转 `status=2` 并产生 71.1 MB 上传，hdvideo 仍 `status=4/1`；站点未审已如实记录，没有把 hdvideo 写成“已做种”。
 
 ## 七、本轮执行结果
 
@@ -168,5 +177,6 @@
 - S3 已执行：删掉根目录 `/*.txt`、`/*.html` 两条总通配，改成 `/audit-final*`、`/review*`、`/status-*`、`/test-*`、`/iloli-*` 等已知证据前缀；`artifacts/` 整目录仍忽略。`git check-ignore` 实测 `review-54.txt` 仍命中、`notes.txt`/`README.md`/`report.html` 不再被吞。
 - S4/S5/S6/S7/S8 未在本轮执行，作为后续可并行/串行项保留；其中 S8 清场必须等用户明确确认。
 - 旧 `doc/AUDIT-REPORT-2026-11-27.md` 保留为拆分前历史版，现状以本报告为准。
+
 
 

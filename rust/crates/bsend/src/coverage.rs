@@ -17,7 +17,9 @@ use anyhow::Result;
 
 use crate::bencode;
 use crate::config::{Config, DownloaderSettings, ReseedMode};
-use crate::index::{ContentIndex, CoverageStatus, ScanDelta, SiteCoverage, SourceRecord};
+use crate::index::{
+    ContentEntry, ContentIndex, CoverageStatus, ScanDelta, SiteCoverage, SourceRecord,
+};
 use crate::lock_unpoisoned;
 use crate::matcher;
 use crate::models::{JudgeLevel, Layout, LocalTorrent, TorrentFingerprint};
@@ -290,18 +292,39 @@ pub fn run_round(
     if !opts.dry_run {
         for entry in index.contents.values_mut() {
             for site in &active_sites {
-                let verdict = {
+                let (vh, backfilled) = {
                     let Some(cell) = entry.coverage.get(&site.id) else {
                         continue;
                     };
                     if cell.status != CoverageStatus::Verifying {
                         continue;
                     }
-                    let Some(vh) = cell.verify_hash.as_deref().filter(|h| !h.is_empty()) else {
-                        continue;
-                    };
-                    collect_verifying(qb.as_ref(), vh, &cfg.coverage)
+                    match cell.verify_hash.clone().filter(|h| !h.is_empty()) {
+                        Some(h) => (h, false),
+                        // 旧数据兼容：早期“100% 但 tracker 未确认”的格子没有落 verifyHash，
+                        // 按目标站 tracker 在成员种子里找回那条已挂回的种子，下一轮继续收尾。
+                        None => {
+                            let Some(adapter) = adapters.iter().find(|a| a.site_id == site.id)
+                            else {
+                                continue;
+                            };
+                            match verify_hash_from_entry(entry, adapter) {
+                                Some(h) => (h, true),
+                                None => continue,
+                            }
+                        }
+                    }
                 };
+                let verdict = collect_verifying(qb.as_ref(), &vh, &cfg.coverage);
+                if backfilled {
+                    if let Some(cell) = entry.coverage.get_mut(&site.id) {
+                        cell.verify_hash = Some(vh.clone());
+                    }
+                    emit(Event::Log(format!(
+                        "[{}] 补回校验凭据「{}」：{}",
+                        site.id, entry.name, vh
+                    )));
+                }
                 if let Some((status, note)) = verdict {
                     let Some(cell) = entry.coverage.get_mut(&site.id) else {
                         continue;
@@ -841,6 +864,22 @@ fn adapter_matches_tracker(a: &NexusPhp, tracker_hosts: &[String]) -> bool {
             .iter()
             .any(|h| t == *h || t.ends_with(&format!(".{h}")) || h.ends_with(&format!(".{t}")))
     })
+}
+
+/// 从成员种子里找回“挂着目标站 tracker”的那条 hash，作为旧“校验中”格子的收尾凭据。
+/// 只有唯一命中才返回；多条同时命中说明无法判断是哪条，宁可继续跳过也不猜。
+fn verify_hash_from_entry(entry: &ContentEntry, adapter: &NexusPhp) -> Option<String> {
+    let mut hits = entry
+        .torrents
+        .iter()
+        .filter(|(_, meta)| !meta.tracker_hosts.is_empty())
+        .filter(|(_, meta)| adapter_matches_tracker(adapter, &meta.tracker_hosts))
+        .map(|(hash, _)| hash.clone());
+    let first = hits.next()?;
+    if hits.next().is_some() {
+        return None;
+    }
+    Some(first)
 }
 
 /// 源站候选：先按 qB tracker 定向（本地种子的 tracker 就是来源站），避免 92 站全扫——
@@ -1608,6 +1647,53 @@ mod tests {
 
     fn adapter(id: &str, url: &str) -> Arc<NexusPhp> {
         Arc::new(NexusPhp::new(id, id, url, None, None).unwrap())
+    }
+
+    fn entry_with_torrents(rows: &[(&str, &[&str])]) -> ContentEntry {
+        let mut torrents = BTreeMap::new();
+        for (hash, hosts) in rows {
+            torrents.insert(
+                hash.to_string(),
+                crate::index::TorrentMeta {
+                    save_path: "Z:\\".to_string(),
+                    category: None,
+                    last_seen: 0,
+                    tracker_hosts: hosts.iter().map(|s| s.to_string()).collect(),
+                    hash_v2: None,
+                    added_on: 0,
+                },
+            );
+        }
+        ContentEntry {
+            name: "content".to_string(),
+            total_size: 1,
+            file_count: 1,
+            manifest_digest: "d".to_string(),
+            torrents,
+            tracker_hosts: Vec::new(),
+            first_seen: 0,
+            gone_since: None,
+            coverage: BTreeMap::new(),
+            source: None,
+            forbid_reseed: false,
+        }
+    }
+
+    #[test]
+    fn verify_hash_backfill_uses_unique_target_tracker_only() {
+        let hdvideo = adapter("hdvideo", "https://hdvideo.top/");
+        // 唯一挂目标站 tracker 的成员种子 → 可以当收尾凭据
+        let entry = entry_with_torrents(&[("aa", &["source.example"]), ("bb", &["hdvideo.top"])]);
+        assert_eq!(
+            verify_hash_from_entry(&entry, &hdvideo).as_deref(),
+            Some("bb")
+        );
+        // 两条都挂目标站 → 无法判断哪条是刚挂回的，不猜
+        let ambiguous = entry_with_torrents(&[("aa", &["hdvideo.top"]), ("bb", &["hdvideo.top"])]);
+        assert_eq!(verify_hash_from_entry(&ambiguous, &hdvideo), None);
+        // tracker host 为空的成员不参与匹配，避免把所有老种都算上
+        let empty = entry_with_torrents(&[("aa", &[])]);
+        assert_eq!(verify_hash_from_entry(&empty, &hdvideo), None);
     }
 
     #[test]

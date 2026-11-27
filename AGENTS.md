@@ -7,7 +7,7 @@ PT 站自动发种/跨站辅种工具：读 qB 里的内容组和 tracker，找�
 ```powershell
 Set-Location rust
 cargo fmt --all -- --check                           # 提交前必跑；CI 第一条就是它，格式不对直接红
-cargo test --workspace                              # 全量门禁：当前 528 条；提交前必跑
+cargo test --workspace                              # 全量门禁：当前 533 条；提交前必跑
 cargo clippy --workspace --all-targets -- -D warnings  # 全量门禁：提交前必跑
 cargo test -p bsend                                  # 单测 + e2e（快速回路）
 cargo test -p bsend --lib reseed::tests::exist_marker # 跑单条用例

@@ -66,7 +66,7 @@ jobs:
         with:
           workspaces: rust
       - uses: taiki-e/install-action@cargo-llvm-cov
-      - run: cargo llvm-cov --workspace --exclude bsend-gui --lcov --output-path lcov.info
+      - run: cargo llvm-cov --workspace --exclude bsend-gui --fail-under-lines 77 --lcov --output-path lcov.info
       - uses: actions/upload-artifact@v4
         with:
           name: coverage-lcov

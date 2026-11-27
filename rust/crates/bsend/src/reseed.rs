@@ -3613,6 +3613,15 @@ fn push_target_torrent(
                     Some(detail_url.to_string()),
                     &note,
                 );
+                // 100% 但 tracker 还没回包时也要留下收尾凭据，否则下一轮
+                // collect_verifying 没有 hash 可查，会永远卡在“校验中”。
+                if status == CoverageStatus::Verifying {
+                    if let Some(e) = index.contents.get_mut(&req.content_key) {
+                        if let Some(c) = e.coverage.get_mut(&req.target_site) {
+                            c.verify_hash = Some(site_hash.clone());
+                        }
+                    }
+                }
                 index.save()?;
                 return Ok(status);
             }

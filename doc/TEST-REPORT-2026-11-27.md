@@ -5,11 +5,11 @@
 
 ## 一、基线
 
-- 改动后 `cargo test --workspace`：**528 条全绿**（核心库 455、coverage_e2e 33、其余 2/2/20/3/13）。
+- 改动后 `cargo test --workspace`：**533 条全绿**（核心库 456、coverage_e2e 34、其余 2/2/23/3/13）。
 - `cargo fmt --check` 通过；`cargo clippy --workspace --all-targets -- -D warnings` 通过（只有 `proc-macro-error2` 的 future-incompat 提示，不是本项目代码）。
 - GitHub Actions `61cf4d2` run `45979346634` success（Linux + Windows 全量测试、fmt、clippy）；本地同一提交 527 条全绿。
 - 覆盖率：已接入 CI（`coverage` job 用 Ubuntu + `cargo-llvm-cov` 生成 `lcov.info` artifact）；本地 Windows GNU 工具链缺 profiler runtime，仍不能跑 `cargo llvm-cov`，下面用“测试/函数比”和缺口清单量化，不伪造百分比。
-- 最新重构后复跑：核心库 455、CLI 20 + 冒烟 3、e2e 33、GUI 13，全量 **528 条全绿**；`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings` 通过。MSRV 1.88 的 `cargo check` 在本机 GNU 工具链通过。
+- 最新重构后复跑：核心库 456、CLI 23 + 冒烟 3、e2e 34、GUI 13，全量 **533 条全绿**；`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings` 通过。MSRV 1.88 的 `cargo check` 在本机 GNU 工具链通过。
 - 推送后远端 CI：提交 `025b712`，run [45993230747](https://github.com/schalkiii/box-send/actions/runs/45993230747) 的 `MSRV 1.88`、覆盖率、Ubuntu、Windows 四个 job 全部 success；覆盖率 `lcov.info` 以 artifact `coverage-lcov` 保存。
 
 ## 二、逐模块缺口（量化）
@@ -89,7 +89,7 @@
 
 `tracker_confirms_seeding()` 成为 reseed 和 coverage 共用的唯一判定：`progress >= 0.999` 且至少一条 tracker `status=2` 才写 `Reseeded/Assisted`；`status=1/4` 或读不到时写 `Verifying`，note 带“已发布并挂回 100%，但 tracker 还没确认，下一轮复核”。这比新增独立状态改动小，且复用现有收尾循环：下一轮 `collect_verifying` 会再问 tracker，直到 `status=2` 或用户手工处理。
 
-验证：`cargo test --workspace` 528 条全绿（`artifacts/workspace-test-20261127-final13.log`）；`coverage_e2e` 33 条；`clippy` 通过（`artifacts/clippy-20261127-final14.log`）。
+验证：`cargo test --workspace` 533 条全绿（`artifacts/workspace-test-20261127-final15.log`）；`coverage_e2e` 34 条；CLI 23 + 冒烟 3；`clippy` 通过（`artifacts/clippy-20261127-final17.log`）。
 
 ### 4.8 GUI 纯状态测试（S7）
 
