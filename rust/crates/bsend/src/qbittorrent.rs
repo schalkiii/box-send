@@ -18,6 +18,7 @@ use reqwest::header::{HeaderMap, HeaderValue, REFERER};
 use serde_json::Value;
 
 use crate::bencode;
+use crate::lock_unpoisoned;
 use crate::models::LocalTorrent;
 
 /// qB `torrents/trackers` 里真实 http(s) tracker 的最小快照。
@@ -315,7 +316,7 @@ impl QBittorrent {
                 let tx = tx.clone();
                 let queue = &queue;
                 scope.spawn(move || loop {
-                    let next = { queue.lock().unwrap().pop_front() };
+                    let next = { lock_unpoisoned(queue).pop_front() };
                     let Some(h) = next else { break };
                     let files = self.torrent_files(&h).ok();
                     if tx.send((h, files)).is_err() {
@@ -350,7 +351,7 @@ impl QBittorrent {
             if attempt > 0 {
                 std::thread::sleep(Duration::from_millis(300));
             }
-            let preferred = *self.files_param.lock().unwrap();
+            let preferred = *lock_unpoisoned(&self.files_param);
             let order: [&'static str; 2] = match preferred {
                 Some("hash") => ["hash", "hashes"],
                 _ => ["hashes", "hash"],
@@ -383,7 +384,7 @@ impl QBittorrent {
                     continue;
                 };
                 if !files.is_empty() {
-                    *self.files_param.lock().unwrap() = Some(param);
+                    *lock_unpoisoned(&self.files_param) = Some(param);
                     return Ok(files);
                 }
             }

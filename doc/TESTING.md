@@ -81,19 +81,18 @@ python scripts\replay-reseed.py --draft 56 --expect 'source_sel[4] = 10' --expec
 
 ## 5. 覆盖率的现状
 
-目前没有可用的行覆盖率数字：
+2026-11-27 已把覆盖率接入 CI（`.github/workflows/rust.yml` 的 `coverage` job）：Ubuntu + stable + `llvm-tools-preview` + `cargo-llvm-cov`，跑 `cargo llvm-cov --workspace --exclude bsend-gui --lcov --output-path lcov.info`，把 `lcov.info` 作为 artifact 上传。先在 CI 建立趋势，不设会误伤重构的硬阈值。
 
-- GNU 工具链的 `cargo llvm-cov` 报 `can't find crate for profiler_builtins`；
-- MSVC 工具链缺 `llvm-tools-preview` 和 `link.exe`，装不上就跑不了。
+本地 Windows GNU 工具链仍不能跑 `cargo llvm-cov`：报 `can't find crate for profiler_builtins`，这是工具链没编 profiler runtime，不是测试失败。要看数字以 CI 的覆盖率为准；本地继续用“测试数 / 模块行数”和“具体未覆盖路径”衡量缺口，不能把测试数当成行覆盖率。
 
-现在用“测试数 / 模块行数”和“具体未覆盖路径”衡量缺口，不能把它当成行覆盖率。修好工具链后再把 `cargo llvm-cov --workspace --exclude bsend-gui --summary-only` 接进 CI，并设置不低于当前基线的门槛。
+**2026-11-27 当前基线**：`cargo test --workspace` 共 **528 条**全绿（核心库 455、`coverage_e2e` 33、其余 2/2/20/3/13）；`cargo fmt --check` 和 `cargo clippy --workspace --all-targets -- -D warnings` 都通过。GUI 不再需要排除，直接跑 workspace 测试；其中 GUI 的 13 条是不依赖窗口的纯状态测试；CLI 参数定义在 `cli.rs`，命令处理拆到 `commands.rs`，CLI 单测 20 + 冒烟 3。
 
-**2026-11-27 当前基线**：`cargo test --workspace` 共 **527 条**全绿（核心库 454、`coverage_e2e` 33、其余 2/2/20/3/13）；`cargo fmt --check` 和 `cargo clippy --workspace --all-targets -- -D warnings` 都通过。GUI 不再需要排除，直接跑 workspace 测试；其中 GUI 的 13 条是不依赖窗口的纯状态测试；CLI 参数解析拆到 `cli.rs` 后新增 4 条解析测试。
+**MSRV**：`rust/Cargo.toml` 声明 `rust-version = "1.88"`，CI 的 `MSRV 1.88` job 跑 `cargo check -p bsend -p bsend-cli`。本地已用 `cargo +1.88.0-x86_64-pc-windows-gnu check -p bsend` 验证通过；1.88 是当前依赖（`cookie_store`、`icu_*`、`time`）的真实下限，1.82/1.85 已证实不够。
 
 ## 6. 当前缺口
 
 - `qbittorrent.rs`：`all_tracker_urls` 的 50000 条上限告警只靠日志目测；tracker `status` 已能读，但扫描 4 万条种子的批量路径还没逐条核对 status。
-- `bsend-cli`：`cmd_status`、`cmd_report`、`cmd_audit`、`cmd_autopost`、`cmd_pull`、`cmd_followup` 的命令处理本身仍缺；集成冒烟只覆盖版本号、缺配置、坏配置三条退出路径，加 `cli_smoke.rs` 的 3 条一共 23 条（`main.rs` 16 条 + `cli.rs` 4 条 + 冒烟 3 条）。
+- `bsend-cli`：`cmd_status`、`cmd_report`、`cmd_audit`、`cmd_autopost`、`cmd_pull`、`cmd_followup` 的命令处理已拆到 `commands.rs`；CLI 单测 20 + `cli_smoke.rs` 3 条。集成冒烟仍只覆盖版本号、缺配置、坏配置三条退出路径，真实配置加载和网络命令仍缺。
 - `bsend-gui`：状态文案、审核三态配色、状态计数、配置路径和短路径已有 13 条纯状态测试；`jobs.rs`、`views/*` 的按钮可用性和真实窗口渲染仍没有自动化。
 - `kimi.rs`：`prepare_search_page` 的 40 轮等待、后台标签 `visibilityState=hidden` 分支仍缺。
 - `coverage_e2e.rs`：审核状态链路已覆盖上传被拦截、候选入口、回访的“未审 / 审核不通过 / 站上已找不到”，以及审核通过后下载站点种子并挂回 qB；仍缺的是其他业务分支，不是审核状态本身。

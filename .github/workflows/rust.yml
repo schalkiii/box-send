@@ -42,3 +42,32 @@ jobs:
       - name: test（Windows：全部 crate）
         if: runner.os == 'Windows'
         run: cargo test --workspace
+
+  msrv:
+    name: MSRV 1.88
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - run: cargo check -p bsend -p bsend-cli
+
+  coverage:
+    name: 覆盖率（核心库 + CLI）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - run: cargo llvm-cov --workspace --exclude bsend-gui --lcov --output-path lcov.info
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-lcov
+          path: rust/lcov.info

@@ -122,29 +122,34 @@
 - “等站点审核”做成机器可跟踪（2026-11-24）：新增覆盖状态 `pending_review`（等站点审核）、`review_rejected`（站点审核没过）、`gone_from_site`（站上已找不到）；发种时站点不给下载且提示是审核没放行、或页面标着未审 / 不通过，就落对应格子，不做站内检索兜底、不记失败、不重发。新命令 `bsend followup` 回访详情页，自动发种每轮开头也跑一次：审完了自动把站点种子下回来挂进 qB，没过就记原因，站上没了就记下来。页面标记按真实页面样本写（tey `title="未审"`、麒麟“审核不通过，原因：缺少海报或截图”、藏宝阁 `title="通过"`、熊猫“没有该ID的种子”），五张真实页面离线核对全部识别正确；判断顺序改成“明写的压过含糊的”，导航项“审核中心”不再被当成“审核中”。`bsend status` 的待跟进按类逐条点名，`bsend audit` 带“待跟进”一行，GUI 图例补齐。
 - hdvideo 78856、qilin 479362、panda 141276 三条历史结果已补挂完成，qB 校验 100%；qilin 站点仍显示审核不通过，2026-11-24 已把简介里 7 张不可达图换成 imgbox 图并提交，等复审（不影响做种）。
 
-### 4.4 旧“没有”记录不再新增
+### 4.4 旧“没有”记录不再新增（已完成 2026-11-27）
 
-新流程已经不依赖这些记录，但旧扫描路径还会写 `miss`。要逐步停掉：
+新流程已经不依赖这些记录，旧扫描路径的“不落结论”分支也已停写 `miss`：
 
-- 判断阶段不请求站点；
-- 不再为“内容 × 站点”写“没有”记录；
-- 旧记录保留作负缓存，不主动清空。
+- `coverage.rs` 的 `reseed_arm` 里，转种臂关闭、站点暂停、源种带禁转标记三种情况改发 `Event::ItemSkipped`，不再写 `CoverageStatus::Miss`；理由写清“本轮不落站点结论（不新增没有记录）”。
+- 源种检索本身确实找不到（`ResolveOutcome::Miss`）仍写 `SourceRecord::miss` 并落 `WaitSource`，这是“源种负缓存”，不是“内容 × 站点没有”；旧记录保留，不主动清空。
+- 回归：`cargo test -p bsend --lib coverage::` 26 条通过；全量 527 条通过。
 
-### 4.5 拆分 `reseed.rs`
+### 4.5 拆分 `reseed.rs`（已完成 2026-11-27）
 
-`reseed.rs` 已到 11,889 行（345 个函数、49 个公开函数、168 个测试），改一处容易碰坏别处。2026-11-27 已拆出第一批 `reseed/title.rs`（标题角标裁剪 + 标题归一化 + 对应测试），主体流程还没拆。计划继续拆成：
+`reseed.rs` 从 11,889 行降到 3,585 行，只保留共享类型、标题/简介解析和主流程编排；按职责拆成：
 
 ```
-reseed/mod.rs          共享类型和入口
-reseed/flow.rs         主流程编排
-reseed/judge.rs        判重和决策
-reseed/upload.rs       表单、上传、发后处理
-reseed/coverage_io.rs  覆盖记录读写
+reseed/form.rs      上传表单解析、字段构造、分类/图片/区域/站点规则（2,485 行）
+reseed/audit.rs     发布前检查、官方预审、审阅结论（753 行）
+reseed/upload.rs    构造并提交上传、上传失败回包解析
+reseed/post.rs      发后定位、详情页核对、挂回结论
+reseed/tests.rs     原 168 条 reseed 测试整体移出（3,433 行）
+reseed/title.rs     标题角标裁剪与标题归一化
 ```
 
-只移动代码，不改行为。每拆一批都要编译、跑测试，确认对外接口不变。
+CLI 侧 `main.rs` 从 2,380 行降到 129 行，只留 `main`、连接 qB、构建适配器；`cli.rs` 放参数定义，`commands.rs` 放全部 `cmd_*` 和格式化辅助（1,998 行）。拆分只移动代码，不改行为；拆分后核心库 455、CLI 20 + 冒烟 3、coverage 33、GUI 13，全量 528 条通过；`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings` 通过。`reseed.rs` 剩余 3.6k 行是主流程编排和共享解析，继续硬拆收益低于回归成本，暂不再拆。
 
-CLI 侧 2026-11-27 已拆出 `bsend-cli/src/cli.rs`（参数定义 + 4 条解析测试），`main.rs` 从 2,380 降到 2,188 行；`cmd_status`、`cmd_report`、`cmd_audit` 等处理函数仍在 `main.rs`，命令级测试仍缺。
+### 4.6 MSRV 与覆盖率 CI（已完成 2026-11-27）
+
+- `rust/Cargo.toml` 声明 `rust-version = "1.88"`。1.82 会撞上依赖的 edition 2024（`cpufeatures 0.3.1`），1.85 又不够 `cookie_store`、`icu_*`、`time` 的 1.86/1.88 要求；1.88 是当前依赖树的真实下限。
+- 本地 `cargo +1.88.0-x86_64-pc-windows-gnu check -p bsend` 通过。Windows MSVC 工具链在本机没有 `link.exe`/Windows SDK，1.88 的 MSVC 目标无法链接；CI 的 MSRV job 跑在 Ubuntu，不依赖本机 MSVC。
+- `.github/workflows/rust.yml` 新增 `msrv` job（1.88.0，`cargo check -p bsend -p bsend-cli`）和 `coverage` job（stable + `llvm-tools-preview` + `cargo-llvm-cov --workspace --exclude bsend-gui --lcov`，上传 `lcov.info`）。本地 Windows GNU 仍缺 profiler runtime，不能跑 `cargo llvm-cov`；覆盖数字以 CI artifact 为准，不伪造百分比。
 
 ## 5. 已知问题
 
@@ -270,7 +275,7 @@ CLI 侧 2026-11-27 已拆出 `bsend-cli/src/cli.rs`（参数定义 + 4 条解析
 
 1. **修回包识别和检索超时重试**（解锁 dragonhd、ptzone、pthome、city13、hdvideo、cyanbug 6 站）
    - 把"已存在！"这类站点明文判重归入重复，不再记失败；检索/详情页 30 秒超时允许重试 1–2 次；HTTP 200 但页面认不出来时，先站内搜索或看账号上传列表确认到底发没发，再决定重试。
-   - **2026-11-27 代码已落地**：`exist_marker` 认“该种子已存在！”/“该种子已经存在！”精确完整句，重填页（仍带 multipart 表单）和超过 8KB 的长页面都能识别；只写“已存在！”的长页面也兜底认。错误框原有口径不变，帮助文案反例有单测。检索、详情页、上传页抓取遇到超时/连接重置/连接关闭/管道断开时最多再试 2 次，403/登录墙/限流不重试。HTTP 200 未识别回包不再直接记失败，先按名称 + 总大小站内核对，核对不到落 `posted_unresolved`。`cargo test -p bsend --lib` 当时 440 条通过，`cargo clippy -D warnings` 通过；当前全量 527 条见 `TEST-REPORT-2026-11-27.md`。2026-11-27 下午已用真实回包补测 pthome `285040` 和 city13 `88464`：pthome 发布后挂回成功、tracker 在 16:32 变成 `status=2`；city13 发布后挂回成功但 tracker 长时间 `status=1`，恢复 qB 诊断配置后变 `status=4`，手动 announce 被 TLS 连接重置，站点页 `0 个做种者 / 2 个下载者`，属于 tracker 链路阻塞，不是回包识别问题。qingwa 真实回包、dragonhd/ptzone 真站超时复测仍未做。
+   - **2026-11-27 代码已落地**：`exist_marker` 认“该种子已存在！”/“该种子已经存在！”精确完整句，重填页（仍带 multipart 表单）和超过 8KB 的长页面都能识别；只写“已存在！”的长页面也兜底认。错误框原有口径不变，帮助文案反例有单测。检索、详情页、上传页抓取遇到超时/连接重置/连接关闭/管道断开时最多再试 2 次，403/登录墙/限流不重试。HTTP 200 未识别回包不再直接记失败，先按名称 + 总大小站内核对，核对不到落 `posted_unresolved`。`cargo test -p bsend --lib` 当时 440 条通过，`cargo clippy -D warnings` 通过；当前全量 527 条见 `TEST-REPORT-2026-11-27.md`。2026-11-27 下午已用真实回包补测 pthome `285040` 和 city13 `88464`：pthome 发布后挂回成功、tracker 在 16:32 变成 `status=2`；city13 发布后挂回成功但 tracker 长时间 `status=1`，恢复 qB 诊断配置后变 `status=4`，手动 announce 被 TLS 连接重置，站点页 `0 个做种者 / 2 个下载者`，属于 tracker 链路阻塞，不是回包识别问题。晚场又用重构后的二进制实发 city13 `88467`、hdvideo `79168`，两条都完成“上传回包 → 站内定位 → 下载站点种子 → qB 校验 100%”，但 tracker 复查仍 `status=1`（42,469 条种子的 announce 队列 + 站点待审），只能写“已发布、已挂回、未确认做种”，见 `SITES.md` 2.11。pthome《Black》上传回包“该种子已存在！”走通重复分支。qingwa 真实回包、dragonhd/ptzone 真站超时复测仍未完成：dragonhd 的通用样本已从 error 变 block（只剩样本无图），ptzone 真实候选被源站 hdsky 连接重置/超时挡住，qingwa 真实候选 ubits/1ptba 源也连不上。这属于外部站点链路，不是本项目的回包识别 bug。
    - 验收：city13 一条演练回包能正确归类；dragonhd、ptzone 检索超时自动重试后拿到结果；pthome"已存在！"落重复而不是失败；有单测覆盖这几类回包，一轮 dry-run 没有未识别回包。
 2. **补 G2 选档映射**（hdfans、kufei、hdvideo、ptsbao、city13、ptzone 6 站）
    - 把今日被拦条目的片源、音频 token 对到站点真实选项；站点列表里没有的选项落人工，不硬填。

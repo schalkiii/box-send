@@ -45,6 +45,14 @@ pub use resolver::{resolve_source, ResolveOutcome, SiteClient, SourceSite};
 pub use sites::{builtin_sites, url_host, Framework, SiteDef};
 pub use throttle::{BudgetKind, SiteThrottle};
 
+/// 取互斥锁，遇到持锁线程 panic 留下的 poison 时取回内部值继续。
+/// 计数器、队列、缓存没有跨字段不变量，继续用比整轮任务一起 panic 更安全。
+pub(crate) fn lock_unpoisoned<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// 原子写：先写 `.tmp` 再 rename（进程中断/磁盘满时旧文件保持完好）。
 /// 索引/配置已有各自的实现；pieces-cache、formcheck/gatecheck 等台账统一走这里。
 pub fn atomic_write(path: &std::path::Path, body: &[u8]) -> anyhow::Result<()> {
@@ -56,4 +64,27 @@ pub fn atomic_write(path: &std::path::Path, body: &[u8]) -> anyhow::Result<()> {
     std::fs::write(&tmp, body).with_context(|| format!("写不进 {}", tmp.display()))?;
     std::fs::rename(&tmp, path).with_context(|| format!("落盘 {} 失败", path.display()))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::lock_unpoisoned;
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn lock_unpoisoned_recovers_after_holder_panics() {
+        let counter = Arc::new(Mutex::new(0usize));
+        let poisoner = Arc::clone(&counter);
+        let handle = std::thread::spawn(move || {
+            let mut guard = poisoner.lock().expect("先拿到锁");
+            *guard += 1;
+            panic!("持锁线程故意 panic，留下 poison");
+        });
+        assert!(handle.join().is_err());
+
+        let mut recovered = lock_unpoisoned(&counter);
+        assert_eq!(*recovered, 1, "panic 前写入的值不能丢");
+        *recovered += 1;
+        assert_eq!(*recovered, 2, "恢复后还能继续写");
+    }
 }

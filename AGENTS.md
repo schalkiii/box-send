@@ -7,7 +7,7 @@ PT 站自动发种/跨站辅种工具：读 qB 里的内容组和 tracker，找�
 ```powershell
 Set-Location rust
 cargo fmt --all -- --check                           # 提交前必跑；CI 第一条就是它，格式不对直接红
-cargo test --workspace                              # 全量门禁：当前 527 条；提交前必跑
+cargo test --workspace                              # 全量门禁：当前 528 条；提交前必跑
 cargo clippy --workspace --all-targets -- -D warnings  # 全量门禁：提交前必跑
 cargo test -p bsend                                  # 单测 + e2e（快速回路）
 cargo test -p bsend --lib reseed::tests::exist_marker # 跑单条用例
@@ -26,7 +26,7 @@ cargo build --release -p bsend-cli                   # 产物 rust/target/releas
 Rust 2021；crate：`bsend`（引擎）、`bsend-cli`、`bsend-gui`。错误用 `anyhow`，HTTP 用 `reqwest`（默认跟随重定向），种子文件格式（Bencode）自实现于 `bencode.rs`。
 
 ## 目录与约定
-- `rust/crates/bsend/src/`：`reseed.rs`（审阅/上传/挂回主流程，单文件约 1.19 万行，已拆出 `reseed/title.rs` 第一批，主体待拆分）、`autopost.rs`（自动发种编排）、`coverage.rs` / `report.rs`（覆盖记录与统计）、`matcher.rs`（判重）、`sites/nexusphp.rs`（站点适配）、`config.rs`、`gates.rs`；CLI 参数定义在 `bsend-cli/src/cli.rs`。
+- `rust/crates/bsend/src/`：`reseed.rs`（审阅/上传/挂回主流程，约 3.6k 行；表单解析、预审、上传、发后写回、测试已拆到 `reseed/{form,audit,upload,post,tests,title}.rs`）、`autopost.rs`（自动发种编排）、`coverage.rs` / `report.rs`（覆盖记录与统计）、`matcher.rs`（判重）、`sites/nexusphp.rs`（站点适配）、`config.rs`、`gates.rs`；CLI 参数定义在 `bsend-cli/src/cli.rs`，命令处理在 `bsend-cli/src/commands.rs`。MSRV 1.88（`rust/Cargo.toml` 声明，CI 有 `MSRV 1.88` job）。
 - 注释语言跟随所在文件既有习惯（现状以中文为主）；日志与文档用中文。
 
 ## 不能违反的规则

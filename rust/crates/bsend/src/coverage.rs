@@ -18,6 +18,7 @@ use anyhow::Result;
 use crate::bencode;
 use crate::config::{Config, DownloaderSettings, ReseedMode};
 use crate::index::{ContentIndex, CoverageStatus, ScanDelta, SiteCoverage, SourceRecord};
+use crate::lock_unpoisoned;
 use crate::matcher;
 use crate::models::{JudgeLevel, Layout, LocalTorrent, TorrentFingerprint};
 use crate::piecesapi::{Capability, PiecesApi, QueryOutcome};
@@ -419,7 +420,7 @@ pub fn run_round(
     let dl = Arc::new(cfg.downloader.clone());
     let (tx, rx) = channel::<Event>();
 
-    let n_sites = pool.lock().unwrap().len();
+    let n_sites = lock_unpoisoned(&pool).len();
     let n_workers = cfg.coverage.max_concurrent_sites.max(1).min(n_sites.max(1));
     emit(Event::Log(format!(
         "开工：{} 个站、{} 格待查、并发 {} 站",
@@ -536,7 +537,7 @@ pub fn run_round(
             emit(Event::Log("一个站 worker 异常退出（本轮继续）".to_string()));
         }
     }
-    pieces.lock().unwrap().save().ok();
+    lock_unpoisoned(&pieces).save().ok();
     for kind in [BudgetKind::Search, BudgetKind::Source, BudgetKind::Upload] {
         report.budget.insert(
             kind.label(),
@@ -567,7 +568,7 @@ fn worker_loop(
 ) {
     loop {
         // 认领一个站的队列（整站串行，保持本站节奏）
-        let next = { pool.lock().unwrap().pop() };
+        let next = { lock_unpoisoned(&pool).pop() };
         let Some((site_id, items)) = next else { break };
         let Some(adapter) = adapters.iter().find(|a| a.site_id == site_id) else {
             // 理论不可达（队列按 adapters 建），真发生了也别静默丢一整站的工作
@@ -612,7 +613,7 @@ fn resolve_source_by_pieces(
     target_site: &str,
 ) -> Option<(String, String, String)> {
     let ph = {
-        let mut api = pieces.lock().unwrap();
+        let mut api = lock_unpoisoned(pieces);
         api.pieces_hash_for(qb, &item.rep_hash)?
     };
     for a in source_adapters(adapters, target_site, &item.tracker_hosts) {
@@ -626,7 +627,7 @@ fn resolve_source_by_pieces(
             continue;
         }
         let hit = {
-            let mut api = pieces.lock().unwrap();
+            let mut api = lock_unpoisoned(pieces);
             let mut out = api.query(&a.site_id, a.base.as_str(), std::slice::from_ref(&ph));
             if out == QueryOutcome::Auth && api.harvest_passkeys(qb) > 0 {
                 out = api.query(&a.site_id, a.base.as_str(), std::slice::from_ref(&ph));
@@ -680,7 +681,7 @@ fn prefetch_pieces(
     throttle: &SiteThrottle,
 ) -> HashMap<String, (String, String)> {
     let mut out = HashMap::new();
-    let mut api = pieces.lock().unwrap();
+    let mut api = lock_unpoisoned(pieces);
     if api.capability(site_id) == Capability::Unsupported {
         return out;
     }
@@ -1289,20 +1290,25 @@ fn reseed_arm(
     done: impl Fn(CoverageStatus, String) -> Event,
 ) -> Event {
     if cov.reseed_mode == ReseedMode::Off {
-        return done(CoverageStatus::Miss, "站内没有（转种臂关闭）".into());
+        return Event::ItemSkipped {
+            site_id: site_id.to_string(),
+            key: item.key.clone(),
+            reason: "转种臂关闭，本轮不落站点结论（不新增没有记录）".into(),
+        };
     }
     if cov.reseed_paused_sites.iter().any(|s| s == site_id) {
-        return done(
-            CoverageStatus::Miss,
-            "站内没有（该站暂不参与转种：无发布权限/上传界面 v1 不支持，见 assist.reseedPausedSites）"
-                .into(),
-        );
+        return Event::ItemSkipped {
+            site_id: site_id.to_string(),
+            key: item.key.clone(),
+            reason: "该站暂不参与转种（无发布权限/上传界面 v1 不支持），本轮不落结论".into(),
+        };
     }
     if item.forbid_reseed {
-        return done(
-            CoverageStatus::Miss,
-            "站内没有（源种带禁转标记，永不转种；辅种不受影响）".into(),
-        );
+        return Event::ItemSkipped {
+            site_id: site_id.to_string(),
+            key: item.key.clone(),
+            reason: "源种带禁转标记，永不转种；本轮不落站点结论".into(),
+        };
     }
     let mk_draft_event =
         |status: CoverageStatus, note: String, src: SourceRecord| Event::ItemDone {
@@ -1567,12 +1573,12 @@ fn fingerprint_of(
     cache: &FingerprintCache,
     hash: &str,
 ) -> Option<Arc<TorrentFingerprint>> {
-    if let Some(f) = cache.lock().unwrap().get(hash) {
+    if let Some(f) = lock_unpoisoned(cache).get(hash) {
         return Some(f.clone());
     }
     let files = qb.torrent_files(hash).ok()?;
     let fp = Arc::new(TorrentFingerprint::from_local_files(&files));
-    cache.lock().unwrap().insert(hash.to_string(), fp.clone());
+    lock_unpoisoned(cache).insert(hash.to_string(), fp.clone());
     Some(fp)
 }
 

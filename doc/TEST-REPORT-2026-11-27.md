@@ -5,25 +5,29 @@
 
 ## 一、基线
 
-- 改动后 `cargo test --workspace`：**527 条全绿**（核心库 454、coverage_e2e 33、其余 2/2/20/3/13）。
+- 改动后 `cargo test --workspace`：**528 条全绿**（核心库 455、coverage_e2e 33、其余 2/2/20/3/13）。
 - `cargo fmt --check` 通过；`cargo clippy --workspace --all-targets -- -D warnings` 通过（只有 `proc-macro-error2` 的 future-incompat 提示，不是本项目代码）。
 - GitHub Actions `61cf4d2` run `45979346634` success（Linux + Windows 全量测试、fmt、clippy）；本地同一提交 527 条全绿。
-- 覆盖率工具：GNU 工具链缺 `profiler_builtins`，`cargo llvm-cov` 失败；MSVC + `rust-lld` 方案需要 `llvm-tools-preview`，下载组件长时间无响应，本轮停止，未产生行覆盖率数字。下面用“测试/函数比”和缺口清单量化，不伪造百分比。
+- 覆盖率：已接入 CI（`coverage` job 用 Ubuntu + `cargo-llvm-cov` 生成 `lcov.info` artifact）；本地 Windows GNU 工具链缺 profiler runtime，仍不能跑 `cargo llvm-cov`，下面用“测试/函数比”和缺口清单量化，不伪造百分比。
+- 最新重构后复跑：核心库 455、CLI 20 + 冒烟 3、e2e 33、GUI 13，全量 **528 条全绿**；`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings` 通过。MSRV 1.88 的 `cargo check` 在本机 GNU 工具链通过。
 
 ## 二、逐模块缺口（量化）
 
 | 模块 | 生产行数（近似） | 函数/测试 | 测试/函数比 | 主要缺口 |
 |---|---:|---:|---:|---|
-| `reseed.rs` | 11,889 | 345 / 168 | 0.49 | 标题/别名/判重分支多，上传回包与状态迁移覆盖不均；本轮已把标题角标裁剪和标题归一化拆到 `reseed/title.rs`，tracker 终态已补共享判定，轮询 2-3 次的真实回包仍靠站点 |
-| `sites/nexusphp.rs` | 3,091 | — / 36 | — | 名称判定的年份/分辨率冲突缺显式用例；审核页面变体未穷举 |
-| `coverage.rs` | 2,164 | — / 26 | — | `collect_verifying` 已接 tracker 真值；并发超时、旧 miss 路径仍缺 |
-| `bsend-cli/main.rs` | 2,188 | — / 20 | — | 命令参数组合；参数定义已拆到 `cli.rs`（4 条解析测试），另有 `tests/cli_smoke.rs` 3 条，合计 23 |
+| `reseed.rs` | 3,585 | 主流程编排 | — | 表单/预审/上传/发后写回已拆到子模块；剩下的标题/简介解析和主流程仍靠站点真实回包验证 |
+| `reseed/form.rs` | 2,485 | — / 子模块测试 | — | 真实站点字段组合靠 gatecheck / e2e |
+| `reseed/tests.rs` | 3,433 | — / 168 | — | 原 reseed 单测整体迁出，测试本身未减 |
+| `sites/nexusphp.rs` | 2,941 | — / 36 | — | 名称判定的年份/分辨率冲突缺显式用例；审核页面变体未穷举 |
+| `coverage.rs` | 2,106 | — / 26 | — | `collect_verifying` 已接 tracker 真值；并发超时、旧 miss 路径仍缺 |
+| `bsend-cli/commands.rs` | 1,998 | — / 8 | — | 命令处理已从 `main.rs` 迁出；真实配置加载和网络命令仍靠手工/e2e |
+| `bsend-cli/main.rs` | 129 | — / 0 | — | 只剩入口、qB 连接、适配器构建 |
 | `bsend-gui` | 3,298 | — / 13 | — | 纯状态文案/配色/路径已覆盖；按钮可用性、真实窗口仍靠手工 |
-| `qbittorrent.rs` | 1,627 | — / 23 | — | `tracker_info()` 已能返回 status；50,000 条上限只告警，队列拥塞仍是运维问题 |
-| `autopost.rs` | 1,804 | — / 25 | — | 手动审计只测过 `posted`，未测重复/失败 |
-| `config.rs` | 1,167 | — / 18 | — | 测试临时目录按进程号共用（本次修） |
-| `gates.rs` | 962 | — / 20 | — | 真实站点组合仍靠 e2e |
-| `report.rs` | 1,501 | — / 27 | — | 大索引、空索引、异常状态聚合 |
+| `qbittorrent.rs` | 1,652 | — / 23 | — | `tracker_info()` 已能返回 status；50,000 条上限只告警，队列拥塞仍是运维问题 |
+| `autopost.rs` | 1,776 | — / 25 | — | 手动审计已补 duplicate/blocked；长期 run id 未定 |
+| `config.rs` | 1,133 | — / 18 | — | 测试临时目录按测试名隔离（本次修） |
+| `gates.rs` | 905 | — / 20 | — | 真实站点组合仍靠 e2e |
+| `report.rs` | 1,425 | — / 27 | — | 大索引、空索引、异常状态聚合 |
 
 缺口优先级：`reseed` 的 tracker 终态已落共享判定（复用 `Verifying` 继续复核），轮询窗口仍只有一轮；`coverage` 的收尾已接同一判定；`autopost` 的手动审计异常路径、`config` 的测试隔离、`nexusphp` 的判别词冲突已补；GUI 纯状态已补 10 条，CLI 命令组合和真实窗口放到下一轮。
 
@@ -84,7 +88,7 @@
 
 `tracker_confirms_seeding()` 成为 reseed 和 coverage 共用的唯一判定：`progress >= 0.999` 且至少一条 tracker `status=2` 才写 `Reseeded/Assisted`；`status=1/4` 或读不到时写 `Verifying`，note 带“已发布并挂回 100%，但 tracker 还没确认，下一轮复核”。这比新增独立状态改动小，且复用现有收尾循环：下一轮 `collect_verifying` 会再问 tracker，直到 `status=2` 或用户手工处理。
 
-验证：`cargo test --workspace` 527 条全绿（`artifacts/workspace-test-20261127-final6.log`）；`coverage_e2e` 33 条；`clippy` 通过（`artifacts/clippy-20261127-final5.log`）。
+验证：`cargo test --workspace` 528 条全绿（`artifacts/workspace-test-20261127-final13.log`）；`coverage_e2e` 33 条；`clippy` 通过（`artifacts/clippy-20261127-final14.log`）。
 
 ### 4.8 GUI 纯状态测试（S7）
 

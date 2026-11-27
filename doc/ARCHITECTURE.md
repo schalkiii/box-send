@@ -310,7 +310,13 @@ Windows 计划任务只给命令示例，不自动创建。需要常驻时用任
 
 | 文件 | 负责什么 |
 | --- | --- |
-| `reseed.rs` | 单条内容的审阅、上传、发后挂回，主流程，文件很大 |
+| `reseed.rs` | 单条内容的共享类型、标题/简介解析和主流程编排；3,585 行 |
+| `reseed/form.rs` | 上传表单解析、字段构造、分类/图片/区域/站点规则 |
+| `reseed/audit.rs` | 发布前检查、官方预审、审阅结论 |
+| `reseed/upload.rs` | 构造并提交上传、上传失败回包解析 |
+| `reseed/post.rs` | 发后定位、详情页核对、挂回结论 |
+| `reseed/tests.rs` | 原 `reseed` 单测（168 条） |
+| `reseed/title.rs` | 标题角标裁剪与标题归一化 |
 | `qbittorrent.rs` | qB 登录、种子列表、导出、添加、校验 |
 | `coverage.rs` | 内容索引、tracker 归一化、覆盖记录、一轮扫描编排 |
 | `index.rs` / `models.rs` | 覆盖记录的数据结构、内容条目、哈希/文件清单模型 |
@@ -331,10 +337,12 @@ Windows 计划任务只给命令示例，不自动创建。需要常驻时用任
 | `lock.rs` | 同一数据目录只允许一个长写任务 |
 | `piecesapi.rs` | 站点 pieces-hash 批量查询通道 |
 | `mediainfo.rs` | 本地 MediaInfo 提取（Windows DLL 接口） |
-| `bsend-cli/src/main.rs` | `status`、`report`、`autopost`、`audit` 等命令 |
+| `bsend-cli/src/main.rs` | 入口、连接 qB、构建适配器（129 行） |
+| `bsend-cli/src/cli.rs` | clap 命令与参数定义 |
+| `bsend-cli/src/commands.rs` | `status`、`report`、`autopost`、`audit` 等命令处理与格式化辅助 |
 | `bsend-gui/src/*` | 桌面界面、后台任务、配置与诊断视图 |
 
-`reseed.rs` 已超过 9,000 行，计划按“共享入口、主流程、判重、上传、记录读写”拆开。拆分只移动代码，不改行为，每拆一批都要能编译和跑测试。
+`reseed.rs` 2026-11-27 已从 11,889 行拆到 3,585 行：表单、预审、上传、发后写回、测试分别拆到 `reseed/{form,audit,upload,post,tests}.rs`，`reseed.rs` 只保留共享类型、标题/简介解析和主流程。CLI 的 `main.rs` 同步从 2,380 行降到 129 行，参数在 `cli.rs`、命令处理在 `commands.rs`。拆分只移动代码，不改行为；全量 528 条测试、fmt、clippy 都通过。剩下的主流程编排继续硬拆收益低于回归成本，暂不再拆。
 
 ## 12. 已经踩过的坑
 

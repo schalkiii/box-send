@@ -9,6 +9,8 @@ use std::time::{Duration, Instant};
 
 use rand::Rng;
 
+use crate::lock_unpoisoned;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BudgetKind {
     /// 目标站检索（辅种臂：搜目标站 + 下载目标站 .torrent 判定）
@@ -146,12 +148,12 @@ impl SiteThrottle {
 
     /// 预算余量（纯查询，报告用）
     pub fn budget_left(&self, kind: BudgetKind) -> i32 {
-        let used = self.used.lock().unwrap().get(&kind).copied().unwrap_or(0);
+        let used = lock_unpoisoned(&self.used).get(&kind).copied().unwrap_or(0);
         self.max[&kind] - used
     }
 
     pub fn used(&self, kind: BudgetKind) -> i32 {
-        self.used.lock().unwrap().get(&kind).copied().unwrap_or(0)
+        lock_unpoisoned(&self.used).get(&kind).copied().unwrap_or(0)
     }
 
     pub fn budget_max(&self, kind: BudgetKind) -> i32 {
@@ -161,7 +163,7 @@ impl SiteThrottle {
     /// 站点报了限流（429 / 503 / 限流提示页）：该站下次请求间隔翻倍，并把本轮最低间隔
     /// 抬到 60 秒（站点明说「限制访问间隔 60 秒/次」时，8 秒节奏只会反复撞墙）。
     pub fn note_rate_limited(&self, site_id: &str) {
-        let mut pace = self.pace.lock().unwrap();
+        let mut pace = lock_unpoisoned(&self.pace);
         let p = pace
             .entry(site_id.to_string())
             .or_insert_with(SitePace::new);
@@ -173,7 +175,7 @@ impl SiteThrottle {
     /// **不清**「本轮最低间隔」：限流页把该站抬到 60 秒/次后，一次成功就清零会在
     /// 8 秒后再次撞限流（实机 hdsky 模式）；地板按轮次保留，下一轮重新学习。
     pub fn note_ok(&self, site_id: &str) {
-        let mut pace = self.pace.lock().unwrap();
+        let mut pace = lock_unpoisoned(&self.pace);
         if let Some(p) = pace.get_mut(site_id) {
             p.backoff = 1;
         }
@@ -185,7 +187,7 @@ impl SiteThrottle {
         {
             // 预算以「动作为单位」而不以「站点为单位」：一轮辅种里同一个站可能被
             // 检索臂和源种臂各碰一次，两边都该被计数。
-            let mut used = self.used.lock().unwrap();
+            let mut used = lock_unpoisoned(&self.used);
             let u = used.entry(kind).or_insert(0);
             if *u >= self.max[&kind] {
                 return None;
@@ -193,7 +195,7 @@ impl SiteThrottle {
             *u += 1;
         }
         let now = Instant::now();
-        let mut pace = self.pace.lock().unwrap();
+        let mut pace = lock_unpoisoned(&self.pace);
         let p = match pace.entry(site_id.to_string()) {
             Entry::Occupied(e) => e.into_mut(),
             Entry::Vacant(e) => e.insert(SitePace::new()),
@@ -238,7 +240,7 @@ impl SiteThrottle {
 
     /// 追加预算（人工确认后继续跑剩余计划时用）
     pub fn add_budget(&self, kind: BudgetKind, n: i32) {
-        let mut used = self.used.lock().unwrap();
+        let mut used = lock_unpoisoned(&self.used);
         let u = used.entry(kind).or_insert(0);
         *u = (*u - n).max(0);
     }
@@ -246,7 +248,7 @@ impl SiteThrottle {
     /// 测试专用：把某站的「上次请求时刻」拨到 `ago` 之前
     #[cfg(test)]
     pub(crate) fn force_last(&self, site_id: &str, ago: Duration) {
-        let mut pace = self.pace.lock().unwrap();
+        let mut pace = lock_unpoisoned(&self.pace);
         let p = pace
             .entry(site_id.to_string())
             .or_insert_with(SitePace::new);
