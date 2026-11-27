@@ -5,8 +5,8 @@
 
 ## 一、基线
 
-- 改动前 `cargo test --workspace`：507 条全绿（核心库 448、coverage_e2e 33、其余 2/2/16/3/3）。
-- `cargo fmt --check` 通过；`cargo clippy --workspace --all-targets -- -D warnings` 通过。
+- 改动后 `cargo test --workspace`：513 条全绿（核心库 454、coverage_e2e 33、其余 2/2/16/3/3）。
+- `cargo fmt --check` 通过；`cargo clippy --workspace --all-targets -- -D warnings` 通过（只有 `proc-macro-error2` 的 future-incompat 提示，不是本项目代码）。
 - 覆盖率工具：GNU 工具链缺 `profiler_builtins`，`cargo llvm-cov` 失败；MSVC + `rust-lld` 方案需要 `llvm-tools-preview`，下载组件长时间无响应，本轮停止，未产生行覆盖率数字。下面用“测试/函数比”和缺口清单量化，不伪造百分比。
 
 ## 二、逐模块缺口（量化）
@@ -26,7 +26,7 @@
 
 缺口优先级：`reseed` 的 tracker 终态、`coverage` 的收尾终态、`autopost` 的手动审计异常路径、`config` 的测试隔离、`nexusphp` 的判别词冲突。GUI 和 CLI 命令组合放到下一轮，本轮不硬凑。
 
-## 三、测试计划（新增 5 条）
+## 三、测试计划（新增 6 条）
 
 | 用例 | 测试目标 | 输入构造 | 预期检查点 |
 |---|---|---|---|
@@ -73,6 +73,12 @@
 
 验证：单测通过。
 
+### 4.6 tracker 状态不能只看 progress（`qbittorrent.rs`）
+
+补 `parse_tracker_entries` + `tracker_status_note` 单测：`status=2` 翻成“tracker 已回包（做种 3 / 下载 14）”，`status=1` 翻成“tracker 还没回包”，`status=4` 带报错原文。生产侧同时把 `trackers()` 拆出 `tracker_info()`，并在 reseed/coverage 的 100% 收尾里写 tracker 状态；`same_hash_on_target` 增加 `status=2` 条件，tracker 没回包时不再记 `seeding`。
+
+验证：单测通过；全 workspace 513 条通过；clippy 通过。真实站点侧 pthome 16:32 变成 `status=2`，city13 一直 `status=1` 且手动 announce TLS reset，见 `SITES.md` 2.10。
+
 ## 五、新增用例结果
 
 | 用例 | 结果 |
@@ -82,11 +88,12 @@
 | `reseed::tests::first_imdb_hit_ignores_anchor_without_title_attribute` | 通过 |
 | `autopost::tests::manual_duplicate_audit_is_manual_but_not_counted_as_posted` | 通过 |
 | `sites::nexusphp::tests::search_names_match_rejects_conflicting_discriminating_tokens` | 通过 |
+| `qbittorrent::tests::tracker_info_keeps_status_and_turns_it_into_an_honest_note` | 通过 |
 
 ## 六、覆盖率提升与限制
 
-- 测试总数 507 → 512，新增 5 条；`reseed` 166 → 168，`config` 17 → 18，`autopost` 24 → 25，`nexusphp` 35 → 36。
-- 新增覆盖：16 种角标的全量分支、IMDb 无 title 锚点、手动重复审计、名称判别词冲突、配置测试线程隔离。
+- 测试总数 507 → 513，新增 6 条；`reseed` 166 → 168，`config` 17 → 18，`autopost` 24 → 25，`nexusphp` 35 → 36，`qbittorrent` 22 → 23。
+- 新增覆盖：16 种角标的全量分支、IMDb 无 title 锚点、手动重复审计、名称判别词冲突、配置测试线程隔离、tracker status 1/2/4 的文案与同 hash 条件。
 - 没有行覆盖率数字：GNU 工具链缺 profiler runtime，MSVC 组件下载无响应。下一轮按审计 S8 在 CI 里预装 `llvm-tools-preview`，再补真实百分比。
 - 没有引入随机 fuzzing：本轮缺口都是有限枚举或固定输入，随机化不会增加判别力；标题角标已做 16 种穷举。后续若要 fuzzing，优先对 `strip_site_title_badges` 和 `search_names_match` 做约束输入生成，并固定可打印种子。
 
@@ -103,6 +110,6 @@
 
 ## 八、后续建议
 
-1. 先做审计 S1（tracker 真值），再补 `qbittorrent` status=1/2/4 的 mock 测试；这是目前最大的覆盖率空洞，不能用现有测试代替。
+1. ~~先做审计 S1（tracker 真值），再补 `qbittorrent` status=1/2/4 的 mock 测试~~（本轮已完成读取和单测；整状态机仍只做到“记录真值”，没有新增独立状态）。
 2. 下一轮测试分支再补 CLI 有效配置路径、GUI 纯状态函数、`all_tracker_urls` 50,000 条上限。
 3. 覆盖率接入 CI 后再更新本报告，不在本地反复尝试工具链。

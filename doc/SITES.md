@@ -6,9 +6,9 @@
 
 - 配置里一共 **147** 个站；
 - 参与扫描的 **101** 个（2026-11-27 按配置 `enabled=true` 实测）；
-- 允许自动发种的 **45** 个（`assist.autoReseedSites`）。
+- 允许自动发种的 **46** 个（`assist.autoReseedSites`）。
 
-白名单只是“允许发”，不等于“一定发得出去”。实际发布还要过站点权限、字段检查、当天额度和失败冷却（默认关闭）。
+白名单只是“允许发”，不等于“一定发得出去”。实际发布还要过站点权限、字段检查、当天额度和失败冷却（默认关闭）。**表里写“qB 校验 100%”只表示种子已挂回下载器、本地校验完成，不等于站点 tracker 已回包、更不等于站点页已显示做种**；站点侧真值看详情页做种者数和 qB tracker `status=2`。2026-11-27 city13 [88464](https://13city.org/details.php?id=88464) 就是“已挂回 100%、站点页 0 做种者、tracker 一直没回包”的反例，详见 2.10。
 
 2026-11-22 起，不再为了判断“站上有没有”逐个搜索，也不再日常批量跑表单检查。表单检查只在新站第一次接入时做一次，用来拿上传页字段和下拉选项。以前的检查结论只作参考，站点改版后可能失效。
 
@@ -187,7 +187,7 @@ xingyunge, agsvpt, panda, iloli, muxuege, fenghuang, gtk
 | ptba | 默认 | 站上改写 `info.source`，按 pieces + 文件清单核对（白名单仅日志）；下载目标种后核对 pieces 和文件清单，不要求标题一字不差 |
 | ptcafe | 默认（无规则） | 同 hash 先查 tracker/progress；不要把“同 hash”直接当已做种 |
 | ptfans | `medium_sel=8`（表单有两个同名 Encode，取 8） | 站上改写 hash，按 pieces + 文件清单核对（白名单仅日志）；表单无“完结”复选框，发布后人工补 |
-| pthome | 默认（无规则） | 站上改写 hash，按 pieces + 文件清单核对（白名单仅日志）；页面域带 `www.`，tracker host 要按别名归一化；2026-11-27 已补“该种子已存在！”/“已存在！”精确提示识别，真实回包未复测 |
+| pthome | 默认（无规则） | 站上改写 hash，按 pieces + 文件清单核对（白名单仅日志）；页面域带 `www.`，tracker host 要按别名归一化；2026-11-27 真实回包 285040 已挂回，tracker 16:32 变 `status=2`，见 2.10 |
 | ptlgs | 海报 + ≥3 张截图（总图 ≥4）；链接 + MediaInfo；无 DDP/E-AC3 | 海报和截图是独立字段 `cover` / `screenshots`，不是只放进简介；总图不足 4 张不发；2026-11-25 真发 https://ptlgs.org/details.php?id=115350 已确认详情页两个区块都有图 |
 | ptsbao | 默认 | `source_sel` 是二级分类，按 type 父类 + 标题填；按 pieces + 文件清单核对（白名单仅日志）；无“完结”复选框 |
 | ptzone | 默认 | 常规 NexusPHP，五项发布检查全过；2026-11-27 已加检索/详情页超时重试，单测过，真站复测未做 |
@@ -334,7 +334,7 @@ xingyunge, agsvpt, panda, iloli, muxuege, fenghuang, gtk
 - **修完后出现两条真缺口，拒因已查清**：《知否》两次提交都被站点拒绝、未建种、未挂回，`reseed-log.jsonl` 记 failed；第二次回包正文被留档抓到，错误框原文：`发布者二次元浓度不足，无法发布该类型资源。当前数量浓度 0.00%（须不低于 50%），体积浓度 0.00%（须不低于 40%）。` 站点上传页规则原文是：在种子区发布非二次元时，二次元条数须 ≥50%、体积须 ≥40%；二次元只算漫画/CG杂图/动漫杂志和动画（Animation），非二次元算电视剧、综艺、纪录片、电影，来源写日本（JPN）的不计入。这里的比例按账号的**发布记录**算，不是当前做种：这个号当前做种 163 条（其中动画 15 条、232.94GB），发布记录仍是 0 条，所以数量/体积都是 0.00%。这是账号级站侧阻塞，不是表单问题，也不是同剧重复（站上虽有同剧另一版本 31565 UBWEB 2160p，但回包没说重复）。回包留档 `artifacts\iloli-upload-1795736380253.html`。要在这站发非动画内容，得先从这个号发出二次元素材（动画/漫画/CG/动漫杂志），把发布记录里的二次元条数和体积养到门槛以上；是否这么做待定，见 ROADMAP 待办。《广告狂人》没提交：iloli 的 audiocodec_sel 里 AC3 有多个同名候选（`DD/AC3`、`DD/AC-3`、`AC3` 这类），引擎判歧义留空不猜，被 G2 质量档门禁拦住。这两条不是"站点不可用"。
 - **首条二次元实发成功，站点定位确定为动画/二次元（2026-11-27）**：《吉卜力工作室特别短片合辑2 / Ghiblies Episode 2 2002 1080p BluRay 10bit DD5.1 x265-MNHD-FRDS》（源 pter 332330，1,376,985,722 字节 / 3 文件）走 `bsend reseed --only 'Ghiblies.Episode.2' --site iloli --yes` 真发，详情页 https://mua.xloli.cc/details.php?id=56513 ，分类 `405 动画 (Animation)`、来源日本、媒介 Encode、编码 HEVC/x265、1080p、制作组 Other，4 张 pixhost 图逐张可用；qB 目标 hash `5d8dff96e44b5d640529268a8adc840224356e9b` 校验 100%、`forcedUP`，站点详情显示 1 个做种者 / 16 个下载者。这条没有被二次元浓度门槛拦住，说明动画本身不再算“非二次元”。
 - **站点规则加固，已进代码和配置**：`selectPicks.type=405` 只在自动分类落在“动漫”含糊分支时纠正，电影/电视剧不再被无条件改成动画；`allowedTypes=["动画"]` 在 `apply_site_rules_tail` 里落成硬缺口，自动发种和手动 `reseed` 都拦。复测 `bsend reseed --only '知否' --site iloli` 输出 `预检：阻断 1`、`分类「电视剧(TV Series)」不在站点白名单（动画）`，没有提交。`reseed` 新增 `--site` 参数，解决同一内容在多个站有缺口时 `--only` 先命中别站的问题。代码提交 `f9013df` 已 push，`cargo test --workspace` 和 `cargo clippy --workspace --all-targets -- -D warnings` 均通过，GitHub Actions run `45952102303` success。
-- **遗留**：qB 重启后 tracker 面板仍显示 `status=1`（未联系），但 iloli 站点已统计到 1 个做种者；`uploaded=0`，本地做种连接数为 0，继续观察 qB announce 队列。测试用的临时 HTTP tracker 和本地 tracker 已从目标种移除，qB 的 `max_concurrent_http_announces` 已恢复 200、`proxy_peer_connections` 已恢复 true。
+- **2026-11-27 16:33 复核**：qB tracker 已从 `status=1` 变成 `status=2`，目标种累计上传 131,072 字节；16:34 有一次 `status=4: stream truncated`，属单次 announce 抖动，前一次成功回包和上传仍在。站点详情已显示 3 个做种者 / 14 个下载者。测试用的临时 HTTP tracker 和本地 tracker 已从目标种移除，qB 的 `max_concurrent_http_announces` 诊断时临时调到 1000、结束后恢复 200，`proxy_peer_connections` 已恢复 true。
 
 **三个站点侧硬阻塞（都做过真实浏览器复核，不是静态解析失败就放弃）**
 
@@ -352,6 +352,18 @@ xingyunge, agsvpt, panda, iloli, muxuege, fenghuang, gtk
 **freefarm（农场）**
 
 - 旧域 `pt.0ff.cc` 和新域 `farmm.cc` 是同一站点的镜像，配置维持 `pt.0ff.cc`，不切 `farmm.cc`。两域都已登录 Schalkiii / UID 5481（LV1 User）。上传页两域一致：主表单 POST `takeupload.php`，38 input + 18 select + 2 textarea；另两个搜索表单各 1 input + 1 select，全页 62 个控件；无权限拒绝字样，页面 tracker 提示 `tracker.0ff.cc/announce.php`。它仍在 `pausedSites` 里，本轮没解除。
+
+### 2.10 2026-11-27 下午三条实发：发布、挂回、站点是否真看见
+
+这一节只回答“站点侧到底看见没看见做种”，不要把“上传成功”“qB 校验 100%”“tracker 已回包”三件事混成一句。
+
+| 站点 | 详情页 | 发布 | qB 挂回 | qB tracker | 站点页 | 结论 |
+|---|---|---|---|---|---|---|
+| iloli | https://mua.xloli.cc/details.php?id=56513 | 已发布 | hash `5d8dff96e44b5d640529268a8adc840224356e9b`，progress=1 | 16:33 `status=2`；16:34 一次 `status=4: stream truncated` | 页面 3 个做种者 / 14 个下载者 | **目前唯一完整闭环**：有真实 announce、有 131,072 字节上传、站点页有做种者 |
+| pthome | https://www.pthome.net/details.php?id=285040 | 已发布 | hash `8085a48748cbf4888a688ac74eaebcfa696ae7f6`，progress=1 | 16:32 `status=2`，`num_seeds=0`、`num_leeches=0`，下次 announce 17:07 | 页面仍被 Cloudflare challenge 挡住，未读到做种者数 | **tracker 已回包，站点已看见 announce**；没有下载者，uploaded=0，页面侧未复核 |
+| city13 | https://13city.org/details.php?id=88464 | 已发布 | hash `cd74e178f63a4a90348c90af5fb993438515e285`，progress=1 | 长时间 `status=1`（未联系）；恢复诊断配置后变成 `status=4`（tracker 报错，msg 空）；手动带 passkey announce 被 TLS 连接重置，代理也重置 | 页面 `0 个做种者 / 2 个下载者` | **已挂回但没做种**：tracker 域名从本机连不上，不能写“已在做种”；覆盖格已人工改成 `review_pending`（待人工确认） |
+
+qB 4 万多条种子重启后 announce 队列拥塞：`max_concurrent_http_announces=200` 时 pthome 等了约 50 分钟仍是 status=1；临时调到 1000 后 pthome 在 90 秒内变成 status=2。city13 不是排队问题，调到 1000 后仍不联系，手动 announce 直接 TLS reset，说明是 tracker 域名/链路侧拒绝。诊断完把并发恢复 200，`current_interface_address` 恢复为空、`file_log_enabled` 恢复 false，避免长期高压。
 
 ## 3. 全部站点（147 个）
 
@@ -425,7 +437,7 @@ xingyunge, agsvpt, panda, iloli, muxuege, fenghuang, gtk
 | audiences | 观众 | audiences.me | NexusPHP | 是 | — | — | ok |  | unsupported | 6 | 2026-11-23 判重检索被人机验证拦住，按“未确认重复不上传”中止，未发布；无头 HTTP 复用不了浏览器会话。2026-11-24 晚 Kimi WebBridge 可行性实验通过：真实 Chrome 已登录 `Schalkiii`，页面内 `fetch('/torrents.php?search=…')` 返回 200、命中 2 个详情页、无验证码；只做只读检索，尚未接进程序，暂仍按只人工发处理（见 2.3 末尾）。**2026-11-26 复核：除 Turnstile 和后台标签页问题外，上传表单结构本身也是缺口——自定义 JS 表单、`type` 为隐藏值 0，当前静态解析交不出可提交字段，此前文档没记这条** |
 | baozi | 包子 | p.t-baozi.cc | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 1 |  |
 | cangbao | 藏宝阁 | cangbao.ge | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 3 | 43994 图片死链已修。两次核对说法不一致，分别记录：2026-11-24 回访时详情页审核图标标 `title="通过"`；2026-11-26 复核页面仍标“未审”，qB 已 100% 做种。当前以 11-26 页面标记为准，11-24 的“通过”不作定论，待下次回访再确认。另：[44189](https://cangbao.ge/details.php?id=44189) 是另一条，11-26 回访判定干净、`reseeded` 已做种，见 2.6 |
-| city13 | 13City | 13city.org | NexusPHP | 是 | — | — | ok | processing_sel[4] 未选 | ok | 1 | 2026-11-26：2 条上传仍回 HTTP 200 未识别回包；11-27 起不再直接判失败，改按名称 + 总大小核对，核对不到落 `posted_unresolved`；真实下拉 `medium_sel[4]=3` 是 Remux，草稿选档已覆盖 |
+| city13 | 13City | 13city.org | NexusPHP | 是 | — | — | ok | processing_sel[4] 未选 | ok | 1 | 2026-11-27 实发 88464（《波洛合集》，源 carpt 532），已发布并挂回 qB 校验 100%；但 `tracker.13city.org` 一直 `status=1`，手动 announce 被 TLS reset，站点页 0 做种者，不能算做种成功，见 2.10 |
 | crabpt | 蟹黄堡 | crabpt.vip | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 1 | 2026-11-23 已实发 240242，`732e…`；此前候选源站 hdfans 502，被失败冷却挡住，改选 hdsky 源后成功；站点改写 hash，已加入白名单，挂回校验 100%；2026-11-24 晚《伪装者》简介 9 张 `i13.tietuku.com` 死图已换 imgbox（复查 0 旧图 / 9 新图） |
 | cspt | 财神 | cspt.top | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 5 | 2026-11-23 已实发 259870，`cf56…`；tracker 在 `tracker.cspt.cc`，已补别名；站点改写 hash，挂回校验 100%。**2026-11-26 复核：当天 4 条审计都是“该账号无发布权限”，发布权限疑似已被收回**；259870 的“可发”是 11-23 旧结论，能否再发待权限确认 |
 | cyanbug | 大青虫 | cyanbug.net | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 5 |  |
@@ -440,7 +452,7 @@ xingyunge, agsvpt, panda, iloli, muxuege, fenghuang, gtk
 | hdtime | 时光 | hdtime.org | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 6 |  |
 | hdu | 好多油 | pt.upxin.net | NexusPHP | 是 | — | — | fail | 目标站没有可解析的静态上传表单（JS/自定义上传界面，或 cookie 失效），v1 暂不支持：https://pt.upxin.net/upload.php | unsupported | 5 | 2026-11-27 两次真实浏览器复核：`/`、`/torrents.php`、`/upload.php`、`/login.php` 都回 200，但都是 253–264 字节自动刷新壳，原文「服务器负载过高，正在重试，请稍后...」，壳里没有真实表单；页面上 `[EASY-UPLOAD]` 按钮是本机 PT 助手浏览器扩展注入，不是站点组件。已移出白名单，站点恢复后复测，见 2.9 |
 | hdvideo | HDVideo | hdvideo.top | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 1 | 检查结论是上一次表单结果；`region_sel[4]`、`style_sel[4][]` 已补，78856 已补挂 qB |
-| iloli | 爱萝莉 | mua.xloli.cc | NexusPHP | 是 | — | — | ok | source_sel[4] 未选 | 未测 | 1 | announce 主机是独立域 `a.x-anime.cc`（不是站点同域，74 字符，qB 里 163 条同 passkey）；填 `overrides.announceURL` 后该主机自动并入允许清单。2026-11-27：《知否》两次提交都被拒、未建种；回包抓到真实拒因——账号二次元浓度不足（数量浓度 0.00% 须 ≥50%，体积浓度 0.00% 须 ≥40%），账号级站侧阻塞，不是表单问题也不是同剧重复；回包留档 `artifacts\iloli-upload-1795736380253.html`。《广告狂人》AC3 多个同名候选被 G2 拦、未提交。见 2.9 |
+| iloli | 爱萝莉 | mua.xloli.cc | NexusPHP | 是 | — | — | ok | source_sel[4] 未选 | ok | 1 | announce 主机是独立域 `a.x-anime.cc`（不是站点同域，74 字符，qB 里 163 条同 passkey）；填 `overrides.announceURL` 后该主机自动并入允许清单。2026-11-27 实发 56513（《Ghiblies Episode 2》，源 pter 332330），分类动画、tracker `status=2`、上传 131,072 字节、站点页 3 做种 / 14 下载；《知否》两次被账号二次元浓度门槛拒；《广告狂人》AC3 已补 `AC3/DD` 映射，见 2.9、2.10 |
 | itzmx | Itz | pt.itzmx.com | NexusPHP | 是 | — | — | ok | team_sel 未选 | 未测 | 5 | 2026-11-23 首次实发 `13134`（`88e3103b…`）并补挂校验 100%；站点 torrent 文件上限 `266,240 bytes`，大合集/大剧包会被拒，改用小种《Liar Game》通过；站上改写 hash，已加入白名单。2026-11-26：Coraline 又出现 403、War 通用上传失败；403 是本轮新现象（早期 403 曾归为超大请求体前置拦截），根因待查 |
 | kelu | Kelu | our.kelu.one | NexusPHP | 是 | — | — | ok | type 未选 | 未测 | 1 |  |
 | kufei | 库非 | kufei.org | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 1 | 2026-11-25 核对《人民的名义》`142202`：站点种同 `info hash`，qB progress=1、只挂 kufei tracker，按 `bsend pull` 复核记 `seeding`；2026-11-27 真实下拉 `medium_sel[4]=6` 是 BD Remux，草稿 79 已落 6 |
@@ -455,7 +467,7 @@ xingyunge, agsvpt, panda, iloli, muxuege, fenghuang, gtk
 | panda | 熊猫 | pandapt.net | NexusPHP | 是 | — | — | ok | source_sel[4] 未选 | 未测 | 5 | 2026-11-27 闭环跑通：141840《Liar Game S01 2007 2160p WEB-DL》上传后立刻挂回 qB 校验 100%、只挂熊猫一个 tracker，7 图逐张 200、简介六段齐全，`pending_review` 等审核（见 2.8、2.7⑤）。已撤销发种暂停，留在 `autoReseedSites`。历史 141276 是候选种子 24 小时没做种被系统删的；qB 里残留 `3f8ed774…` 挂失效 tracker，待人工清理 |
 | ptba | 1PT | 1ptba.com | NexusPHP | 是 | — | — | ok | processing_sel[4] 未选 | ok | 2 | 2026-11-23 已实发 106718，`abf4…`；站点改写 `info.source`，已加入 hash 改写白名单，挂回校验 100% |
 | ptcafe | 咖啡 | ptcafe.club | NexusPHP | 是 | — | — | ok | source_sel[4] 未选 | ok | 1 | 2026-11-25 核对《人民的名义》`137241`：站点种 `info hash` 与 qB 原种相同，qB progress=1、只挂 `tracker.ptcafe.club`，按 `bsend pull` 复核记 `seeding`；不是没挂上 |
-| pthome | 铂金家 | pthome.net | NexusPHP | 是 | — | — | ok | team_sel 未选 | unsupported | 6 | 2026-11-24 首次实发 `284701`（《人民的名义》，源 hdfans）；站上 hash 与构造不同（构造 `b31d8eaf…`，站上 `ebaa6dd9…`），已加入白名单，补挂时确认 qB 里 11-23 23:56 就在做种、校验 100%（见 2.3）。2026-11-27 已补“该种子已存在！”/“已存在！”精确识别，真实回包未复测 |
+| pthome | 铂金家 | pthome.net | NexusPHP | 是 | — | — | ok | team_sel 未选 | unsupported | 6 | 2026-11-24 首次实发 `284701`（《人民的名义》，源 hdfans）；2026-11-27 实发 `285040`（《A Touch of Zen》，源 1ptba 9321），已挂回 qB 校验 100%，tracker 16:32 变 `status=2`、`num_seeds=0`，页面被 Cloudflare 挡住，见 2.10 |
 | ptlgs | 劳改所 | ptlgs.org | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | 未测 | 6 |  |
 | ptsbao | 烧包 | ptsbao.club | NexusPHP | 是 | — | — | ok | processing_sel[1] 未选 | ok | 1 | 2026-11-23 已实发 135787，`0b0087…`；`source_sel[1]` 二级分类已自动填 `剧集-大陆`；站点改写 hash，已加入白名单，挂回校验 100%；表单无“完结”标签需人工补；2026-11-27 草稿 82 已落 `medium_sel[1]=1`（BluRay）+ processing=Remux + source=电影-Remux |
 | ptzone | 葡萄汁 | ptzone.xyz | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 1 | 2026-11-26：详情页访问超时、`audiocodec_sel` 未选被门禁拦下；2026-11-27 已加检索/详情页超时重试，单测过，真站复测未做；真实下拉 `medium_sel[4]=3` 是 Remux，选档已覆盖；早期 190916 的“五项检查全过”是 11-22 实测，选档缺口此前没记 |

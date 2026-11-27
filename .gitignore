@@ -37,3 +37,11 @@ rust/target/
 /适配SBPT发种辅种_*.md
 # 实机调试下载的站点种子（含 passkey，绝不入库；Tests/ 的固定样例不受影响）
 /*.torrent
+# 实机发种/浏览器证据目录（含 passkey 种子、页面截图、回包原文，整目录不入库）
+/artifacts/
+# 根目录一次性调试输出（命令回显、回包原文、页面截图、review/gatecheck 草稿）
+/*.txt
+/*.html
+/bsend-batch-*.md
+/gatecheck-*.json
+/rust/*.txt

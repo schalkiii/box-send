@@ -56,7 +56,7 @@ qB 没有 tracker，也不等于站上一定没发过。可能是站上已经有
 | `review_rejected` | 站点明写审核不通过（附原因）；种子可能仍在 qB 做种，要人改简介或种子后在站上处理，程序不重发 |
 | `gone_from_site` | 回访时详情页报“没有该 ID 的种子”或 404；站上已经没有这条，qB 里那条删不删由人决定 |
 | `other_version` | 站上已有同片的其他版本，分片不一样 |
-| `same_hash_skip` | 目标种子和 qB 已有种子完全同一个 `info hash`，qB 不允许重复添加；查原种 tracker 和 progress，只挂目标站且 progress=1 时记 `seeding`（已做种），挂别站、没有 tracker 或还没下完才记本状态 |
+| `same_hash_skip` | 目标种子和 qB 已有种子完全同一个 `info hash`，qB 不允许重复添加；查原种 tracker、progress 和 tracker 状态：只挂目标站、progress=1 且 tracker `status=2` 时才记 `seeding`（站点已回包），挂别站、没有 tracker、还没下完或 tracker 没回包都记本状态 |
 | `rejected` | 人工否决，确认不是同一内容 |
 | `miss` | 站内没有，作为负缓存保留一段时间，到期后会重新搜索 |
 
@@ -199,7 +199,7 @@ audiences 的 `torrents.php` 有 Cloudflare Turnstile，无头 HTTP 拿不到搜
 
 挂回前只看两件事：目标种 pieces 指纹必须与 qB 里某个完整本地副本一致（不一定是上传时的源种，分片长度可能不同），文件清单也必须一致（比较时忽略首段根目录名）。站点常改写 `info.source` 或标题，目标种 hash、`info.name` 与上传构造不同都不影响；`allows_target_hash_rewrite` 白名单只用于日志标注“该站已实测改写”，不参与放行。pieces 或文件清单对不上就拒绝挂回，宁可人工处理，不往 qB 塞错种。
 
-同 `info hash` 的种子在 qB 里只能有一条。若目标种同 hash 的那条只挂目标站 tracker 且 `progress=1`，记 `Seeding`（已在做种）；否则按策略不改原种、不加第二条，记 `SameHashSkip`。**`SameHashSkip` 不是发布成功**：站上已发布但 qB 没有做种，审计词是 `same_hash_skipped`，note 写“当前没做种，待人工处理”，不能包成 `posted`。
+同 `info hash` 的种子在 qB 里只能有一条。若目标种同 hash 的那条只挂目标站 tracker、`progress=1` 且 qB 显示的 tracker 状态是 2（已回包），才记 `Seeding`（站点已看见做种）；tracker 状态 1（未联系）只能算“已挂回、待确认”。否则按策略不改原种、不加第二条，记 `SameHashSkip`。**`SameHashSkip` 不是发布成功**：站上已发布但 qB 没有做种，审计词是 `same_hash_skipped`，note 写“当前没做种，待人工处理”，不能包成 `posted`。
 
 上传成功、种子已加入 qB，但等到校验窗口结束还没到 100% 时，格子落 `Verifying`，结果走 `PostedVerifying`，审计词是 `posted_verifying`，界面写“已发布，种子已加入下载器，校验还没跑完，不能算已在做种”，下一轮接着收尾。它算一次发布额度（上传确实发生了），但不算已做种。旧版把它和 `Reseeded` 一起包成 `Posted`，界面会直接写“转种完成”。
 
@@ -217,7 +217,7 @@ audiences 的 `torrents.php` 有 Cloudflare Turnstile，无头 HTTP 拿不到搜
 
 ### 5.7 校验
 
-种子加进 qB 后等它校验到 100%。到了就记 `reseeded`；没到就记 `verifying`，下一轮继续查，不重复发。
+种子加进 qB 后等它校验到 100%。到了就记 `reseeded`；没到就记 `verifying`，下一轮继续查，不重复发。**校验 100% 只说明本地数据完整、已经挂回 qB，不等于站点 tracker 已回包。** 现在写覆盖记录时会同时读取目标 tracker 的 qB 状态并写进 note：`status=2` 写“tracker 已回包”，`status=1` 写“tracker 还没回包”，`status=4` 带报错原文。2026-11-27 city13 [88464](https://13city.org/details.php?id=88464) 就是 `progress=1`、站点页 0 做种者、tracker 一直 `status=1` 的反例；对用户汇报时必须拆成“已发布 / 已挂回 / 站点已看见做种”三件事。
 
 ## 6. 一个种子只挂一个站点
 
@@ -245,7 +245,7 @@ audiences 的 `torrents.php` 有 Cloudflare Turnstile，无头 HTTP 拿不到搜
 | 情况 | 判断 | 做法 |
 | --- | --- | --- |
 | 目标种 `info hash` 和 qB 不同，但 pieces 指纹与某个本地完整副本一致 | 可以跨站辅种 | 新加一份种子，复用本地文件，等校验到 100% |
-| 目标种 `info hash` 和 qB 完全相同 | qB 不允许同 `info hash` 两份 | 先查原种 tracker 和 progress：只挂目标站且 progress=1 → 记 `seeding`（已做种），不再 add；挂别的站、没有 tracker 或还没下完 → 记 `same_hash_skip`，不能给原种补挂，也不能新增第二条 |
+| 目标种 `info hash` 和 qB 完全相同 | qB 不允许同 `info hash` 两份 | 先查原种 tracker、progress 和 tracker 状态：只挂目标站、progress=1 且 tracker `status=2` → 记 `seeding`（站点已看见做种），不再 add；挂别的站、没有 tracker、还没下完或 tracker 没回包 → 记 `same_hash_skip` 或“已挂回待确认”，不能给原种补挂，也不能新增第二条 |
 | pieces 指纹和所有本地完整副本都不一致 | 站上是另一个版本，或分片边界不同 | 不能拿本地文件辅种；但可以按“允许其他版本”继续发自己这条 |
 
 判断以 `info hash` 和 pieces 指纹为准。标题一样不代表文件一样，标题不同也不代表不能发。

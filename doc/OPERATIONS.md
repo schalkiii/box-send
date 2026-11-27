@@ -110,7 +110,7 @@ status / at / url / note / verifyHash
 `auto-audit.jsonl` 每行是一条自动发种结果：
 
 ```
-at / site / key / result / url? / error? / note? / gates?
+at / site / key / result / url? / error? / note? / gates? / manual?
 ```
 
 `result` 常见值：
@@ -132,9 +132,18 @@ at / started_at / key / name / source_site / source_url
 target_site / result / url / note / cell_status / seeded
 ```
 
-`seeded=false` 表示当前不能算“已在做种”：可能是站上已发布、但本机没挂上种子；也可能是 `posted_verifying`，种子已经加入 qB，但校验还没跑完。先看同一条记录的 `cell_status` 和 `result` 区分：`verifying` / `posted_verifying` 去等校验，其他情况再查目标种下载和添加时的目录布局，不要先怀疑上传。日志写失败只会打印错误，不影响发种结论。
+`seeded=false` 表示当前不能算“已在做种”：可能是站上已发布、但本机没挂上种子；也可能是 `posted_verifying`，种子已经加入 qB，但校验还没跑完。先看同一条记录的 `cell_status` 和 `result` 区分：`verifying` / `posted_verifying` 去等校验，其他情况再查目标种下载和添加时的目录布局，不要先怀疑上传。日志写失败只会打印错误，不影响发种结论。**注意 `seeded=true` 只证明“已经挂回 qB”，不证明站点 tracker 已回包**：还要看覆盖格 note 里的 tracker 状态，或直接查 qB `torrents/trackers` 的 `status`。`status=2` 才是站点已看见，`status=1` 只是还没联系上，`status=4` 是 tracker 报错。
 
-当前口径：手动跑 `bsend reseed --yes` 只往 `reseed-log.jsonl` 记，不往 `auto-audit.jsonl` 追加条目；按日限额、失败冷却做判定时看不到这批手动发布。是否把手动发布也写进审计，待 `ROADMAP.md` 决定。
+当前口径：手动跑 `bsend reseed --yes` 成功后也会往 `auto-audit.jsonl` 追加一条 `manual=true` 的记录，并计入当天 `posted` 额度；重复、被拦、失败同样落审计，方便和自动队列按同一套日限额/失败冷却口径排查。`manual` 字段就是用来区分人工补发和自动发种的。
+
+### 4.0 qB 重启后的 announce 队列
+
+qB 里有 4 万多条种子时，重启后会把所有种子重新排队 announce。默认 `max_concurrent_http_announces=200`，新挂回的种子可能排在几十分钟之后，`torrents/trackers` 长期显示 `status=1`（未联系）且 `updating=true`，这不是发种代码失败。
+
+- 先看目标种的 `last_activity` 是否还等于 `added_on`；是的话说明一次 announce 都还没发出去。
+- 再看 qB 日志和 tracker 域名本身；`status=1` 同时手动请求也 TLS reset/超时的，是网络或站点 tracker 侧问题，不是队列。
+- 队列拥塞可以临时把 `max_concurrent_http_announces` 调到 1000，观察目标种是否变成 `status=2`；诊断完恢复 200，别长期高压。
+- 2026-11-27 实测：pthome 在 200 并发下等了约 50 分钟仍是 `status=1`，调到 1000 后 90 秒内变成 `status=2`；city13 调到 1000 仍不联系，手动 announce 被 TLS reset，属于站点 tracker 链路阻塞。
 
 ### 4.1 上传回包怎么分六类
 

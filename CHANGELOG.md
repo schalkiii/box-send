@@ -7,6 +7,10 @@
 
 ### Changed
 
+- **“qB 校验 100%”和“站点已看见做种”拆成两件事**（2026-11-27）：`qbittorrent::tracker_info()` 现在读 qB `torrents/trackers` 的 `url/status/msg/num_seeds/num_leeches/num_downloaded`；reseed 和 coverage 的 100% 收尾会把 `status=2` 写成“tracker 已回包”、`status=1` 写成“tracker 还没回包”、`status=4` 带报错原文。`same_hash_on_target` 也要求 `status=2` 才算已做种，tracker 没回包只能落“同 hash 跳过/已挂回待确认”。2026-11-27 下午三条实测：iloli [56513](https://mua.xloli.cc/details.php?id=56513) tracker `status=2`、上传 131,072 字节、站点页 3 做种 / 14 下载；pthome [285040](https://www.pthome.net/details.php?id=285040) tracker 16:32 变 `status=2`，但 `num_seeds=0`、页面被 Cloudflare 挡住；city13 [88464](https://13city.org/details.php?id=88464) 长时间 `status=1`，恢复诊断配置后变 `status=4`，手动 announce 被 TLS reset，站点页 0 做种者，不能算做种成功。新增单测 `tracker_info_keeps_status_and_turns_it_into_an_honest_note`。
+- **调试证据目录不再进 Git**（2026-11-27）：`.gitignore` 增加 `/artifacts/`，实测目录里 7 个 `.torrent` 含 passkey；以后 `git add -A` 不会把它们带进公开仓库。
+- **文档同步当前基线**（2026-11-27）：白名单 45→46、`reseed.rs` 5k+→约 1.18 万行（待拆分）、手动 `reseed --yes` 写 `auto-audit.jsonl` 的 `manual=true` 记录并计额度、测试基线 507→513、GUI 不再从 workspace 测试排除；qB 4 万条种子的 announce 队列和处置写进 `OPERATIONS.md` 4.0。
+
 - **“上传失败”后面的真实原因不再被标题吞掉**（2026-11-27）：UBits 把原因放在 `<h1>上传失败！</h1>` 后面的 `<p>` 里，页面 `<title>` 也含“上传失败”，旧逻辑按关键词截取只拿到标题，审计里只剩“上传失败！ - Powered by NexusPHP”。现在先读 h1 后面的正文，UBits 的真实回包会记成“站点拒绝：检测到种子简介中包含黑名单图床…”，不再需要人工翻 `upload-debug` 才知道原因。新增单测 `upload_failure_reason_after_h1_is_preserved`。
 - **重复上传回包里的“该种子已存在！”不再记成失败**（2026-11-27）：站点把这句话放在重填页的普通提示区（页面仍带上传表单）或超过 8KB 的长页面时，现在都按精确完整句判重复；只写“已存在！”的长页面也认。错误框里的“已存在”仍按原逻辑先认，帮助文案里的泛化“提示种子已存在”有反例测试，不会被误判。pthome、qingwa 的历史审计仍是 `failed`，尚未用真实回包重跑，先补单测覆盖。
 - **HTTP 200 但回包认不出来时先核对、不直接判失败**（2026-11-27）：上传接口回 `HTTP 200 未识别的返回`（含“回包已存 …”变体）时，程序不再抛“上传失败”，而是先按发布名 + 本地总大小做站内检索；找到就继续下载站点种子并挂回 qB，找不到落 `posted_unresolved` 待人工确认。403/404、空回包和站点明确的拒绝文案仍走原失败口径。city13、hdvideo 这类“站点可能已收下、页面结构认不出”的条目因此不会白丢一次发布额度；真实回包尚未复测。

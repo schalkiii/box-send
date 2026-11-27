@@ -1472,9 +1472,13 @@ fn collect_verifying(
             if progress >= 0.999 {
                 let _ = qb.set_download_limit(hash, 0);
                 let _ = qb.set_paused(&[hash], false);
+                let tracker_note = qb
+                    .tracker_info(hash)
+                    .map(|infos| crate::qbittorrent::tracker_status_note(&infos))
+                    .unwrap_or_else(|_| "tracker 状态读不到".to_string());
                 Some((
                     CoverageStatus::Assisted,
-                    "校验到 100%，已在做种（上一轮推送收尾）".to_string(),
+                    format!("校验到 100%，已在 qB 做种；{tracker_note}（上一轮推送收尾）"),
                 ))
             } else if is_checking(&state) {
                 None

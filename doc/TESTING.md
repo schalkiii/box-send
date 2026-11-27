@@ -17,10 +17,7 @@
 ```powershell
 Set-Location rust
 
-# 核心库 + CLI + 集成测试；本机没有 MSVC 链接器时用这一条
-cargo test --workspace --exclude bsend-gui
-
-# 全部 crate（含 GPUI GUI）；Windows 需要 Visual Studio C++ 链接器
+# 全部 crate（含 GPUI GUI）；2026-11-27 实测 GNU 工具链可直接跑，不需要 MSVC 链接器
 cargo test --workspace
 
 # 只跑核心库
@@ -38,8 +35,8 @@ cargo test -p bsend --test coverage_e2e
 cargo test -p bsend --test other_version_e2e
 cargo test -p bsend --test skip_keywords_e2e
 
-# 静态检查与格式
-cargo clippy --workspace --all-targets --exclude bsend-gui -- -D warnings
+# 静态检查与格式（GUI 也在内）
+cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all -- --check
 ```
 
@@ -91,13 +88,15 @@ python scripts\replay-reseed.py --draft 56 --expect 'source_sel[4] = 10' --expec
 
 现在用“测试数 / 模块行数”和“具体未覆盖路径”衡量缺口，不能把它当成行覆盖率。修好工具链后再把 `cargo llvm-cov --workspace --exclude bsend-gui --summary-only` 接进 CI，并设置不低于当前基线的门槛。
 
+**2026-11-27 当前基线**：`cargo test --workspace` 共 513 条全绿（核心库 454、`coverage_e2e` 33、其余 2/2/16/3/3）；`cargo fmt --check` 和 `cargo clippy --workspace --all-targets -- -D warnings` 都通过。GUI 不再需要排除，直接跑 workspace 测试。
+
 ## 6. 当前缺口
 
-- `qbittorrent.rs`：`all_tracker_urls` 的 50000 条上限告警只靠日志目测；`torrent_files_many` 只测了部分失败，没测并发回调乱序。
-- `bsend-cli`：`cmd_status`、`cmd_report`、`cmd_audit`、`cmd_autopost`、`cmd_pull`、`cmd_followup` 的命令处理本身仍缺；集成冒烟只覆盖版本号、缺配置、坏配置三条退出路径。
+- `qbittorrent.rs`：`all_tracker_urls` 的 50000 条上限告警只靠日志目测；tracker `status` 已能读，但扫描 4 万条种子的批量路径还没逐条核对 status。
+- `bsend-cli`：`cmd_status`、`cmd_report`、`cmd_audit`、`cmd_autopost`、`cmd_pull`、`cmd_followup` 的命令处理本身仍缺；集成冒烟只覆盖版本号、缺配置、坏配置三条退出路径，加 `cli_smoke.rs` 的 3 条一共 19 条。
 - `bsend-gui`：`jobs.rs`、`views/*`、`widgets.rs`、`theme.rs`、`types.rs` 基本没有行为断言。
 - `kimi.rs`：`prepare_search_page` 的 40 轮等待、后台标签 `visibilityState=hidden` 分支仍缺。
 - `coverage_e2e.rs`：审核状态链路已覆盖上传被拦截、候选入口、回访的“未审 / 审核不通过 / 站上已找不到”，以及审核通过后下载站点种子并挂回 qB；仍缺的是其他业务分支，不是审核状态本身。
 - `scripts/`：参数解析、坏输入、原子写、dry-run；现在只有 `scripts.yml` 的语法门禁。
 
-详细缺口和新增用例记录见 `TEST-REPORT-2026-11-25.md`，审计结论见 `AUDIT-REPORT-2026-11-25.md`。
+详细缺口和新增用例记录见 `TEST-REPORT-2026-11-27.md`；旧 `TEST-REPORT-2026-11-25.md` 只作历史基线，结论以新报告为准。审计结论见 `AUDIT-REPORT-2026-11-27.md`。

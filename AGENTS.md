@@ -24,12 +24,12 @@ cargo build --release -p bsend-cli                   # 产物 rust/target/releas
 Rust 2021；crate：`bsend`（引擎）、`bsend-cli`、`bsend-gui`。错误用 `anyhow`，HTTP 用 `reqwest`（默认跟随重定向），种子文件格式（Bencode）自实现于 `bencode.rs`。
 
 ## 目录与约定
-- `rust/crates/bsend/src/`：`reseed.rs`（审阅/上传/挂回主流程，单文件 5k+ 行）、`autopost.rs`（自动发种编排）、`coverage.rs` / `report.rs`（覆盖记录与统计）、`matcher.rs`（判重）、`sites/nexusphp.rs`（站点适配）、`config.rs`、`gates.rs`。
+- `rust/crates/bsend/src/`：`reseed.rs`（审阅/上传/挂回主流程，单文件约 1.18 万行，待拆分）、`autopost.rs`（自动发种编排）、`coverage.rs` / `report.rs`（覆盖记录与统计）、`matcher.rs`（判重）、`sites/nexusphp.rs`（站点适配）、`config.rs`、`gates.rs`。
 - 注释语言跟随所在文件既有习惯（现状以中文为主）；日志与文档用中文。
 
 ## 不能违反的规则
 - **判断目标站有没有，以 qB 为准（2026-11-22 起）**：qB 里有目标站 tracker 就视为站上已有，没有就视为大概率没有；不再逐站搜索。只有真要发某条之前，才对目标站再确认一次。
-- **同 `info hash` 不等于已经给目标站做种，也不等于没做种**：qB 不允许同一个 `info hash` 存两份，遇到同 hash 时不能只看日志里的 `same_hash_skip`；必须查 qB 这条种子的 tracker 和 progress。只挂目标站 tracker、progress=1 就是已在做种（hdfans 287874、ptcafe 137241 当前实测）；只挂别站 tracker、没有 tracker，或 progress<1 都不能记“已做种”，也不能给原种补挂，更不能 add 第二条。**发后挂回返回 `SameHashSkip` 时不是发布成功**：审计要落 `same_hash_skipped`、note 写“当前没做种，待人工处理”，不能包成 `posted`；2026-11-22 熊猫 10265 就是旧版把这条报成 posted 的现场。
+- **同 `info hash` 不等于已经给目标站做种，也不等于没做种**：qB 不允许同一个 `info hash` 存两份，遇到同 hash 时不能只看日志里的 `same_hash_skip`；必须查 qB 这条种子的 tracker 和 progress。`progress=1` 只代表本地校验完成；还要看目标站 tracker 的 qB 状态：`status=2` 才是 tracker 已回包，`status=1` 是还没联系上，`status=4` 是 tracker 报错。只有“只挂目标站 tracker + progress=1 + tracker status=2”才能记“站点已看见做种”；tracker 没回包只能写“已挂回、待站点确认”（2026-11-27 city13 88464 站点页 0 做种者就是反例）。只挂别站 tracker、没有 tracker，或 progress<1 都不能记“已做种”，也不能给原种补挂，更不能 add 第二条。**发后挂回返回 `SameHashSkip` 时不是发布成功**：审计要落 `same_hash_skipped`、note 写“当前没做种，待人工处理”，不能包成 `posted`；2026-11-22 熊猫 10265 就是旧版把这条报成 posted 的现场。
 - **判重口径统一叫 `info hash` 和 pieces 指纹**：`info hash` 是整个 `info` 字典的 SHA1；`pieces` 是每个分片 SHA1 串；pieces 指纹（代码 `pieces_hash`）是对 `pieces` 整串再算的 SHA1，不是单个分片，也不是 `info hash`。分片长度不同会让 pieces 指纹不同，即使文件内容一样。
 - **audiences 的站内检索固定走 Kimi WebBridge**：用用户已登录的真实浏览器打开种子列表页、等 Cloudflare Turnstile token，再同源 `fetch` 搜索 URL；IMDb 区判重也走这个入口，不退回无头 HTTP，也不把“人机验证”页面当成“站内没有”。token 为空时明确报需要人工点一次验证；如果页面 `visibilityState=hidden`（窗口最小化或不在前台），Turnstile 不会渲染 iframe，要明确报“标签页在后台”并提示切到前台，不能硬等或盲发。详见 `doc/ARCHITECTURE.md` 5.5.2。
 - **一个种子只挂一个站点**：禁止 `addTrackers`，禁止把多个站的 announce 合并。上传种子时写目标站专属 `info.source`，让新 info hash 和源种子不同；发布后从目标站下载 `.torrent`，作为独立种子挂回 qB。

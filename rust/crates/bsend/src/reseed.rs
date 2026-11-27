@@ -7920,8 +7920,9 @@ fn ensure_trackers_on_site(site: &SiteConf, urls: &[String]) -> Result<()> {
 }
 
 /// 同 info hash 已在 qB 时，判断这条种子是不是已经在给目标站做种。
-/// 只认「progress ≥ 0.999、tracker 非空且每条都属于目标站」；读不到 tracker
-/// 或还没下完时按否处理，交给调用方落 `same_hash_skip`，不把未知状态当成已做种。
+/// 只认「progress ≥ 0.999、tracker 非空且每条都属于目标站、至少一条 status=2」；
+/// 读不到 tracker、还没下完或 tracker 没回包时按否处理，交给调用方落
+/// `same_hash_skip`，不把本地校验完成当成站点已看见做种。
 fn same_hash_on_target(cfg: &Config, qb: &QBittorrent, hash: &str, target_site: &str) -> bool {
     let Some(site) = cfg.sites.iter().find(|s| s.id == target_site) else {
         return false;
@@ -7932,10 +7933,15 @@ fn same_hash_on_target(cfg: &Config, qb: &QBittorrent, hash: &str, target_site: 
     if progress < 0.999 {
         return false;
     }
-    let Ok(urls) = qb.trackers(hash) else {
+    let Ok(infos) = qb.tracker_info(hash) else {
         return false;
     };
-    ensure_trackers_on_site(site, &urls).is_ok()
+    let urls: Vec<String> = infos.iter().map(|t| t.url.clone()).collect();
+    if ensure_trackers_on_site(site, &urls).is_err() {
+        return false;
+    }
+    // progress=1 只是本地校验完；tracker status=2 才是站点已回包。
+    infos.iter().any(|t| t.status == 2)
 }
 
 /// 把目标站 `.torrent` 推进下载器并校验：发布成功、或目标站已有同分片条目
@@ -8139,14 +8145,19 @@ fn push_target_torrent(
         if let Ok(Some((progress, state))) = qb.torrent_progress(&site_hash) {
             if progress >= 0.999 {
                 let _ = qb.set_download_limit(&site_hash, 0);
-                log("校验到 100%，已在做种");
+                let tracker_note = qb
+                    .tracker_info(&site_hash)
+                    .map(|infos| crate::qbittorrent::tracker_status_note(&infos))
+                    .unwrap_or_else(|_| "tracker 状态读不到".to_string());
+                let note = format!("转种成功：校验到 100%，{tracker_note}");
+                log(&format!("校验到 100%，{tracker_note}"));
                 write_cell(
                     index,
                     &req.content_key,
                     &req.target_site,
                     CoverageStatus::Reseeded,
                     Some(detail_url.to_string()),
-                    "转种成功：校验到 100%，已在做种",
+                    &note,
                 );
                 index.save()?;
                 return Ok(CoverageStatus::Reseeded);

@@ -20,6 +20,70 @@ use serde_json::Value;
 use crate::bencode;
 use crate::models::LocalTorrent;
 
+/// qB `torrents/trackers` 里真实 http(s) tracker 的最小快照。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrackerInfo {
+    pub url: String,
+    /// qB 原始状态：0 未启用、1 未联系、2 已工作、3 未工作、4 报错。
+    pub status: i32,
+    pub message: String,
+    pub num_seeds: i64,
+    pub num_leeches: i64,
+    pub num_downloaded: i64,
+}
+
+fn parse_tracker_entries(text: &str) -> Result<Vec<TrackerInfo>> {
+    let Value::Array(arr) = serde_json::from_str::<Value>(text)? else {
+        bail!("trackers 回包不是数组");
+    };
+    Ok(arr
+        .into_iter()
+        .filter_map(|t| {
+            let url = t.get("url")?.as_str()?.trim();
+            if !(url.starts_with("http://") || url.starts_with("https://")) {
+                return None;
+            }
+            Some(TrackerInfo {
+                url: url.to_string(),
+                status: t.get("status").and_then(Value::as_i64).unwrap_or(-1) as i32,
+                message: t
+                    .get("msg")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                num_seeds: t.get("num_seeds").and_then(Value::as_i64).unwrap_or(-1),
+                num_leeches: t.get("num_leeches").and_then(Value::as_i64).unwrap_or(-1),
+                num_downloaded: t
+                    .get("num_downloaded")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(-1),
+            })
+        })
+        .collect())
+}
+
+/// 把 tracker 快照翻成一句人能直接写进审计/覆盖记录的话。
+/// 只有 `status=2` 才是 tracker 真回包；`status=1` 只能写“没回包”，
+/// 不能因为 qB 里 progress=1 就写成“站点已看见做种”。
+pub fn tracker_status_note(infos: &[TrackerInfo]) -> String {
+    if let Some(t) = infos.iter().find(|t| t.status == 2) {
+        return format!(
+            "tracker 已回包（做种 {} / 下载 {}）",
+            t.num_seeds.max(0),
+            t.num_leeches.max(0)
+        );
+    }
+    if let Some(t) = infos.iter().find(|t| t.status == 4) {
+        let why = if t.message.trim().is_empty() {
+            "未知错误"
+        } else {
+            t.message.trim()
+        };
+        return format!("tracker 报错：{why}");
+    }
+    "tracker 还没回包".to_string()
+}
+
 pub struct QBittorrent {
     client: Client,
     base_url: String,
@@ -367,9 +431,11 @@ impl QBittorrent {
             .collect())
     }
 
-    /// 一条种子当前的 http(s) tracker URL 列表。qB 的 trackers 接口会带
-    /// `** [DHT] **` / `** [PeX] **` / `** [LSD] **` 伪条目，按 scheme 过滤后再计数。
-    pub fn trackers(&self, hash: &str) -> Result<Vec<String>> {
+    /// 一条种子当前的 http(s) tracker 详情。qB 的 trackers 接口会带
+    /// `** [DHT] **` / `** [PeX] **` / `** [LSD] **` 伪条目，按 scheme 过滤。
+    /// `status` 是 qB 的原始值：2 表示 tracker 已回包，1 表示还没联系上，
+    /// 4 表示 tracker 报错；只返回 URL 会让调用方把“挂回 qB”误当成“站点已看见”。
+    pub fn tracker_info(&self, hash: &str) -> Result<Vec<TrackerInfo>> {
         self.login()?;
         for param in ["hash", "infohash"] {
             let Ok(resp) = self
@@ -389,19 +455,20 @@ impl QBittorrent {
                 continue;
             }
             let Ok(text) = resp.text() else { continue };
-            let Ok(Value::Array(arr)) = serde_json::from_str::<Value>(&text) else {
-                continue;
-            };
-            return Ok(arr
-                .into_iter()
-                .filter_map(|t| t.get("url").and_then(|v| v.as_str()).map(|s| s.to_string()))
-                .filter(|u| {
-                    let u = u.trim();
-                    u.starts_with("http://") || u.starts_with("https://")
-                })
-                .collect());
+            if let Ok(arr) = parse_tracker_entries(&text) {
+                return Ok(arr);
+            }
         }
         Err(anyhow!("读不到 {hash} 的 tracker 列表"))
+    }
+
+    /// 一条种子当前的 http(s) tracker URL 列表（兼容只关心 URL 的旧调用方）。
+    pub fn trackers(&self, hash: &str) -> Result<Vec<String>> {
+        Ok(self
+            .tracker_info(hash)?
+            .into_iter()
+            .map(|t| t.url)
+            .collect())
     }
 
     /// 一条种子的 http(s) tracker 条数（单 tracker 策略挂种后必须 == 1）。
@@ -1153,6 +1220,43 @@ mod tests {
         let after = seen.lock().unwrap().len();
         assert_eq!(after - before, 1, "第二次不应再撞 hashes");
         assert!(seen.lock().unwrap().last().unwrap().contains("hash=def"));
+    }
+
+    #[test]
+    fn tracker_info_keeps_status_and_turns_it_into_an_honest_note() {
+        let text = r#"[
+            {"url":"https://tracker.example/announce.php?passkey=x","status":2,"msg":"","num_seeds":3,"num_leeches":14,"num_downloaded":20},
+            {"url":"** [DHT] **","status":0}
+        ]"#;
+        let infos = parse_tracker_entries(text).expect("解析 tracker 快照");
+        assert_eq!(infos.len(), 1);
+        assert_eq!(infos[0].status, 2);
+        assert_eq!(infos[0].num_seeds, 3);
+        assert!(tracker_status_note(&infos).contains("tracker 已回包"));
+        assert!(tracker_status_note(&infos).contains("做种 3 / 下载 14"));
+
+        let pending = vec![TrackerInfo {
+            url: "https://tracker.example/announce".into(),
+            status: 1,
+            message: String::new(),
+            num_seeds: -1,
+            num_leeches: -1,
+            num_downloaded: -1,
+        }];
+        assert_eq!(tracker_status_note(&pending), "tracker 还没回包");
+
+        let broken = vec![TrackerInfo {
+            url: "https://tracker.example/announce".into(),
+            status: 4,
+            message: "stream truncated".into(),
+            num_seeds: -1,
+            num_leeches: -1,
+            num_downloaded: -1,
+        }];
+        assert_eq!(
+            tracker_status_note(&broken),
+            "tracker 报错：stream truncated"
+        );
     }
 
     #[test]

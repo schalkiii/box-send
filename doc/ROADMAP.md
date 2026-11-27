@@ -132,7 +132,7 @@
 
 ### 4.5 拆分 `reseed.rs`
 
-`reseed.rs` 已超过 9,000 行，改一处容易碰坏别处。计划拆成：
+`reseed.rs` 已到 11,857 行（345 个函数、49 个公开函数、168 个测试），改一处容易碰坏别处。计划拆成：
 
 ```
 reseed/mod.rs          共享类型和入口
@@ -166,9 +166,9 @@ reseed/coverage_io.rs  覆盖记录读写
 
 ### 5.2 工程
 
-- 配置测试的临时目录按进程号共用，偶尔互相干扰。
-- 部分临时目录只用进程号做前缀，同一进程并发跑测试可能撞名。
-- 界面的自动化测试还很少。
+- ~~配置测试的临时目录按进程号共用，偶尔互相干扰~~（2026-11-27 已修：按测试线程隔离，同一测试内多次 `write_temp` 仍共享目录）。
+- ~~部分临时目录只用进程号做前缀，同一进程并发跑测试可能撞名~~（同上，`write_temp_isolated` 改成 `test_dir().join(tag)`）。
+- 界面的自动化测试还很少（3 条，见 `AUDIT-REPORT-2026-11-27.md` S7）。
 - 旧版 `startup.log` 已没有程序写，可以删。
 
 ## 6. 风险
@@ -268,7 +268,7 @@ reseed/coverage_io.rs  覆盖记录读写
 
 1. **修回包识别和检索超时重试**（解锁 dragonhd、ptzone、pthome、city13、hdvideo、cyanbug 6 站）
    - 把"已存在！"这类站点明文判重归入重复，不再记失败；检索/详情页 30 秒超时允许重试 1–2 次；HTTP 200 但页面认不出来时，先站内搜索或看账号上传列表确认到底发没发，再决定重试。
-   - **2026-11-27 代码已落地**：`exist_marker` 认“该种子已存在！”/“该种子已经存在！”精确完整句，重填页（仍带 multipart 表单）和超过 8KB 的长页面都能识别；只写“已存在！”的长页面也兜底认。错误框原有口径不变，帮助文案反例有单测。检索、详情页、上传页抓取遇到超时/连接重置/连接关闭/管道断开时最多再试 2 次，403/登录墙/限流不重试。HTTP 200 未识别回包不再直接记失败，先按名称 + 总大小站内核对，核对不到落 `posted_unresolved`。`cargo test -p bsend --lib` 440 条通过，`cargo clippy -D warnings` 通过。**真实站点复测仍未完成**：pthome/qingwa 真实回包重跑、dragonhd/ptzone 真站超时复测、city13/hdvideo 未识别回包归类、一轮 dry-run 无未识别回包。
+   - **2026-11-27 代码已落地**：`exist_marker` 认“该种子已存在！”/“该种子已经存在！”精确完整句，重填页（仍带 multipart 表单）和超过 8KB 的长页面都能识别；只写“已存在！”的长页面也兜底认。错误框原有口径不变，帮助文案反例有单测。检索、详情页、上传页抓取遇到超时/连接重置/连接关闭/管道断开时最多再试 2 次，403/登录墙/限流不重试。HTTP 200 未识别回包不再直接记失败，先按名称 + 总大小站内核对，核对不到落 `posted_unresolved`。`cargo test -p bsend --lib` 当时 440 条通过，`cargo clippy -D warnings` 通过；当前全量 513 条见 `TEST-REPORT-2026-11-27.md`。2026-11-27 下午已用真实回包补测 pthome `285040` 和 city13 `88464`：pthome 发布后挂回成功、tracker 在 16:32 变成 `status=2`；city13 发布后挂回成功但 tracker 一直 `status=1`，手动 announce 被 TLS 连接重置，站点页 `0 个做种者 / 2 个下载者`，属于 tracker 链路阻塞，不是回包识别问题。qingwa 真实回包、dragonhd/ptzone 真站超时复测仍未做。
    - 验收：city13 一条演练回包能正确归类；dragonhd、ptzone 检索超时自动重试后拿到结果；pthome"已存在！"落重复而不是失败；有单测覆盖这几类回包，一轮 dry-run 没有未识别回包。
 2. **补 G2 选档映射**（hdfans、kufei、hdvideo、ptsbao、city13、ptzone 6 站）
    - 把今日被拦条目的片源、音频 token 对到站点真实选项；站点列表里没有的选项落人工，不硬填。
@@ -347,12 +347,13 @@ reseed/coverage_io.rs  覆盖记录读写
 
 **待办（还没决定怎么做）**：
 
-1. **手动发布要不要进审计**：手动 `bsend reseed --yes` 只往 `reseed-log.jsonl` 记，不往 `auto-audit.jsonl` 追加；按日限额、失败冷却的判定因此看不到这批手动发布。权威口径在 `OPERATIONS.md` 4，需要决定是否统一写进审计。
+1. ~~**手动发布要不要进审计**~~（2026-11-27 已完成）：手动 `bsend reseed --yes` 成功后往 `auto-audit.jsonl` 追加 `manual=true` 的记录，并计入日限额；重复/被拦/失败也落审计。`OPERATIONS.md` 4 已同步。
 2. **iloli 定位二次元站（已定）**：站点只收动画/漫画/CG/动漫杂志，配置已加 `allowedTypes=["动画"]` 硬拦，电影/电视剧不再套 `type=405`。账号浓度门槛是站侧规则：发非二次元时，二次元条数须 ≥50%、体积须 ≥40%；2026-11-27 发出 Ghiblies 动画后，发布记录里已有二次元素材，基数不再是 0，但按“二次元特色站”的定位仍不拿非二次元去占额度，`reseed --site iloli` 只选动画内容。
-3. **iloli 的 AC3 同名候选**：audiocodec_sel 里 AC3 有多个同名候选（`DD/AC3`、`DD/AC-3`、`AC3` 这类），引擎判歧义留空不猜，被 G2 拦。先读表单真实 value，在 `reseedRules.selectPicks` 钉住普通 AC3 档，或在代码里补音频选档映射。
+3. ~~**iloli 的 AC3 同名候选**~~（2026-11-27 已完成）：在 `audio_alias` 补 `AC3/DD`，真实表单值 13；单测 `ac3_slash_dd_label_maps_to_ac3_option` 通过。Ghiblies 的 DD5.1 已按这条选上。
 4. **望雪这类"引擎走不了、只能走站点接口/浏览器"的站**：要长期维护一套浏览器提交流程，还是每次人工处理，待决定。
 5. **freefarm 镜像入口（已定）**：`pt.0ff.cc` 和 `farmm.cc` 是同一站点的镜像；配置维持 `pt.0ff.cc`，不切 `farmm.cc`，也不再为切域补 cookie。该站仍在 `pausedSites`，本轮不动。
 6. **gtk 知否等窗口 + 判重风险**：账号是 User 等级，站规限周六 12:00–周日 23:59 发布，本次周五早上不能发；站内已有 5 个其他版本《知否》（18185 UBWEB、13068 DBTV、9015 QHstudIo、8611 HHWEB、5230 OurTV，都 78 集），本条 73 集 119.58GB，窗口内提交前要再核一次是否判重。
+7. **city13 的 tracker 链路**：`88464` 已发布、已挂回 qB 校验 100%，但 `tracker.13city.org` 一直 `status=1`；手动带 passkey announce 和本地代理都 TLS 连接重置，站点页显示 0 做种者。先把覆盖格从 `reseeded` 改成“已挂回待 tracker 确认”，网络恢复后重试 announce；不要把这条算成做种成功。
 
 ## 8. 相关文档
 
