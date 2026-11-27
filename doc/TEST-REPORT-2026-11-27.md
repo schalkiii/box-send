@@ -1,7 +1,7 @@
 # 测试改进报告（2026-11-27）
 
 本次走 `software-improvement` 的**测试分支**：只改测试和测试辅助代码，不改生产行为。
-基线 `db9e16b`；改动后待提交。目标不是把覆盖率刷成好看数字，而是补上本轮审计里最容易产生假绿/假阳性的边界。
+基线 `db9e16b`；5 条测试随 `7046f4d`、tracker 第 6 条随 `a81b568` 提交并推送。目标不是把覆盖率刷成好看数字，而是补上本轮审计里最容易产生假绿/假阳性的边界。
 
 ## 一、基线
 
@@ -18,13 +18,13 @@
 | `coverage.rs` | 2,164 | — / 26 | — | `collect_verifying` tracker 状态、并发超时、旧 miss 路径 |
 | `bsend-cli/main.rs` | 2,380 | — / 16 | — | 命令参数组合；另有 `tests/cli_smoke.rs` 3 条，合计 19 |
 | `bsend-gui` | 3,298 | — / 3 | — | 视图状态、按钮可用性、错误提示 |
-| `qbittorrent.rs` | 1,627 | — / 22 | — | `trackers()` 只有 URL，没有 status；50,000 条上限只告警 |
+| `qbittorrent.rs` | 1,627 | — / 23 | — | `tracker_info()` 已能返回 status；50,000 条上限只告警，队列拥塞仍是运维问题 |
 | `autopost.rs` | 1,804 | — / 25 | — | 手动审计只测过 `posted`，未测重复/失败 |
 | `config.rs` | 1,167 | — / 18 | — | 测试临时目录按进程号共用（本次修） |
 | `gates.rs` | 962 | — / 20 | — | 真实站点组合仍靠 e2e |
 | `report.rs` | 1,501 | — / 27 | — | 大索引、空索引、异常状态聚合 |
 
-缺口优先级：`reseed` 的 tracker 终态、`coverage` 的收尾终态、`autopost` 的手动审计异常路径、`config` 的测试隔离、`nexusphp` 的判别词冲突。GUI 和 CLI 命令组合放到下一轮，本轮不硬凑。
+缺口优先级：`reseed` 的 tracker 终态（本轮已补 status 读取和 note，完整状态机仍缺）、`coverage` 的收尾终态、`autopost` 的手动审计异常路径、`config` 的测试隔离、`nexusphp` 的判别词冲突。GUI 和 CLI 命令组合放到下一轮，本轮不硬凑。
 
 ## 三、测试计划（新增 6 条）
 
