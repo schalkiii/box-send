@@ -58,7 +58,7 @@
 - `.gitignore` 已挡住 `artifacts/`、`rust/target/`、根目录一次性证据；`git status` 干净（本报告写完后待提交）。
 - `artifacts/` 当前 281 个文件、28.42 MB；其中 8 个 `.torrent` 含站点 `passkey`，虽然被 ignore，打包/备份/误拷贝仍会泄露。
 - 分支 `main`、`rust/coverage` 已完全合入 `master`，但远端正地保留；worktree 只有当前一个。
-- GitHub push 在 schannel 下会被 reset，现用 `-c http.sslBackend=openssl` 绕过；这个写法没有写进 `AGENTS.md` 或脚本，换机器会重复踩坑。
+- GitHub push 在 schannel/openssl 下会被 reset；实测根因是全局 `http.proxy=http://127.0.0.1:7890`，用 `git -c http.proxy= -c http.sslBackend=openssl push origin master` 直连可通，已写进 `AGENTS.md` 的常用命令。
 
 ## 三、问题清单
 
@@ -73,7 +73,7 @@
 | A7 | `artifacts/` | 281 文件 / 28.42 MB，8 个 torrent 含 passkey | 中 | 备份、打包、误拷贝泄露站点凭据 |
 | A8 | Git 分支 | `main`、`rust/coverage` 已合入未删除 | 低 | 分支列表噪音 |
 | A9 | `bsend-gui/src/main.rs` | 13 条 GUI 测试只覆盖纯状态，不覆盖窗口交互 | 低 | 界面回归靠手工 |
-| A10 | `AGENTS.md`、推送流程 | schannel TLS 被 reset 的绕过写法未固化 | 低 | 换机器重复排障 |
+| A10 | `AGENTS.md`、推送流程 | 全局 `http.proxy` 会让 git TLS reset；已写直连命令（本轮已修） | 低 | 换机器重复排障 |
 | A11 | `doc/SITES.md`、运行态 | city13 88467 仍 `pending_review`，hdvideo 79168 仍“未审”、0 上传 | 中 | 业务状态待站点审核，不是代码 bug |
 | A12 | `reseed.rs` | 3,740 行（含测试）仍是核心大文件 | 低 | 维护成本，暂不再拆 |
 
@@ -145,7 +145,7 @@
 - S6（r2 的 NexusPHP 拆分）已完成：根文件 2,886 → 1,834 行，子模块 `text/search/detail/upload` 已提交 `8087341`。
 - r2 的 S2（锁 poison）、S4（覆盖率门槛）、S5（CLI 空路径测试）均已落地；本轮又补了 `coverage.rs` 的锁与分页裁剪。
 - 新发种收尾语义已修：`collect_verifying` 区分“本站新发种”和“补挂种子”，hdvideo 79168 的旧格人工纠正为 `reseeded`；全量 535 条。
-- 文档当前数字已同步：`AGENTS.md` 535、`TESTING.md` 79.87%/77%、`TEST-REPORT` 535、`ARCHITECTURE` 535、`SITES` hdvideo `reseeded`。
+- 文档当前数字已同步：`AGENTS.md` 535、`TESTING.md` 79.87%/77%、`TEST-REPORT` 535、`ARCHITECTURE` 535、`SITES` hdvideo `reseeded`；推送的直连写法也已写进 `AGENTS.md`。
 
 ## 七、遗留与待确认
 

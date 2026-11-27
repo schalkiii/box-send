@@ -23,7 +23,7 @@
 ## 三、本轮改动
 
 - `README.md`：补审计/测试报告入口；把“旧报告不再单独保留”改成“报告保留作证据，结论以最新一份为准”。
-- `AGENTS.md`：模块清单补 `sites/nexusphp/{text,search,detail,upload}.rs`；规则尾部去掉与磁盘事实矛盾的“历史报告不再保留”。
+- `AGENTS.md`：模块清单补 `sites/nexusphp/{text,search,detail,upload}.rs`；规则尾部去掉与磁盘事实矛盾的“历史报告不再保留”；常用命令补推送直连写法（全局 `http.proxy` 会让 git TLS reset，用 `git -c http.proxy= -c http.sslBackend=openssl push origin master`）。
 - `doc/SITES.md`：hdvideo 79168 结论从 `assisted` 改为 `reseeded`，tracker 更新为 `status=4`，补 city13 227.16 MB 复查。
 - `doc/ROADMAP.md`：第 6 节并发风险改成 `reseed/` 与 `sites/nexusphp/` 的写集；补 4.8 后续优化（qB 分页、只读巡检、索引落盘基准、剩余 unwrap、清场）；hdvideo 状态同步。
 - `doc/ARCHITECTURE.md`：测试基线 533 → 535。

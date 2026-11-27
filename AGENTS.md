@@ -13,6 +13,9 @@ cargo test -p bsend                                  # 单测 + e2e（快速回�
 cargo test -p bsend --lib reseed::tests::exist_marker # 跑单条用例
 cargo build --release -p bsend-cli                   # 产物 rust/target/release/bsend.exe
 
+# 推送：全局 http.proxy 会让 git 在代理隧道里 TLS reset；直连并指定 openssl 后端
+git -c http.proxy= -c http.sslBackend=openssl push origin master
+
 # 试运行：拉上传页构造字段 + 跑发布前检查，不上传
 .\target\release\bsend.exe --config "$env:LOCALAPPDATA\BoxSend\boxsend.json" --cookiecloud autopost --dry-run --sites sbpt --limit 5
 # 真实发布（白名单 + 日限额 + 失败冷却 + 发布前检查）
