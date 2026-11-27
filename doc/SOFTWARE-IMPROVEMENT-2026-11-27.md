@@ -30,6 +30,7 @@
 
 - 剩余生产路径 `unwrap/expect` 10 处未一次性清完：`index.rs:385`、`report.rs:172`、`reseed/upload.rs:507`、`detail.rs` 三处固定选择器、`sites/nexusphp/upload.rs:40`、`commands.rs:521`、`bsend-gui/src/main.rs:361` 与 `:673`。这些都有前置不变量；逐处改要单独验证，避免把“不会发生”改成“静默吞错”。已列入 r3 审计 S5。
 - 没有做架构重构（`coverage.rs`/`commands.rs` 再拆）和功能改动；qB 50,000 条分页是功能/可靠性改动，列入 r3 S1，不混进代码质量分支。
+- 后续补丁：S1 qB 分页已在同日晚单独完成，当前全量 536 条、fmt/clippy、真实 `bsend status` 42,470 条全部通过；本报告的 535 条是代码质量分支交付时的基线。
 
 ## 五、完成判据
 

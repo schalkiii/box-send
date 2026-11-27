@@ -1,14 +1,14 @@
 # 洁癖收尾（2026-11-27）
 
-> 范围：当前项目 `boxsend`，代码基线 `a5cd535`。只读盘点 + 文档/规则同步；清场候选只列不删，等用户看完汇报后明确确认。
+> 范围：当前项目 `boxsend`，代码基线 `a5cd535` + qB 列表分页补丁。只读盘点 + 文档/规则同步；清场候选只列不删，等用户看完汇报后明确确认。
 
 ## 一、六个事实面
 
 | 事实面 | 状态 | 证据 / 说明 |
 |---|---|---|
-| 代码 | `verified-current` | `master` 在 `a5cd535`；生产 26,915 行、测试 16,403 行；535 条全绿；fmt/clippy 通过 |
-| 运行态 | `verified-current` | city13 88467 tracker `status=2`、上传 227.16 MB、2 个下载者；hdvideo 79168 主 announce `status=2`、子 tracker `status=4`、0 上传；pthome 285040 明确 existed，未重复挂种 |
-| 文档 | `changed-and-verified` | 535/79.87%/77% 已同步；`README`、`AGENTS` 的死引用已修；`SITES` hdvideo 已改 `reseeded`；新增 r3 审计本报告 |
+| 代码 | `verified-current` | `master` 在 `a5cd535` + qB 分页补丁；生产 26,915 行、测试 16,403 行；536 条全绿；fmt/clippy 通过 |
+| 运行态 | `verified-current` | city13 88467 tracker `status=2`、上传 227.16 MB、2 个下载者；hdvideo 79168 主 announce `status=2`、子 tracker `status=4`、0 上传；pthome 285040 明确 existed，未重复挂种；qB 现役 42,470 条，`bsend status` 跑通 |
+| 文档 | `changed-and-verified` | 536/最近 CI 79.87%/77% 已同步；`README`、`AGENTS` 的死引用已修；`SITES` hdvideo 已改 `reseeded`；新增 r3 审计本报告 |
 | 规则 | `changed-and-verified` | `AGENTS.md` 补 `sites/nexusphp/` 子模块，删除“历史报告不再保留”的矛盾表述；ROADMAP 第 6 节并发风险改成当前写集 |
 | 记忆 | `not-applicable` | 本项目没有可手工维护的项目记忆文件；平台长期偏好只读，不在本次范围 |
 | 工作区 | `pending` | `artifacts/` 281 文件 / 28.42 MB；根目录 49 个 ignored 条目（其中 `.workbuddy/`、`rust/target/` 是工作/构建目录，不删，剩余 47 个一次性证据）；`main`、`rust/coverage` 已合入未删；清场待确认 |
@@ -17,7 +17,7 @@
 
 - Rust 57 个 `.rs`、43,318 行：生产 26,915、内联测试 11,562、`tests/` 4,841；Markdown 33 个（含本轮新增的 r3、软件改进、洁癖报告）。
 - 覆盖索引：3,388 段内容、42,470 条成员种子；覆盖分布“已辅种 27、已转种 117、待人工确认 19、其他版本 8、同 hash 跳过 1、站内没有 20、待找源 54”。
-- 测试：核心 457、`coverage_e2e` 35、`other_version` 2、`skip_keywords` 2、CLI 23、`cli_smoke` 3、GUI 13，合计 535。
+- 测试：核心 458、`coverage_e2e` 35、`other_version` 2、`skip_keywords` 2、CLI 23、`cli_smoke` 3、GUI 13，合计 536。
 - CI：`0f1ff35` run #113 四 job success；`a5cd535` run #114 也已四 job success（2 分 35 秒）。
 
 ## 三、本轮改动
@@ -26,7 +26,8 @@
 - `AGENTS.md`：模块清单补 `sites/nexusphp/{text,search,detail,upload}.rs`；规则尾部去掉与磁盘事实矛盾的“历史报告不再保留”；常用命令补推送直连写法（全局 `http.proxy` 会让 git TLS reset，用 `git -c http.proxy= -c http.sslBackend=openssl push origin master`）。
 - `doc/SITES.md`：hdvideo 79168 结论从 `assisted` 改为 `reseeded`，tracker 更新为 `status=4`，补 city13 227.16 MB 复查。
 - `doc/ROADMAP.md`：第 6 节并发风险改成 `reseed/` 与 `sites/nexusphp/` 的写集；补 4.8 后续优化（qB 分页、只读巡检、索引落盘基准、剩余 unwrap、清场）；hdvideo 状态同步。
-- `doc/ARCHITECTURE.md`：测试基线 533 → 535。
+- `doc/ARCHITECTURE.md`：测试基线 533 → 535 → 536。
+- `rust/crates/bsend/src/qbittorrent.rs`：新增 `all_torrents()` 分页，四个全量列表调用统一走它，补 50,001 条假服务端用例；真实 42,470 条 `bsend status` 跑通。
 - `doc/AUDIT-REPORT-2026-11-27-r2.md`：顶部标“历史版，现役见 r3”。
 - 新增 `doc/AUDIT-REPORT-2026-11-27-r3.md`：七维审计、问题清单、S1–S7 建议、并行写集。
 - 新增本报告 `doc/NEAT-FREAK-2026-11-27.md`。

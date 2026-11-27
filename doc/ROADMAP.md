@@ -143,7 +143,7 @@ reseed/tests.rs     原 168 条 reseed 测试整体移出（3,433 行）
 reseed/title.rs     标题角标裁剪与标题归一化
 ```
 
-CLI 侧 `main.rs` 从 2,380 行降到 129 行，只留 `main`、连接 qB、构建适配器；`cli.rs` 放参数定义，`commands.rs` 放全部 `cmd_*` 和格式化辅助（1,998 行）。拆分只移动代码，不改行为；拆分时核心库 456、CLI 23 + 冒烟 3、coverage 34、GUI 13，全量 533 条通过，后续新增 2 条后当前为 535；`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings` 通过。`reseed.rs` 剩余 3.6k 行是主流程编排和共享解析，继续硬拆收益低于回归成本，暂不再拆。
+CLI 侧 `main.rs` 从 2,380 行降到 129 行，只留 `main`、连接 qB、构建适配器；`cli.rs` 放参数定义，`commands.rs` 放全部 `cmd_*` 和格式化辅助（1,998 行）。拆分只移动代码，不改行为；当时全量 533 条通过，后续新增语义修复用例后到 535，当前为 536 条；`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings` 通过。`reseed.rs` 剩余 3.6k 行是主流程编排和共享解析，继续硬拆收益低于回归成本，暂不再拆。
 
 ### 4.6 MSRV 与覆盖率 CI（已完成 2026-11-27）
 
@@ -162,11 +162,11 @@ sites/nexusphp/detail.rs  结果页/详情页解析、大小/上传者/审核标
 sites/nexusphp/upload.rs  页面请求重试、限流/拦截页识别、站点提示页（119 行）
 ```
 
-拆分只移动代码，不改行为；当前全量 535 条、`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings` 通过。
+拆分只移动代码，不改行为；当前全量 536 条、`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings` 通过。
 
-### 4.8 后续优化（r3 审计给出，尚未开工）
+### 4.8 后续优化（r3 审计给出；P1 已完成，其余待做）
 
-- **P1 qB 种子列表分页**：`qbittorrent.rs` 三处 `torrents/info?limit=50000` 改成“满页继续按 offset 取”，避免 42,473 条继续增长后截断；改 `rust/crates/bsend/src/qbittorrent.rs`，验证用假服务端造 50,001 条。详见 `AUDIT-REPORT-2026-11-27-r3.md` S1。
+- **P1 qB 种子列表分页（已完成）**：`qbittorrent.rs` 新增 `all_torrents()`，按 `limit=50000&offset=` 满页继续取，`list_torrents`、`existing_hashes`、`announce_for_hosts`、`all_tracker_urls` 全部改走分页；新增假服务端 50,001 条用例 `existing_hashes_pages_past_the_50000_item_limit`。当前 42,470 条真实 `bsend status` 已跑通，全量 536 条、fmt/clippy 绿，见 `artifacts/status-20261127-final32.txt`。
 - **P2 真站只读巡检脚本**：新增 `scripts/live-smoke.ps1`，只读查 city13/hdvideo/pthome 的详情页、tracker、上传量、审核标记，不发布、不挂种；配合 `doc/OPERATIONS.md`。详见 r3 S2。
 - **P2 覆盖率落盘基准**：先测 23 MB `coverage.json` 的加载/保存耗时和峰值内存，再决定是否分片或增量写；涉及 `coverage.rs`、`index.rs`、`config.rs`。详见 r3 S3。
 - **P3 剩余生产路径 `unwrap/expect`**：按 r3 S5 的逐处判断清理，先改一处跑一处测试。
@@ -296,7 +296,7 @@ sites/nexusphp/upload.rs  页面请求重试、限流/拦截页识别、站点�
 
 1. **修回包识别和检索超时重试**（解锁 dragonhd、ptzone、pthome、city13、hdvideo、cyanbug 6 站）
    - 把"已存在！"这类站点明文判重归入重复，不再记失败；检索/详情页 30 秒超时允许重试 1–2 次；HTTP 200 但页面认不出来时，先站内搜索或看账号上传列表确认到底发没发，再决定重试。
-   - **2026-11-27 代码已落地**：`exist_marker` 认“该种子已存在！”/“该种子已经存在！”精确完整句，重填页（仍带 multipart 表单）和超过 8KB 的长页面都能识别；只写“已存在！”的长页面也兜底认。错误框原有口径不变，帮助文案反例有单测。检索、详情页、上传页抓取遇到超时/连接重置/连接关闭/管道断开时最多再试 2 次，403/登录墙/限流不重试。HTTP 200 未识别回包不再直接记失败，先按名称 + 总大小站内核对，核对不到落 `posted_unresolved`。`cargo test -p bsend --lib` 当时 440 条通过，`cargo clippy -D warnings` 通过；当前全量 535 条见 `TEST-REPORT-2026-11-27.md`。2026-11-27 下午已用真实回包补测 pthome `285040` 和 city13 `88464`：pthome 发布后挂回成功、tracker 在 16:32 变成 `status=2`；city13 发布后挂回成功但 tracker 长时间 `status=1`，恢复 qB 诊断配置后变 `status=4`，手动 announce 被 TLS 连接重置，站点页 `0 个做种者 / 2 个下载者`，属于 tracker 链路阻塞，不是回包识别问题。晚场又用重构后的二进制实发 city13 `88467`、hdvideo `79168`，两条都完成“上传回包 → 站内定位 → 下载站点种子 → qB 校验 100%”；city13 在 19:52 tracker 转 `status=2`、上传 71.1 MB、2 个下载者，实际做种确认；hdvideo 强制 reannounce 后主 announce 也转 `status=2`，但 `tracker.hdvideo.top` 仍 `status=1`、0 peers/0 上传，只能写“已发布、已挂回、tracker 已确认，暂无流量”，见 `SITES.md` 2.11。期间发现“100% 但 tracker 未确认”的格子没落 `verifyHash`，下一轮收尾会永久跳过；已修 `push_target_torrent` 并在 `collect_verifying` 加旧数据回填，hdvideo 现有格用 `run --sites hdvideo --limit 0` 自动补凭据；后又按“新发种落 `Reseeded`、补挂才落 `Assisted`”的语义人工纠正为 `reseeded`。pthome《Black》上传回包“该种子已存在！”走通重复分支。qingwa 真实回包、dragonhd/ptzone 真站超时复测仍未完成：dragonhd 的通用样本已从 error 变 block（只剩样本无图），ptzone 真实候选被源站 hdsky 连接重置/超时挡住，qingwa 真实候选 ubits/1ptba 源也连不上。这属于外部站点链路，不是本项目的回包识别 bug。
+   - **2026-11-27 代码已落地**：`exist_marker` 认“该种子已存在！”/“该种子已经存在！”精确完整句，重填页（仍带 multipart 表单）和超过 8KB 的长页面都能识别；只写“已存在！”的长页面也兜底认。错误框原有口径不变，帮助文案反例有单测。检索、详情页、上传页抓取遇到超时/连接重置/连接关闭/管道断开时最多再试 2 次，403/登录墙/限流不重试。HTTP 200 未识别回包不再直接记失败，先按名称 + 总大小站内核对，核对不到落 `posted_unresolved`。`cargo test -p bsend --lib` 当时 440 条通过，`cargo clippy -D warnings` 通过；当前全量 536 条见 `TEST-REPORT-2026-11-27.md`。2026-11-27 下午已用真实回包补测 pthome `285040` 和 city13 `88464`：pthome 发布后挂回成功、tracker 在 16:32 变成 `status=2`；city13 发布后挂回成功但 tracker 长时间 `status=1`，恢复 qB 诊断配置后变 `status=4`，手动 announce 被 TLS 连接重置，站点页 `0 个做种者 / 2 个下载者`，属于 tracker 链路阻塞，不是回包识别问题。晚场又用重构后的二进制实发 city13 `88467`、hdvideo `79168`，两条都完成“上传回包 → 站内定位 → 下载站点种子 → qB 校验 100%”；city13 在 19:52 tracker 转 `status=2`、上传 71.1 MB、2 个下载者，实际做种确认；hdvideo 强制 reannounce 后主 announce 也转 `status=2`，但 `tracker.hdvideo.top` 仍 `status=1`、0 peers/0 上传，只能写“已发布、已挂回、tracker 已确认，暂无流量”，见 `SITES.md` 2.11。期间发现“100% 但 tracker 未确认”的格子没落 `verifyHash`，下一轮收尾会永久跳过；已修 `push_target_torrent` 并在 `collect_verifying` 加旧数据回填，hdvideo 现有格用 `run --sites hdvideo --limit 0` 自动补凭据；后又按“新发种落 `Reseeded`、补挂才落 `Assisted`”的语义人工纠正为 `reseeded`。pthome《Black》上传回包“该种子已存在！”走通重复分支。qingwa 真实回包、dragonhd/ptzone 真站超时复测仍未完成：dragonhd 的通用样本已从 error 变 block（只剩样本无图），ptzone 真实候选被源站 hdsky 连接重置/超时挡住，qingwa 真实候选 ubits/1ptba 源也连不上。这属于外部站点链路，不是本项目的回包识别 bug。
    - 验收：city13 一条演练回包能正确归类；dragonhd、ptzone 检索超时自动重试后拿到结果；pthome"已存在！"落重复而不是失败；有单测覆盖这几类回包，一轮 dry-run 没有未识别回包。
 2. **补 G2 选档映射**（hdfans、kufei、hdvideo、ptsbao、city13、ptzone 6 站）
    - 把今日被拦条目的片源、音频 token 对到站点真实选项；站点列表里没有的选项落人工，不硬填。

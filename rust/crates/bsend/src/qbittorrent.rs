@@ -268,6 +268,52 @@ impl QBittorrent {
         h
     }
 
+    /// 全量种子列表。qB 的 `torrents/info` 单页最多 50,000 条；现役已接近
+    /// 这个上限，只取一页会在超过后静默截断，覆盖判断可能把站上已有看成
+    /// 没有。这里按 offset 翻页，直到某一页不足一页或没有新 hash 为止。
+    fn all_torrents(&self) -> Result<Vec<Value>> {
+        const PAGE: usize = 50_000;
+        let mut out = Vec::new();
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut offset = 0usize;
+        loop {
+            let path = format!("/api/v2/torrents/info?limit={PAGE}&offset={offset}");
+            let page = self
+                .get_json(&path)?
+                .as_array()
+                .cloned()
+                .ok_or_else(|| anyhow!("torrents/info 回包不是数组"))?;
+            let got = page.len();
+            let before = out.len();
+            for t in page {
+                let key = t
+                    .get("hash")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_lowercase())
+                    .unwrap_or_default();
+                if key.is_empty() || seen.insert(key) {
+                    out.push(t);
+                }
+            }
+            if got < PAGE {
+                break;
+            }
+            if out.len() == before {
+                eprintln!("警告：torrents/info 翻页没有取到新种子，停止在 offset={offset}");
+                break;
+            }
+            offset = offset.saturating_add(got);
+            if offset > 10_000_000 {
+                eprintln!("警告：torrents/info 翻页超过 1000 万条，停止在 offset={offset}");
+                break;
+            }
+        }
+        if out.len() > PAGE {
+            eprintln!("提示：torrents/info 已分页取回 {} 条", out.len());
+        }
+        Ok(out)
+    }
+
     fn post_form_ignoring_errors(&self, path: &str, fields: &[(&str, String)]) {
         // Swift 版 setPaused/removeTorrent 用 try? 吞错（删一条已不存在的种子不算失败）；
         // 这里保持同样语义：尽力发出去，结果不抛
@@ -284,11 +330,7 @@ impl QBittorrent {
     /// 种子清单。取全量再逐条解析（`parse_torrent`），字段兼容全在解析里。
     pub fn list_torrents(&self) -> Result<Vec<LocalTorrent>> {
         self.login()?;
-        let arr = self
-            .get_json("/api/v2/torrents/info")?
-            .as_array()
-            .cloned()
-            .ok_or_else(|| anyhow!("torrents/info 回包不是数组"))?;
+        let arr = self.all_torrents()?;
         Ok(arr.iter().filter_map(parse_torrent).collect())
     }
 
@@ -425,11 +467,7 @@ impl QBittorrent {
     /// 全部种子的 v1 info hash 集合（小写）。上传前断言新种 hash 不在下载器里用。
     pub fn existing_hashes(&self) -> Result<HashSet<String>> {
         self.login()?;
-        let arr = self
-            .get_json("/api/v2/torrents/info?limit=50000")?
-            .as_array()
-            .cloned()
-            .ok_or_else(|| anyhow!("torrents/info 回包不是数组"))?;
+        let arr = self.all_torrents()?;
         Ok(arr
             .iter()
             .filter_map(|t| t.get("hash")?.as_str())
@@ -487,11 +525,7 @@ impl QBittorrent {
     /// 用于把源种 announce 改写为目标站唯一一条；本地没有该站任何种子时返回 `None`。
     pub fn announce_for_hosts(&self, hosts: &[String]) -> Option<String> {
         self.login().ok()?;
-        let arr = self
-            .get_json("/api/v2/torrents/info?limit=50000")
-            .ok()?
-            .as_array()
-            .cloned()?;
+        let arr = self.all_torrents().ok()?;
         for t in arr {
             let Some(u) = t.get("tracker").and_then(|v| v.as_str()) else {
                 continue;
@@ -536,33 +570,12 @@ impl QBittorrent {
     /// 全部种子当前 tracker 的原始 URL（采集站点 passkey 用；只读一次，逐轮可缓存）
     pub fn all_tracker_urls(&self) -> Result<Vec<String>> {
         self.login()?;
-        let resp = self
-            .client
-            .get(format!(
-                "{}/api/v2/torrents/info?limit=50000",
-                self.base_url
-            ))
-            .headers(self.referer_headers())
-            .send()
-            .context("GET torrents/info 没通")?;
-        let status = resp.status().as_u16();
-        if status != 200 {
-            self.session_died(status);
-            bail!("HTTP {status} 拉种子清单");
-        }
-        let text = resp.text().context("读种子清单失败")?;
-        let list: Value = serde_json::from_str(&text).context("种子清单不是 JSON")?;
+        let arr = self.all_torrents()?;
         let mut out = Vec::new();
-        if let Some(arr) = list.as_array() {
-            // 触顶即告警：静默截断会让 passkey/tracker 集不全，辅种源定位悄悄缺站
-            if arr.len() >= 50_000 {
-                eprintln!("警告：torrents/info 达到 50000 条上限，tracker 采集可能不完整");
-            }
-            for t in arr {
-                if let Some(u) = t.get("tracker").and_then(|v| v.as_str()) {
-                    if !u.is_empty() {
-                        out.push(u.to_string());
-                    }
+        for t in arr {
+            if let Some(u) = t.get("tracker").and_then(|v| v.as_str()) {
+                if !u.is_empty() {
+                    out.push(u.to_string());
                 }
             }
         }
@@ -1197,6 +1210,50 @@ mod tests {
         assert_eq!(t.tags, vec!["keep", "boxsend"]);
         assert_eq!(t.tracker_hosts, vec!["tracker.hdsky.me"]);
         assert_eq!(t.added_on, 1_700_000_000);
+    }
+
+    #[test]
+    fn existing_hashes_pages_past_the_50000_item_limit() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let base = mock_qb(seen.clone(), |_, path| {
+            if path.starts_with("/api/v2/auth/login") {
+                return (200, "Ok.".into());
+            }
+            if !path.starts_with("/api/v2/torrents/info") {
+                return (404, String::new());
+            }
+            let offset = path
+                .split("offset=")
+                .nth(1)
+                .and_then(|v| v.split('&').next())
+                .and_then(|v| v.parse::<usize>().ok())
+                .unwrap_or(0);
+            // 第一页整 50,000 条，第二页只剩 1 条；总计 50,001。
+            let (start, end) = if offset == 0 {
+                (0, 50_000)
+            } else if offset == 50_000 {
+                (50_000, 50_001)
+            } else {
+                (50_001, 50_001)
+            };
+            let page: Vec<Value> = (start..end)
+                .map(|i| json!({"hash": format!("h{i:05}"), "tracker": "https://tracker.example/announce"}))
+                .collect();
+            (200, Value::Array(page).to_string())
+        });
+        let hashes = test_client(&base).existing_hashes().expect("分页取全量");
+        assert_eq!(hashes.len(), 50_001);
+        assert!(hashes.contains("h00000"));
+        assert!(hashes.contains("h50000"));
+        let paths = seen.lock().unwrap().clone();
+        assert!(
+            paths.iter().any(|p| p.contains("offset=0")),
+            "缺少第一页请求：{paths:?}"
+        );
+        assert!(
+            paths.iter().any(|p| p.contains("offset=50000")),
+            "缺少第二页请求：{paths:?}"
+        );
     }
 
     #[test]
