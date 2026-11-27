@@ -766,7 +766,9 @@ fn normalize_title_for_site(name: &str, site_id: &str) -> String {
                 continue;
             }
         }
-        let ch = name[i..].chars().next().unwrap();
+        let Some(ch) = name[i..].chars().next() else {
+            break;
+        };
         out.push(ch);
         i += ch.len_utf8();
     }
@@ -1171,7 +1173,9 @@ pub(crate) fn html_to_bbcode(html: &str) -> String {
             return;
         };
         while stack.len() > pos {
-            let (_, close) = stack.pop().expect("stack has pos");
+            let Some((_, close)) = stack.pop() else {
+                break;
+            };
             out.push_str(&close);
         }
     }

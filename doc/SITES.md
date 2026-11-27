@@ -374,10 +374,10 @@ qB 4 万多条种子重启后 announce 队列拥塞：`max_concurrent_http_annou
 | 站点 | 详情页 | 发布 | qB 挂回 | qB tracker | 站点页 | 结论 |
 |---|---|---|---|---|---|---|
 | city13 | https://13city.org/details.php?id=88467 | 上传回包 HTTP 200 未识别，按名称 + 总大小站内检索命中 88467（《伪装者》全 41 集 1080p，站点改写标题和 hash） | 目标 hash `3fe4bdae5efb76d9df3e3aa90b0b38fe711651a8`，progress=1，已加入 qB | 19:52 复查 `status=2`，已上传 71.1 MB，2 个下载者；19:00 前后从 `status=1` 转好 | 发布时程序读到“等站点审核：未审”；20:00 回访页面仍标“未审” | **已发布 + 已挂回 100% + tracker 已确认做种并产生上传；站点仍待审** |
-| hdvideo | https://hdvideo.top/details.php?id=79168 | 上传结果“发布成功”；站点改写标题和 hash；目标种自带 2 条同站 announce | 目标 hash `8b0f244569b66262ffa233b0dbf8b85383ea2aba`，progress=1，已加入 qB；旧格子 `verifyHash` 为空，收尾时按目标 tracker 自动补回 | 强制 reannounce 后主 announce `https://hdvideo.top/announce.php` 已 `status=2`；`tracker.hdvideo.top` 仍 `status=1`；0 peers / 0 上传，state `stalledUP` | 发布时程序读到“等站点审核：未审” | **已发布 + 已挂回 100% + 主 tracker 已回包；暂无下载者、暂无上传，站点仍未审。程序已按 tracker 确认落 `assisted`，不能写成有流量的做种** |
+| hdvideo | https://hdvideo.top/details.php?id=79168 | 上传结果“发布成功”；站点改写标题和 hash；目标种自带 2 条同站 announce | 目标 hash `8b0f244569b66262ffa233b0dbf8b85383ea2aba`，progress=1，已加入 qB；旧格子 `verifyHash` 为空，收尾时按目标 tracker 自动补回 | 2026-11-27 21:00 复查：主 announce `https://hdvideo.top/announce.php` `status=2`；`tracker.hdvideo.top` `status=4`（stream truncated）；0 peers / 0 上传，state `stalledUP` | 发布时程序读到“等站点审核：未审”；当天回访仍“未审” | **已发布 + 已挂回 100% + 主 tracker 已回包；暂无下载者、暂无上传，站点仍未审。按“本站新发种”语义落 `reseeded`，不能写成有流量的做种** |
 | pthome | 目标 285040 所在站 | 草稿《Black》预检通过，上传回包“该种子已存在！”，视为已覆盖，不算本次转种 | 未加入下载器 | — | — | **重复分支走通**：站点明确 existed，程序没有重复挂种 |
 
-qB 仍有 42,473 条种子，重启后的 announce 队列会拖慢新种。city13 88467 在 19:52 已转成 `status=2`，上传 71.1 MB、2 个下载者，实际做种已确认；hdvideo 79168 强制 reannounce 后主 announce 也已 `status=2`、`tracker.hdvideo.top` 仍 `status=1`，0 peers、0 上传，只能算“已挂回、tracker 已确认”，不能把 `progress=1` 当有流量的做种。两条站点页 20:00 都仍标“未审”。旧格子 `verifyHash` 为空的问题已修：新发种会落盘；既有 hdvideo 格由 `run --sites hdvideo --limit 0` 按成员种子的目标 tracker 自动补回，随后收尾为 `assisted`。
+qB 仍有 42,473 条种子，重启后的 announce 队列会拖慢新种。city13 88467 在 19:52 已转成 `status=2`，上传 71.1 MB、2 个下载者，实际做种已确认；2026-11-27 21:00 复查上传量已增到 227.16 MB。hdvideo 79168 主 announce `status=2`、`tracker.hdvideo.top` `status=4`（stream truncated），0 peers、0 上传，只能算“已挂回、tracker 已确认”，不能把 `progress=1` 当有流量的做种。两条站点页当天都仍标“未审”。旧格子 `verifyHash` 为空的问题已修：新发种会落盘；既有 hdvideo 格由 `run --sites hdvideo --limit 0` 按成员种子的目标 tracker 自动补回；后按“本站新发种落 `reseeded`、补挂才落 `assisted`”的语义人工纠正为 `reseeded`。
 
 
 ## 3. 全部站点（147 个）

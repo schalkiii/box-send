@@ -428,7 +428,9 @@ pub fn run_round(
     if let Some(lim) = opts.limit {
         let mut total: usize = site_queues.values().map(|q| q.len()).sum();
         while total > lim {
-            let longest = site_queues.values_mut().max_by_key(|q| q.len()).unwrap();
+            let Some(longest) = site_queues.values_mut().max_by_key(|q| q.len()) else {
+                break;
+            };
             longest.pop();
             total -= 1;
         }
@@ -446,15 +448,10 @@ pub fn run_round(
 
     let n_sites = lock_unpoisoned(&pool).len();
     let n_workers = cfg.coverage.max_concurrent_sites.max(1).min(n_sites.max(1));
+    let n_pending: usize = lock_unpoisoned(&pool).iter().map(|(_, q)| q.len()).sum();
     emit(Event::Log(format!(
         "开工：{} 个站、{} 格待查、并发 {} 站",
-        n_sites,
-        pool.lock()
-            .unwrap()
-            .iter()
-            .map(|(_, q)| q.len())
-            .sum::<usize>(),
-        n_workers
+        n_sites, n_pending, n_workers
     )));
     let pieces_dir = cfg
         .coverage_state_path()
@@ -1376,9 +1373,7 @@ fn reseed_arm(
             verify_hash: None,
         };
     // 源种已定位（本轮缓存或索引里）→ 直接出草稿
-    let cached: Option<SourceRecord> = source_cache
-        .lock()
-        .unwrap()
+    let cached: Option<SourceRecord> = lock_unpoisoned(source_cache)
         .get(&item.key)
         .cloned()
         .or_else(|| item.source.clone());
@@ -1413,10 +1408,7 @@ fn reseed_arm(
             resolved_at: now(),
             miss_at: None,
         };
-        source_cache
-            .lock()
-            .unwrap()
-            .insert(item.key.clone(), rec.clone());
+        lock_unpoisoned(source_cache).insert(item.key.clone(), rec.clone());
         return mk_draft_event(
             CoverageStatus::ReseedDraft,
             format!("站内没有；源种定位成功（{src_site}：pieces-hash 精确命中 {note}），转种草稿待人工确认"),
@@ -1463,10 +1455,7 @@ fn reseed_arm(
                 resolved_at: now(),
                 miss_at: None,
             };
-            source_cache
-                .lock()
-                .unwrap()
-                .insert(item.key.clone(), rec.clone());
+            lock_unpoisoned(source_cache).insert(item.key.clone(), rec.clone());
             mk_draft_event(
                 CoverageStatus::ReseedDraft,
                 format!("站内没有；源种定位成功（{src_site}：{note}），转种草稿待人工确认"),
@@ -1475,10 +1464,7 @@ fn reseed_arm(
         }
         ResolveOutcome::Miss { clean: true, .. } => {
             let rec = SourceRecord::miss(now());
-            source_cache
-                .lock()
-                .unwrap()
-                .insert(item.key.clone(), rec.clone());
+            lock_unpoisoned(source_cache).insert(item.key.clone(), rec.clone());
             mk_draft_event(
                 CoverageStatus::WaitSource,
                 "站内没有，源站也都没有（记入待找源清单）".into(),

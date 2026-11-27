@@ -26,10 +26,10 @@ pub fn is_detail_href(href: &str) -> bool {
     }
     const D: &str = "details.php?id=";
     for (i, _) in href.match_indices(D) {
-        let before_ok = i == 0 || {
-            let c = href[..i].chars().next_back().unwrap();
-            !(c.is_ascii_alphabetic() || c == '_')
-        };
+        let before_ok = href[..i]
+            .chars()
+            .next_back()
+            .is_none_or(|c| !(c.is_ascii_alphabetic() || c == '_'));
         let after = &href[i + D.len()..];
         if before_ok && after.chars().next().is_some_and(|c| c.is_ascii_digit()) {
             return true;
@@ -62,7 +62,7 @@ pub fn resolve_url(reference: &str, base: &Url) -> String {
 
 /// 全部 `<a>`（文档序）：href 原值 + 锚文本
 fn all_anchors(doc: &Html) -> Vec<(String, String)> {
-    let sel = Selector::parse("a").unwrap();
+    let sel = Selector::parse("a").expect("固定选择器 a 必须能解析");
     doc.select(&sel)
         .filter_map(|el| {
             let href = el.value().attr("href")?.to_string();
@@ -190,7 +190,7 @@ pub fn search_name_in_results(
     expected_size: Option<i64>,
 ) -> Option<SearchHit> {
     let doc = Html::parse_document(html);
-    let sel = Selector::parse("a").unwrap();
+    let sel = Selector::parse("a").expect("固定选择器 a 必须能解析");
     // 扁平候选列表：(href, 文本, 行内大小)，title 更完整时在同锚后面补一条——与 Swift anchorText 的顺序一致
     let mut candidates: Vec<(String, String, Option<DisplaySize>)> = Vec::new();
     for el in doc.select(&sel) {
@@ -624,7 +624,7 @@ pub fn page_size_bytes(html: &str) -> Option<i64> {
 /// 只认用户主页链接（`usercp.php?id=` / `userdetails.php?id=` / `details.php?uploader=`）。
 pub fn page_uploader(html: &str) -> (Option<String>, Option<String>) {
     let doc = Html::parse_document(html);
-    let sel = Selector::parse("a").unwrap();
+    let sel = Selector::parse("a").expect("固定选择器 a 必须能解析");
     for el in doc.select(&sel) {
         let Some(href) = el.value().attr("href") else {
             continue;
