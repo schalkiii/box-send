@@ -192,6 +192,7 @@ fn insert_done_cell(
                 } else {
                     None
                 },
+                last_seed_check: None,
             },
         );
     }
@@ -282,6 +283,7 @@ pub fn run_round(
                         url: None,
                         note: Some("下载器里这条种子挂着该站 tracker".to_string()),
                         verify_hash: None,
+                        last_seed_check: None,
                     },
                 );
             }
@@ -334,6 +336,7 @@ pub fn run_round(
                     cell.at = t0;
                     cell.note = Some(note.clone());
                     cell.verify_hash = None;
+                    cell.last_seed_check = (status != CoverageStatus::Verifying).then_some(t0);
                     *report.by_status.entry(status).or_insert(0) += 1;
                     emit(Event::Log(format!(
                         "[{}] 收尾「{}」：{}",
@@ -847,7 +850,7 @@ fn normalize_tracker_host(raw: &str) -> String {
 ///
 /// Both sides go through [`normalize_tracker_host`] before the loose subdomain check;
 /// the normalization is comparison-only and does not affect persisted data.
-fn adapter_matches_tracker(a: &NexusPhp, tracker_hosts: &[String]) -> bool {
+pub(crate) fn adapter_matches_tracker(a: &NexusPhp, tracker_hosts: &[String]) -> bool {
     if tracker_hosts.is_empty() {
         return true;
     }
@@ -866,7 +869,7 @@ fn adapter_matches_tracker(a: &NexusPhp, tracker_hosts: &[String]) -> bool {
 
 /// 从成员种子里找回“挂着目标站 tracker”的那条 hash，作为旧“校验中”格子的收尾凭据。
 /// 只有唯一命中才返回；多条同时命中说明无法判断是哪条，宁可继续跳过也不猜。
-fn verify_hash_from_entry(entry: &ContentEntry, adapter: &NexusPhp) -> Option<String> {
+pub(crate) fn verify_hash_from_entry(entry: &ContentEntry, adapter: &NexusPhp) -> Option<String> {
     let mut hits = entry
         .torrents
         .iter()
@@ -1493,7 +1496,7 @@ fn reseed_arm(
 
 /// 判断“校验中”格子是不是本站新发种：新发种推送写“已发布并挂回…”，
 /// 后续复核保留“本站新发种…”；跨站补挂写“补挂种子…”或旧版通用文案。
-fn verifying_was_posted_here(note: &str) -> bool {
+pub(crate) fn verifying_was_posted_here(note: &str) -> bool {
     note.starts_with("已发布并挂回") || note.starts_with("本站新发种")
 }
 

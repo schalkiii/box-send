@@ -434,7 +434,7 @@ qB 仍有 42,473 条种子，重启后的 announce 队列会拖慢新种。city1
 - LongPT 站点标签：`wanted_tags_for_site` 在通用标签后补「高帧」「HDR」；只对 `longpt` 生效，避免影响其他站。
 - 收件箱扫描脚本：`scripts/scan-site-messages.py`，按配置里的站点和 `cookies.json` 并发读 `messages.php`，输出 `artifacts/site-message-scan3-20261128.json`；它只读，不点消息、不回信。另加 `scripts/browser-inbox-check.py` 用真实浏览器补读打不开的站。
 - 图片与编辑脚本：`scripts/seed-images.py` 新增 `--poster-file`，`upload_pixhost` 改成 6 次重试（20 秒超时、间隔 4 秒）；`scripts/edit-seed.py` 的 cookie 值先 `unquote` 再设置，编辑页 GET 改成 6 次重试（每次 25 秒、间隔 4 秒）。
-- 仍缺的自动化：`bsend` 还没有内置 `messages` 命令；`bsend followup` 仍只读详情页审核标记；发布后持续做种真值核验（站点页同伴表 + qB tracker + progress）还没有做成每轮自动任务。这三项列进下一版，不在本轮假装完成。
+- 仍缺的自动化：`bsend` 还没有内置的消息正文阅读和回信；`bsend inbox` 只 GET `messages.php` 列表页，不点正文、不回信。`bsend followup` 已在审核回访后接上发布后做种核验（qB progress + 目标站 tracker + 站点同伴表），自动发种每轮开头也核 20 条；不再算缺口。
 
 **本轮补读的站内规则**（只记和发布/审核直接相关的）：
 

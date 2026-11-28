@@ -136,6 +136,10 @@ pub struct TorrentPage {
     pub uploader_uid: Option<String>,
     /// 上传者展示名
     pub uploader_name: Option<String>,
+    /// 当前登录账号 uid（页眉“欢迎回来”后的用户链接）；认不出为 None
+    pub current_uid: Option<String>,
+    /// 当前登录账号展示名；认不出为 None
+    pub current_name: Option<String>,
 }
 
 /// 上传表单 multipart 提交的响应（转种流水线用）
@@ -618,6 +622,24 @@ impl NexusPhp {
         Ok((page, review))
     }
 
+    /// 读站点同伴表（`viewpeerlist.php?id=<种子 id>`），看当前账号在不在做种者里。
+    /// 用详情页里认出的当前账号 uid/名字比对；认不出账号时返回的摘要里 `self_seeding=false`，
+    /// 调用方应把它当成“没核对”，不能当成“站点没看见我”。
+    pub fn fetch_peerlist(&self, detail_url: &str, page: &TorrentPage) -> Result<PeerListSummary> {
+        let id = detail::detail_id(detail_url).context("详情链接里没有种子 id，读不了同伴表")?;
+        let mut url = self
+            .base
+            .join("viewpeerlist.php")
+            .context("拼同伴表地址失败")?;
+        url.query_pairs_mut().append_pair("id", &id.to_string());
+        let html = self.fetch_html(url.as_str(), detail_url)?;
+        Ok(parse_peerlist(
+            &html,
+            page.current_uid.as_deref(),
+            page.current_name.as_deref(),
+        ))
+    }
+
     /// 下载 .torrent（referer 用详情页，站点的防盗链检查需要）
     /// 直接按 URL 下载 .torrent（pieces-hash 通道用：已知 torrent id 与直链，
     /// 不需要先读详情页；校验与 `download_torrent` 同一条路径）。
@@ -629,6 +651,8 @@ impl NexusPhp {
             size_slack_bytes: None,
             uploader_uid: None,
             uploader_name: None,
+            current_uid: None,
+            current_name: None,
         };
         self.download_torrent(&page, referer)
     }

@@ -199,6 +199,9 @@ pub(crate) enum Cmd {
         /// 最多回访多少条
         #[arg(long)]
         limit: Option<usize>,
+        /// 发布后做种核验最多看几条（默认 20；0 = 这轮不看）
+        #[arg(long, default_value_t = 20)]
+        seeding_limit: usize,
         /// 输出 JSON（给脚本/GUI 吃）
         #[arg(long)]
         json: bool,

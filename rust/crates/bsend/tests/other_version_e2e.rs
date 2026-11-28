@@ -457,6 +457,7 @@ fn insert_draft(index: &mut ContentIndex, key: &str, local_hash: &str, src_url: 
                     url: None,
                     note: None,
                     verify_hash: None,
+                    last_seed_check: None,
                 },
             )]),
             source: Some(SourceRecord {

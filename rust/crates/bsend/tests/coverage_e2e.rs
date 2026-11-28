@@ -933,6 +933,7 @@ fn e2e_verifying_collect_reseeded_for_new_post() {
                     url: None,
                     note: Some("本站新发种校验到 100%，但 tracker 还没回包；下一轮复核".into()),
                     verify_hash: Some(hash),
+                    last_seed_check: None,
                 },
             )]),
             source: None,
@@ -1935,6 +1936,7 @@ fn e2e_duplicate_hit_pushes_target_torrent_to_downloader() {
                     url: None,
                     note: None,
                     verify_hash: None,
+                    last_seed_check: None,
                 },
             )]),
             source: Some(SourceRecord {
@@ -2059,6 +2061,7 @@ fn e2e_same_hash_skips_without_touching_existing_torrent() {
                     url: None,
                     note: None,
                     verify_hash: None,
+                    last_seed_check: None,
                 },
             )]),
             source: Some(SourceRecord {
@@ -2243,6 +2246,7 @@ fn e2e_posted_root_rename_is_mounted() {
                     url: None,
                     note: None,
                     verify_hash: None,
+                    last_seed_check: None,
                 },
             )]),
             source: Some(SourceRecord {
@@ -2352,6 +2356,7 @@ fn e2e_review_rejected_keeps_mounted_and_records_review() {
                     url: None,
                     note: None,
                     verify_hash: None,
+                    last_seed_check: None,
                 },
             )]),
             source: Some(SourceRecord {
@@ -2484,6 +2489,7 @@ fn e2e_unfinished_verification_is_posted_verifying() {
                     url: None,
                     note: None,
                     verify_hash: None,
+                    last_seed_check: None,
                 },
             )]),
             source: Some(SourceRecord {
@@ -2609,6 +2615,7 @@ fn e2e_full_progress_without_tracker_keeps_verify_hash() {
                     url: None,
                     note: None,
                     verify_hash: None,
+                    last_seed_check: None,
                 },
             )]),
             source: Some(SourceRecord {
@@ -2861,6 +2868,7 @@ fn insert_review_cell(index: &mut ContentIndex, key: &str, url: String, status: 
                     url: Some(url),
                     note: None,
                     verify_hash: None,
+                    last_seed_check: None,
                 },
             )]),
             source: None,
@@ -3093,6 +3101,7 @@ fn e2e_upload_pending_review_holds_without_mounting() {
                     url: None,
                     note: None,
                     verify_hash: None,
+                    last_seed_check: None,
                 },
             )]),
             source: Some(SourceRecord {
@@ -3233,6 +3242,7 @@ fn e2e_torrent_too_large_stays_pending_offers_without_retry() {
                     url: None,
                     note: None,
                     verify_hash: None,
+                    last_seed_check: None,
                 },
             )]),
             source: Some(SourceRecord {
@@ -3356,6 +3366,7 @@ fn e2e_posted_inner_file_mismatch_marks_unresolved_not_failed() {
                     url: None,
                     note: None,
                     verify_hash: None,
+                    last_seed_check: None,
                 },
             )]),
             source: Some(SourceRecord {
@@ -3457,6 +3468,7 @@ fn e2e_reviewed_release_reuses_fields_without_refetching() {
                     url: None,
                     note: None,
                     verify_hash: None,
+                    last_seed_check: None,
                 },
             )]),
             source: Some(SourceRecord {
@@ -3599,6 +3611,7 @@ fn e2e_site_rejected_upload_marks_failed_and_skips_downloader() {
                     url: None,
                     note: None,
                     verify_hash: None,
+                    last_seed_check: None,
                 },
             )]),
             source: Some(SourceRecord {
@@ -3700,6 +3713,7 @@ fn e2e_upload_existed_pushes_target_torrent_to_downloader() {
                     url: None,
                     note: None,
                     verify_hash: None,
+                    last_seed_check: None,
                 },
             )]),
             source: Some(SourceRecord {

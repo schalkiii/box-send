@@ -26,7 +26,7 @@ use bsend::qbittorrent::QBittorrent;
 use bsend::report::{
     draft_count_for_site, split_drafts_by_allow, whitelist_without_drafts, CoverageReport,
 };
-use bsend::review::ReviewCheckOptions;
+use bsend::review::{ReviewCheckOptions, SeedingCheckOptions};
 use bsend::sites::nexusphp::NexusPhp;
 
 mod cli;
@@ -85,8 +85,9 @@ fn main() -> Result<()> {
             all,
             sites,
             limit,
+            seeding_limit,
             json,
-        } => cmd_followup(&cfg, dry_run, all, sites, limit, json),
+        } => cmd_followup(&cfg, dry_run, all, sites, limit, seeding_limit, json),
         Cmd::Report { top, json, sites } => cmd_report(&cfg, top, json, sites),
         Cmd::Formcheck { sites } => cmd_formcheck(&cfg, sites),
         Cmd::Layoutcheck { limit, only } => cmd_layoutcheck(&cfg, limit, only),

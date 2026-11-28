@@ -14,7 +14,7 @@ use crate::models::LocalTorrent;
 use crate::qbittorrent::QBittorrent;
 use crate::report::{reconcile_marks, CoverageReport};
 use crate::reseed;
-use crate::review::ReviewCheckOptions;
+use crate::review::{ReviewCheckOptions, SeedingCheckOptions};
 
 pub struct AutopostOptions {
     /// 只跑门禁与审阅，不碰站点写接口
@@ -154,8 +154,8 @@ pub fn run_autopost(
     )
 }
 
-/// 自动发种每轮开头的一次审核回访（只看记了审核结论的格子；`bsend followup` 不带参数时一样）。
-/// 没有要回访的条目就不出声；回访出错只记日志，不影响后面的发种。
+/// 自动发种每轮开头的一次审核回访和做种核验（`bsend followup` 不带参数时一样）。
+/// 没有要回访的条目就不出声；出错只记日志，不影响后面的发种。
 fn recheck_reviews_once(cfg: &Config, qb: &QBittorrent, emit: &mut impl FnMut(AutopostEvent)) {
     let mut index = ContentIndex::load(&cfg.coverage_state_path());
     let opts = ReviewCheckOptions::default();
@@ -172,6 +172,25 @@ fn recheck_reviews_once(cfg: &Config, qb: &QBittorrent, emit: &mut impl FnMut(Au
         ))),
         Err(e) => emit(AutopostEvent::Log(format!(
             "审核回访没跑完（不影响发种）：{e:#}"
+        ))),
+    };
+    let seed_opts = SeedingCheckOptions {
+        dry_run: false,
+        sites: None,
+        limit: Some(20),
+    };
+    let seeded = {
+        let mut log = |line: &str| emit(AutopostEvent::Log(format!("做种核验｜{line}")));
+        crate::review::check_seeding(cfg, qb, &mut index, &seed_opts, &mut log)
+    };
+    match seeded {
+        Ok(s) if s.selected == 0 => {}
+        Ok(s) => emit(AutopostEvent::Log(format!(
+            "做种核验：看了 {} 条；确认在做种 {}、还在等 {}、站上没有 {}、下载器里找不到 {}；打不开 {}、没领到额度 {}",
+            s.checked, s.confirmed, s.pending, s.gone, s.missing, s.errors, s.no_budget
+        ))),
+        Err(e) => emit(AutopostEvent::Log(format!(
+            "做种核验没跑完（不影响发种）：{e:#}"
         ))),
     }
 }
@@ -980,6 +999,7 @@ mod tests {
                             url: None,
                             note: None,
                             verify_hash: None,
+                            last_seed_check: None,
                         },
                     )]),
                     source: Some(crate::index::SourceRecord {

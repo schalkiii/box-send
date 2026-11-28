@@ -768,14 +768,16 @@ pub(super) fn cmd_followup(
     all: bool,
     sites: Option<Vec<String>>,
     limit: Option<usize>,
+    seeding_limit: usize,
     as_json: bool,
 ) -> Result<()> {
     let qb = connect_qb(cfg)?;
     let mut index = ContentIndex::load(&cfg.coverage_state_path());
+    let site_set: Option<HashSet<String>> = sites.map(|v| v.into_iter().collect());
     let opts = ReviewCheckOptions {
         all_posted: all,
         dry_run,
-        sites: sites.map(|v| v.into_iter().collect()),
+        sites: site_set.clone(),
         limit,
     };
     if !as_json && dry_run {
@@ -783,8 +785,16 @@ pub(super) fn cmd_followup(
     }
     let mut log = |line: &str| println!("  {line}");
     let s = bsend::review::recheck_reviews(cfg, &qb, &mut index, &opts, &mut log)?;
+    let seed_opts = SeedingCheckOptions {
+        dry_run,
+        sites: site_set,
+        limit: Some(seeding_limit),
+    };
+    let seed = bsend::review::check_seeding(cfg, &qb, &mut index, &seed_opts, &mut log)?;
     if as_json {
-        println!("{}", serde_json::to_string_pretty(&s)?);
+        let mut out = serde_json::to_value(&s)?;
+        out["seeding"] = serde_json::to_value(&seed)?;
+        println!("{}", serde_json::to_string_pretty(&out)?);
         return Ok(());
     }
     println!(
@@ -823,6 +833,21 @@ pub(super) fn cmd_followup(
             } else {
                 "；加 --all 连自己发的、已在做种的也看一遍"
             }
+        );
+    }
+    if seeding_limit == 0 {
+        println!("做种核验：这轮按 --seeding-limit 0 跳过");
+    } else {
+        println!(
+            "做种核验：选出 {} 条，查了 {} 条；确认在做种 {}、还在等 {}、站上没有 {}、下载器里找不到 {}；打不开 {}、没领到额度 {}",
+            seed.selected,
+            seed.checked,
+            seed.confirmed,
+            seed.pending,
+            seed.gone,
+            seed.missing,
+            seed.errors,
+            seed.no_budget
         );
     }
     Ok(())
@@ -2138,7 +2163,14 @@ mod tests {
 
         // 回访命令一开始叫 reviewcheck，当天改名 followup；旧名照样能跑，但不出现在 --help 里。
         let cli = Cli::try_parse_from(["bsend", "reviewcheck", "--dry-run"]).unwrap();
-        assert!(matches!(cli.cmd, Cmd::Followup { dry_run: true, .. }));
+        assert!(matches!(
+            cli.cmd,
+            Cmd::Followup {
+                dry_run: true,
+                seeding_limit: 20,
+                ..
+            }
+        ));
         let help = Cli::command().render_long_help().to_string();
         assert!(help.contains("followup"));
         assert!(!help.contains("reviewcheck"), "{help}");

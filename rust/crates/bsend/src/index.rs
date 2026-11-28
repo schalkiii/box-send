@@ -157,6 +157,10 @@ pub struct SiteCoverage {
     /// 校验中格子专属：上一轮推送暂停在下载器里那条种子的 hash（收尾 pass 的凭据）
     #[serde(default)]
     pub verify_hash: Option<String>,
+    /// 上一次做种核验的时间（unix 秒）；没有这个字段的旧记录按 0 排，
+    /// 让持续核验按最久没看过的顺序轮转，不会老是只查最新几条。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_seed_check: Option<i64>,
 }
 
 /// 源种定位结果（方案第五节）
@@ -713,6 +717,7 @@ mod tests {
                     url: Some("https://hdsky.me/details.php?id=1".to_string()),
                     note: Some("info hash 一致".to_string()),
                     verify_hash: None,
+                    last_seed_check: None,
                 },
             );
             idx.save().unwrap();

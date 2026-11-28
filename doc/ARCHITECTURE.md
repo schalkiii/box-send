@@ -44,8 +44,8 @@ qB 没有 tracker，也不等于站上一定没发过。可能是站上已经有
 | --- | --- |
 | `seeding` | 这个站在 qB 里已经有种子在做种 |
 | `assisted` | 旧辅种流程挂上的种子；新流程不再产生带多个站点 tracker 的记录 |
-| `reseeded` | 已经发布，并从目标站下载种子挂回 qB；校验 100% 且目标 tracker `status=2`，才算站点看见做种 |
-| `verifying` | 已挂回 qB，但校验还没到 100%，或校验到 100% 而目标 tracker 还没回包；都不能算已做种 |
+| `reseeded` | 已经发布，并从目标站下载种子挂回 qB；发布当时校验 100% 且目标 tracker 已回包就记这里，后续做种核验在站点同伴表看到当前账号会补上第三份证据 |
+| `verifying` | 已挂回 qB，但校验还没到 100%、目标 tracker 还没回包，或 tracker 回了包但同伴表没看到当前账号；都不能算站点已确认做种 |
 | `failed` | 这次失败，过一段时间才能重试 |
 | `review_pending` | 站内检索命中，但清单或 hash 对不上，等人核对；其中 note 以 `posted_unresolved` 或 `existed_unresolved` 开头的，是“站上已发、qB 没挂回”，应去补挂而不是重发 |
 | `wait_source` | 本地没有可用的源种子，导不出文件 |
@@ -221,6 +221,20 @@ audiences 的 `torrents.php` 有 Cloudflare Turnstile，无头 HTTP 拿不到搜
 
 种子加进 qB 后等它校验到 100%。到了且目标 tracker `status=2` 才记 `reseeded`；只到 100% 但 tracker 没回包，或还没到 100%，都记 `verifying`，下一轮继续查，不重复发。**校验 100% 不代表站点 tracker 已回包。** 现在写覆盖记录时会同时读取目标 tracker 的 qB 状态：`status=2` 落 `reseeded/assisted`，`status=1/4` 或读不到落 `verifying`，note 写“tracker 还没确认，下一轮复核”。2026-11-27 city13 [88464](https://13city.org/details.php?id=88464) 就是 `progress=1`、站点页 0 做种者、tracker 先 `status=1` 后变 `status=4` 的反例；对用户汇报时必须拆成“已发布 / 已挂回 / 站点已看见做种”三件事。
 
+### 5.8 发布后持续做种核验
+
+发种当时写状态只读 qB 的 progress 和目标 tracker，不打开站点，所以 `reseeded` 只到“tracker 已回包”这一层。发布后还要持续核：`bsend followup` 在审核回访后默认再查 20 条，自动发种每轮开头也查 20 条；`--seeding-limit` 可改条数，`0` 表示这轮不查。
+
+只核 `reseeded / assisted / verifying` 且带详情页链接的格子；扫描按 qB tracker 写出来的几十万条 `seeding` 不碰。排序看覆盖记录的 `lastSeedCheck`，最久没核过的先查，没核过的排最前；这样不会总围着最新几条转。
+
+每条按固定顺序取证，前一步不成立就不打后面的站点请求：
+
+1. qB 里这条种子 `progress` 必须到 100%，且状态是 `uploading / stalledUP / forcedUP`；暂停、停止、排队、重新校验都不算正在做种；
+2. 只看**目标站** tracker 的 `status=2`，qB 里同时挂着的别站 tracker 回包不算；
+3. 打开详情页认当前登录账号（页眉“欢迎回来”或“用户信息”图标），再打 `viewpeerlist.php?id=<种子 id>`，只看第一张做种者表，确认当前账号在里面。
+
+三项齐了才写 `reseeded`（新发种）或 `assisted`（补挂）；同伴表打不开、认不出当前账号、只看到别人，都改回或留在 `verifying`，note 写清卡在哪一步，不硬写已做种。详情页如果又标“未审 / 审核不通过”，核验会改回 `pending_review / review_rejected`；详情页说没有这条就落 `gone_from_site`；qB 里找不到挂回种子或 tracker 没回包，留 `verifying`。详情页或同伴表打不开只算“没结论”，格子不动。演练模式照样请求和判断，但不写覆盖记录。每条最多两次站点请求，和审核回访共用站点节流和请求预算。
+
 ## 6. 一个种子只挂一个站点
 
 这条规则管的是“一个种子只向一个站汇报”，不是机械地只许一条 URL：
@@ -324,7 +338,7 @@ Windows 计划任务只给命令示例，不自动创建。需要常驻时用任
 | `index.rs` / `models.rs` | 覆盖记录的数据结构、内容条目、哈希/文件清单模型 |
 | `report.rs` | 报表、从 qB 缺口生成待发清单、对账、审计汇总 |
 | `autopost.rs` | 自动发种编排、限额、失败冷却、审计 |
-| `review.rs` | 审核回访：等站点审核、审核没过、站上已找不到之后的收尾 |
+| `review.rs` | 审核回访：等站点审核、审核没过、站上已找不到之后的收尾；发布后做种核验（qB progress + 目标 tracker + 站点同伴表） |
 | `matcher.rs` | `info hash`、pieces 指纹、名称判重 |
 | `bencode.rs` | 读取 `.torrent` 顶层结构，取 hash、文件清单和发布名 |
 | `torrent_rewrite.rs` | 单 tracker 种子改写，保留源种分片字节 |

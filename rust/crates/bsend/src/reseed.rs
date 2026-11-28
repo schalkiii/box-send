@@ -3052,6 +3052,8 @@ fn run_reseed_inner(
                 size_slack_bytes: None,
                 uploader_uid: None,
                 uploader_name: None,
+                current_uid: None,
+                current_name: None,
             };
             match tgt.download_torrent(&page, referer) {
                 Ok(d) => tdata = Some(d),
@@ -3364,6 +3366,7 @@ pub(crate) fn write_cell(
                 url,
                 note: Some(note.to_string()),
                 verify_hash: None,
+                last_seed_check: None,
             },
         );
     }

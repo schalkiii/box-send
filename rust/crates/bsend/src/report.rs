@@ -817,6 +817,7 @@ mod tests {
                                 url: None,
                                 note: None,
                                 verify_hash: None,
+                                last_seed_check: None,
                             },
                         )
                     })
@@ -914,6 +915,7 @@ mod tests {
                         url: None,
                         note: None,
                         verify_hash: None,
+                        last_seed_check: None,
                     },
                 )]
                 .into_iter()
@@ -1063,6 +1065,7 @@ mod tests {
                 url: Some("https://b.example/details.php?id=1".into()),
                 note: None,
                 verify_hash: None,
+                last_seed_check: None,
             },
         );
         assert_eq!(
@@ -1481,6 +1484,7 @@ mod tests {
                         url: None,
                         note: None,
                         verify_hash: None,
+                        last_seed_check: None,
                     },
                 )]
                 .into_iter()

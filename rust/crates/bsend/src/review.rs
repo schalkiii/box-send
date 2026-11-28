@@ -10,13 +10,15 @@
 
 use anyhow::{Context as _, Result};
 use std::collections::HashSet;
+use url::Url;
 
 use crate::bencode;
 use crate::config::Config;
-use crate::coverage::now_unix;
+use crate::coverage::{now_unix, verify_hash_from_entry, verifying_was_posted_here};
 use crate::index::{ContentIndex, CoverageStatus};
-use crate::qbittorrent::QBittorrent;
+use crate::qbittorrent::{tracker_status_note, QBittorrent, TrackerInfo};
 use crate::reseed::{adapter_for, pull_with_data};
+use crate::sites::host_matches;
 use crate::sites::nexusphp::{NexusPhp, NoSuchTorrent, ReviewMark, TorrentPage};
 use crate::throttle::{BudgetKind, SiteThrottle};
 
@@ -438,9 +440,539 @@ pub fn recheck_reviews(
     Ok(summary)
 }
 
+/// 发布后做种核验的范围和方式
+#[derive(Debug, Clone, Default)]
+pub struct SeedingCheckOptions {
+    /// 只看和报告：不改覆盖记录
+    pub dry_run: bool,
+    /// 只核这些站点（站点 id）；空 = 全部
+    pub sites: Option<HashSet<String>>,
+    /// 最多核多少条；0 = 这轮不核
+    pub limit: Option<usize>,
+}
+
+/// 一次做种核验的清点
+#[derive(Debug, Default, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct SeedingCheckSummary {
+    /// 选出来要核的条数
+    pub selected: usize,
+    /// 真的查过下载器 / 详情页的条数
+    pub checked: usize,
+    /// 站点同伴表看到当前账号在做种，已确认
+    pub confirmed: usize,
+    /// 还留在“校验中”（tracker 没回包、同伴表没看到自己、本地还在校验）
+    pub pending: usize,
+    /// 站点详情页已经没有这条种子
+    pub gone: usize,
+    /// 下载器里找不到挂回种子，或挂回种子已不在
+    pub missing: usize,
+    /// 页面 / tracker / 同伴表打不开，没法定论
+    pub errors: usize,
+    /// 站点节流没领到号，这一轮没看
+    pub no_budget: usize,
+}
+
+/// 这条格子要不要做发布后做种核验：只看自己发出去并挂回过的种子。
+/// `Seeding` 是扫描按下载器 tracker 写的（可能成千上万条），不在这条路上碰。
+pub fn should_check_seeding(status: CoverageStatus) -> bool {
+    matches!(
+        status,
+        CoverageStatus::Reseeded | CoverageStatus::Assisted | CoverageStatus::Verifying
+    )
+}
+
+/// qB 当前状态是不是“正在做种”。`progress=1` 也可能是暂停、排队或重新校验，
+/// 这些状态不能算正在做种；只有真正处于上传/做种态才继续看 tracker 和同伴表。
+fn is_active_seeding_state(state: &str) -> bool {
+    matches!(state, "uploading" | "stalledUP" | "forcedUP")
+}
+
+/// 只保留挂在目标站 tracker 上的条目；qB 里可能还挂着别的 tracker，不能拿别站的
+/// `status=2` 冒充目标站已回包。
+fn target_tracker_infos(infos: &[TrackerInfo], adapter: &NexusPhp) -> Vec<TrackerInfo> {
+    infos
+        .iter()
+        .filter(|t| {
+            Url::parse(&t.url)
+                .ok()
+                .and_then(|u| u.host_str().map(|h| h.to_string()))
+                .is_some_and(|host| {
+                    adapter
+                        .announce_hosts
+                        .iter()
+                        .any(|site_host| host_matches(&host, site_host))
+                })
+        })
+        .cloned()
+        .collect()
+}
+
+/// 已确认做种时回到哪个状态：跨站补挂回「已辅种」，其余（新发种、校验中）回「已转种」。
+fn confirmed_status(current: CoverageStatus, posted_here: bool) -> CoverageStatus {
+    if current == CoverageStatus::Assisted || !posted_here {
+        CoverageStatus::Assisted
+    } else {
+        CoverageStatus::Reseeded
+    }
+}
+
+/// 写一条做种核验结论。状态没变时不改 `at`（`at` 是结论时间），只更新
+/// `last_seed_check`，让下一轮按最久没看过的顺序轮转。
+fn write_seed_cell(
+    index: &mut ContentIndex,
+    key: &str,
+    site: &str,
+    status: CoverageStatus,
+    note: &str,
+    verify_hash: Option<&str>,
+    now: i64,
+) -> bool {
+    let Some(entry) = index.contents.get_mut(key) else {
+        return false;
+    };
+    let Some(cell) = entry.coverage.get_mut(site) else {
+        return false;
+    };
+    if cell.status != status {
+        cell.at = now;
+    }
+    cell.status = status;
+    cell.note = Some(note.to_string());
+    cell.verify_hash = verify_hash.map(|s| s.to_string());
+    cell.last_seed_check = Some(now);
+    true
+}
+
+/// 回访一遍：逐条核对“已转种 / 已辅种 / 校验中”的种子，看看现在还在不在做种。
+///
+/// 证据顺序：先看 qB 里那条挂回种子的 progress 和目标站 tracker 是否回包；
+/// tracker 确认后，再打开站点详情页和 `viewpeerlist.php`，看当前账号在不在做种者列表里。
+/// 只有“qB 校验 100% + 目标站 tracker 回包 + 站点同伴表看到当前账号”才算确认做种。
+/// 同伴表打不开、认不出当前账号、或只看到别人，都不能写成已做种。
+pub fn check_seeding(
+    cfg: &Config,
+    qb: &QBittorrent,
+    index: &mut ContentIndex,
+    opts: &SeedingCheckOptions,
+    log: &mut dyn FnMut(&str),
+) -> Result<SeedingCheckSummary> {
+    let mut summary = SeedingCheckSummary::default();
+    let limit = opts.limit.unwrap_or(20);
+    if limit == 0 {
+        return Ok(summary);
+    }
+    let mut items: Vec<(String, String, String, CoverageStatus, Option<i64>, i64)> = Vec::new();
+    for (key, entry) in &index.contents {
+        for (site, cell) in &entry.coverage {
+            if !should_check_seeding(cell.status) {
+                continue;
+            }
+            let Some(url) = cell.url.as_deref().filter(|u| !u.is_empty()) else {
+                continue;
+            };
+            if opts
+                .sites
+                .as_ref()
+                .is_some_and(|sites| !sites.contains(site))
+            {
+                continue;
+            }
+            items.push((
+                key.clone(),
+                site.clone(),
+                url.to_string(),
+                cell.status,
+                cell.last_seed_check,
+                cell.at,
+            ));
+        }
+    }
+    // 最久没核过的排前面；同一时间按结论时间、内容键稳定排序。
+    items.sort_by_key(|(key, site, _, _, checked, at)| {
+        (checked.unwrap_or(0), *at, key.clone(), site.clone())
+    });
+    items.truncate(limit);
+    summary.selected = items.len();
+    if items.is_empty() {
+        return Ok(summary);
+    }
+
+    let throttle = SiteThrottle::from_coverage(&cfg.coverage);
+    // 每条最多详情页 + 同伴表两次站点请求
+    throttle.add_budget(BudgetKind::Search, items.len() as i32 * 2 + 8);
+    let known: HashSet<&str> = cfg.sites.iter().map(|s| s.id.as_str()).collect();
+    let mut dirty = false;
+
+    for (key, site, url, current, _last, _at) in items {
+        let name = index
+            .contents
+            .get(&key)
+            .map(|e| e.name.clone())
+            .unwrap_or_default();
+        if !known.contains(site.as_str()) {
+            log(&format!("跳过 {site}：配置里没有这个站点（{name}）"));
+            summary.errors += 1;
+            continue;
+        }
+        let tgt = match adapter_for(cfg, &site) {
+            Ok(t) => t,
+            Err(e) => {
+                log(&format!("跳过 {site}：站点用不了（{e:#}）"));
+                summary.errors += 1;
+                continue;
+            }
+        };
+        tgt.log_proxy(log);
+        if !throttle.acquire(&site, BudgetKind::Search) {
+            log(&format!(
+                "{site}：这一轮没领到请求额度，做种核验下次再看（{name}）"
+            ));
+            summary.no_budget += 1;
+            continue;
+        }
+        let fetched = tgt.fetch_torrent_page_marked(&url);
+        summary.checked += 1;
+        let (page, review) = match fetched {
+            Ok(v) => v,
+            Err(e) => {
+                if e.downcast_ref::<NoSuchTorrent>().is_some() {
+                    let note = format!(
+                        "站上已找不到这条种子（做种核验：{}）；qB 里的残留由人决定删不删",
+                        e
+                    );
+                    log(&format!("站上已找不到（{name} → {site}）"));
+                    if !opts.dry_run {
+                        dirty |= write_seed_cell(
+                            index,
+                            &key,
+                            &site,
+                            CoverageStatus::GoneFromSite,
+                            &note,
+                            None,
+                            now_unix(),
+                        );
+                    }
+                    summary.gone += 1;
+                } else {
+                    log(&format!(
+                        "打不开详情页，做种核验不算结论，格子不动（{name} → {site}）：{e:#}"
+                    ));
+                    summary.errors += 1;
+                }
+                continue;
+            }
+        };
+        if let Some((mark, why)) = review {
+            let (status, note) = match mark {
+                ReviewMark::Pending => (
+                    CoverageStatus::PendingReview,
+                    format!("站上已发布，等站点审核（做种核验：站点页面还标着“{why}”）"),
+                ),
+                ReviewMark::Rejected => (
+                    CoverageStatus::ReviewRejected,
+                    format!(
+                        "站点审核没过（做种核验：{why}）；改简介或种子后在站上处理，程序不重发"
+                    ),
+                ),
+                ReviewMark::Approved => {
+                    let note = format!("站点审核已通过（做种核验：{why}）");
+                    (current, note)
+                }
+            };
+            if status != current {
+                log(&format!("{}（{name} → {site}）：{note}", status.label()));
+                if !opts.dry_run {
+                    dirty |= write_seed_cell(index, &key, &site, status, &note, None, now_unix());
+                }
+                summary.pending += 1;
+                continue;
+            }
+        }
+
+        let (hash, posted_here) = {
+            let Some(entry) = index.contents.get(&key) else {
+                summary.errors += 1;
+                continue;
+            };
+            let cell = entry.coverage.get(&site);
+            let posted_here = match current {
+                CoverageStatus::Reseeded => true,
+                CoverageStatus::Verifying => cell
+                    .and_then(|c| c.note.as_deref())
+                    .is_none_or(|n| verifying_was_posted_here(n) || !n.contains("补挂")),
+                CoverageStatus::Assisted => false,
+                _ => true,
+            };
+            let hash = cell
+                .and_then(|c| c.verify_hash.clone())
+                .filter(|h| !h.is_empty())
+                .or_else(|| verify_hash_from_entry(entry, &tgt));
+            (hash, posted_here)
+        };
+        let Some(hash) = hash else {
+            let note = "下载器里找不到挂着该站 tracker 的种子；站点端是否在做种要人工核对";
+            log(&format!("{note}（{name} → {site}）"));
+            if !opts.dry_run {
+                dirty |= write_seed_cell(
+                    index,
+                    &key,
+                    &site,
+                    CoverageStatus::Verifying,
+                    note,
+                    None,
+                    now_unix(),
+                );
+            }
+            summary.missing += 1;
+            continue;
+        };
+
+        let progress = match qb.torrent_progress(&hash) {
+            Ok(Some((progress, state))) => (progress, state),
+            Ok(None) => {
+                let note =
+                    "下载器里已找不到这条挂回种子（可能被手动删除）；站点端是否还在做种要人工核对";
+                log(&format!("{note}（{name} → {site}）"));
+                if !opts.dry_run {
+                    dirty |= write_seed_cell(
+                        index,
+                        &key,
+                        &site,
+                        CoverageStatus::Verifying,
+                        note,
+                        None,
+                        now_unix(),
+                    );
+                }
+                summary.missing += 1;
+                continue;
+            }
+            Err(e) => {
+                log(&format!(
+                    "查下载器进度失败，做种核验格子不动（{name} → {site}）：{e:#}"
+                ));
+                summary.errors += 1;
+                continue;
+            }
+        };
+        let (progress, state) = progress;
+        if progress < 0.999 {
+            let note = format!(
+                "本地校验到 {:.0}%，还没确认站点看见做种；下一轮复核（下载器状态：{state}）",
+                progress * 100.0
+            );
+            log(&format!("校验中（{name} → {site}）：{note}"));
+            if !opts.dry_run {
+                dirty |= write_seed_cell(
+                    index,
+                    &key,
+                    &site,
+                    CoverageStatus::Verifying,
+                    &note,
+                    Some(&hash),
+                    now_unix(),
+                );
+            }
+            summary.pending += 1;
+            continue;
+        }
+        if !is_active_seeding_state(&state) {
+            let note = format!("本地校验到 100%，但下载器状态是 {state}，不是正在做种；下一轮复核");
+            log(&format!("没在做种（{name} → {site}）：{note}"));
+            if !opts.dry_run {
+                dirty |= write_seed_cell(
+                    index,
+                    &key,
+                    &site,
+                    CoverageStatus::Verifying,
+                    &note,
+                    Some(&hash),
+                    now_unix(),
+                );
+            }
+            summary.pending += 1;
+            continue;
+        }
+
+        let (tracker_confirmed, tracker_note) = match qb.tracker_info(&hash) {
+            Ok(infos) => {
+                let target = target_tracker_infos(&infos, &tgt);
+                (
+                    target.iter().any(|t| t.status == 2),
+                    if target.is_empty() {
+                        "qB 里没有该站 tracker".to_string()
+                    } else {
+                        tracker_status_note(&target)
+                    },
+                )
+            }
+            Err(e) => (false, format!("tracker 状态读不到：{e}")),
+        };
+        if !tracker_confirmed {
+            let note = format!("校验到 100%，但{tracker_note}；还没确认站点看见做种，下一轮复核");
+            log(&format!("等待 tracker 回包（{name} → {site}）：{note}"));
+            if !opts.dry_run {
+                dirty |= write_seed_cell(
+                    index,
+                    &key,
+                    &site,
+                    CoverageStatus::Verifying,
+                    &note,
+                    Some(&hash),
+                    now_unix(),
+                );
+            }
+            summary.pending += 1;
+            continue;
+        }
+
+        if page.current_uid.is_none() && page.current_name.is_none() {
+            let note = format!(
+                "校验到 100%，{tracker_note}；但页面上认不出当前账号，没法核对站点同伴表，下一轮复核"
+            );
+            log(&format!("认不出当前账号（{name} → {site}）：{note}"));
+            if !opts.dry_run {
+                dirty |= write_seed_cell(
+                    index,
+                    &key,
+                    &site,
+                    CoverageStatus::Verifying,
+                    &note,
+                    Some(&hash),
+                    now_unix(),
+                );
+            }
+            summary.pending += 1;
+            continue;
+        }
+
+        if !throttle.acquire(&site, BudgetKind::Search) {
+            log(&format!(
+                "{site}：同伴表没领到请求额度，做种核验下次再看（{name}）"
+            ));
+            summary.no_budget += 1;
+            continue;
+        }
+        let peers = match tgt.fetch_peerlist(&url, &page) {
+            Ok(p) => p,
+            Err(e) => {
+                let note =
+                    format!("校验到 100%，{tracker_note}；但站点同伴表打不开（{e:#}），下一轮复核");
+                log(&format!("同伴表打不开（{name} → {site}）：{note}"));
+                if !opts.dry_run {
+                    dirty |= write_seed_cell(
+                        index,
+                        &key,
+                        &site,
+                        CoverageStatus::Verifying,
+                        &note,
+                        Some(&hash),
+                        now_unix(),
+                    );
+                }
+                summary.pending += 1;
+                summary.errors += 1;
+                continue;
+            }
+        };
+        if peers.self_seeding {
+            let status = confirmed_status(current, posted_here);
+            let note = format!(
+                "校验到 100%，{tracker_note}；站点同伴表看到当前账号在做种（{} 个做种者），已确认",
+                peers.seeders.unwrap_or(0)
+            );
+            log(&format!("{}（{name} → {site}）：{note}", status.label()));
+            if !opts.dry_run {
+                dirty |= write_seed_cell(index, &key, &site, status, &note, None, now_unix());
+            }
+            summary.confirmed += 1;
+        } else {
+            let note = format!(
+                "校验到 100%，{tracker_note}；但站点同伴表没看到当前账号（{} 个做种者），可能统计延迟，下一轮复核",
+                peers.seeders.unwrap_or(0)
+            );
+            log(&format!("同伴表未见自己（{name} → {site}）：{note}"));
+            if !opts.dry_run {
+                dirty |= write_seed_cell(
+                    index,
+                    &key,
+                    &site,
+                    CoverageStatus::Verifying,
+                    &note,
+                    Some(&hash),
+                    now_unix(),
+                );
+            }
+            summary.pending += 1;
+        }
+    }
+    if dirty {
+        index.save()?;
+    }
+    Ok(summary)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn seeding_scope_is_only_our_posted_statuses() {
+        for st in [
+            CoverageStatus::Reseeded,
+            CoverageStatus::Assisted,
+            CoverageStatus::Verifying,
+        ] {
+            assert!(should_check_seeding(st), "{st:?}");
+        }
+        for st in [
+            CoverageStatus::Seeding,
+            CoverageStatus::PendingReview,
+            CoverageStatus::Miss,
+            CoverageStatus::Failed,
+        ] {
+            assert!(!should_check_seeding(st), "{st:?}");
+        }
+    }
+
+    #[test]
+    fn only_active_seeding_states_count() {
+        for state in ["uploading", "stalledUP", "forcedUP"] {
+            assert!(is_active_seeding_state(state), "{state}");
+        }
+        for state in [
+            "pausedUP",
+            "stoppedUP",
+            "queuedUP",
+            "checkingUP",
+            "downloading",
+            "error",
+            "missingFiles",
+            "",
+        ] {
+            assert!(!is_active_seeding_state(state), "{state}");
+        }
+    }
+
+    #[test]
+    fn confirmed_status_keeps_assisted_and_marks_new_posts_reseeded() {
+        assert_eq!(
+            confirmed_status(CoverageStatus::Assisted, false),
+            CoverageStatus::Assisted
+        );
+        assert_eq!(
+            confirmed_status(CoverageStatus::Verifying, false),
+            CoverageStatus::Assisted
+        );
+        assert_eq!(
+            confirmed_status(CoverageStatus::Verifying, true),
+            CoverageStatus::Reseeded
+        );
+        assert_eq!(
+            confirmed_status(CoverageStatus::Reseeded, true),
+            CoverageStatus::Reseeded
+        );
+    }
 
     #[test]
     fn only_review_cells_by_default_and_our_posts_with_all() {

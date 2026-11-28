@@ -318,6 +318,8 @@ mod tests {
                 size_slack_bytes: None,
                 uploader_uid: None,
                 uploader_name: None,
+                current_uid: None,
+                current_name: None,
             })
         }
 

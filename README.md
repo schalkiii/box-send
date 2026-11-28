@@ -14,11 +14,12 @@ PT 站自动发种和跨站辅种工具，适合有盒子或长期做种的用�
 - 判断目标站有没有，以 qB 里的 tracker 为准，不再逐个站点搜索。
 - 一个种子只挂一个站点，禁止把多个站的 tracker 合并；上传时写入目标站专属来源标记，让新种子有独立的 hash。
 - 发布后从目标站下载种子，作为独立种子加回 qB，不和源种子混在一起。
+- 发布后持续核对做种：qB 校验进度、目标站 tracker 回包、站点同伴表看到当前账号，三项一致才算站点已确认做种。
 - 按白名单、每日限额、失败冷却（默认关闭）运行，所有发布动作写审计日志。
 - 支持 CookieCloud、PT-depiler Gist 同步 Cookie，多主题桌面界面；上传限速默认跟随 qB 全局（`defaultUpLimit=0`，不单独限速）。
 - 只发影视、剧集、纪录片；教育、成人等类型由标题关键词黑名单拦掉。
 
-**当前基线（2026-11-28）**：配置 147 个站，自动发种白名单 46 个；发种统计 44 个站、157 条；Rust 全量测试 565 条。精确的运行分布以 `bsend status` 和 `bsend stats` 为准。
+**当前基线（2026-11-28）**：配置 147 个站，自动发种白名单 46 个；发种统计 44 个站、157 条；Rust 全量测试 574 条。精确的运行分布以 `bsend status` 和 `bsend stats` 为准。
 
 ## 快速开始
 
@@ -32,9 +33,12 @@ cargo build --release -p bsend-cli
 
 # 自动循环：每 30 分钟一轮
 .\target\release\bsend.exe --config "$env:LOCALAPPDATA\BoxSend\boxsend.json" autopost --loop-mode --interval-secs 1800
+
+# 回访审核结论，并核 20 条已发种子的做种状态；--seeding-limit 0 只回访不核做种
+.\target\release\bsend.exe --config "$env:LOCALAPPDATA\BoxSend\boxsend.json" followup --dry-run
 ```
 
-`cargo test -p bsend` 只测核心库；要跑全部 Rust 测试用 `cargo test --workspace`。Windows 上需要 Visual Studio 的 C++ 链接器；没有时用 `cargo test --workspace --exclude bsend-gui`，GUI 那部分由远端 Windows CI 覆盖。
+`cargo test -p bsend` 只测核心库；要跑全部 Rust 测试用 `cargo test --workspace`。2026-11-27 起 Windows 的 GNU 工具链可直接跑 workspace（含 GUI），不需要 Visual Studio 的 C++ 链接器；换到没有窗口依赖的机器时才用 `--exclude bsend-gui`。
 
 第一次使用按这个顺序：
 

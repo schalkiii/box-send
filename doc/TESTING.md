@@ -85,7 +85,7 @@ python scripts\replay-reseed.py --draft 56 --expect 'source_sel[4] = 10' --expec
 
 本地 Windows GNU 工具链仍不能跑 `cargo llvm-cov`：报 `can't find crate for profiler_builtins`，这是工具链没编 profiler runtime，不是测试失败。要看数字以 CI 的覆盖率为准；本地继续用“测试数 / 模块行数”和“具体未覆盖路径”衡量缺口，不能把测试数当成行覆盖率。
 
-**2026-11-28 当前基线**：`cargo test --workspace` 共 **565 条**全绿（核心库 485、`coverage_e2e` 35、`other_version` 2、`skip_keywords` 2、CLI 25、`cli_smoke` 3、GUI 13）；`cargo fmt --check` 和 `cargo clippy --workspace --all-targets -- -D warnings` 都通过。GUI 不再需要排除，直接跑 workspace 测试；其中 GUI 的 13 条是不依赖窗口的纯状态测试；CLI 参数定义在 `cli.rs`，命令处理拆到 `commands.rs`，CLI 单测 25 + 冒烟 3。新增的 `inbox` 4 条覆盖行解析/未读标记、条数上限与重复 id、删种/警告分类、空页面；CLI 1 条覆盖 `inbox --sites/--limit/--concurrency/--json` 参数解析。
+**2026-11-28 当前基线**：`cargo test --workspace` 共 **574 条**全绿（核心库 494、`coverage_e2e` 35、`other_version` 2、`skip_keywords` 2、CLI 25、`cli_smoke` 3、GUI 13）；`cargo fmt --check` 和 `cargo clippy --workspace --all-targets -- -D warnings` 都通过。GUI 不再需要排除，直接跑 workspace 测试；其中 GUI 的 13 条是不依赖窗口的纯状态测试；CLI 参数定义在 `cli.rs`，命令处理拆到 `commands.rs`，CLI 单测 25 + 冒烟 3。新增的 `inbox` 4 条覆盖行解析/未读标记、条数上限与重复 id、删种/警告分类、空页面；CLI 1 条覆盖 `inbox --sites/--limit/--concurrency/--json` 参数解析。做种核验新增 9 条：`review` 3 条覆盖可核状态范围、确认状态映射和 qB 在做什么状态才算正在做种，`sites::nexusphp::detail` 6 条覆盖当前账号识别（欢迎语 / 用户信息图标，且不把发布者当自己）、同伴表只选做种者表、跳过带当前账号链接的导航表、下载者里的自己不算做种、0 做种者不确认。
 
 **MSRV**：`rust/Cargo.toml` 声明 `rust-version = "1.88"`，CI 的 `MSRV 1.88` job 跑 `cargo check -p bsend -p bsend-cli`。本地已用 `cargo +1.88.0-x86_64-pc-windows-gnu check -p bsend` 验证通过；1.88 是当前依赖（`cookie_store`、`icu_*`、`time`）的真实下限，1.82/1.85 已证实不够。
 
@@ -96,6 +96,7 @@ python scripts\replay-reseed.py --draft 56 --expect 'source_sel[4] = 10' --expec
 - `bsend-gui`：状态文案、审核三态配色、状态计数、配置路径和短路径已有 13 条纯状态测试；`jobs.rs`、`views/*` 的按钮可用性和真实窗口渲染仍没有自动化。
 - `kimi.rs`：`prepare_search_page` 的 40 轮等待、后台标签 `visibilityState=hidden` 分支仍缺。
 - `coverage_e2e.rs`：审核状态链路已覆盖上传被拦截、候选入口、回访的“未审 / 审核不通过 / 站上已找不到”，以及审核通过后下载站点种子并挂回 qB；仍缺的是其他业务分支，不是审核状态本身。
+- `review.rs` 的发布后做种核验目前只有解析和状态映射单测，没有假站点端到端：同伴表请求、三项证据不全时降回“校验中”、详情页审核标记覆盖做种结论，这些分支靠真站演练核对；下一轮应给 `coverage_e2e` 的假站点补 `viewpeerlist.php` 和同伴表页面。
 - `scripts/`：参数解析、坏输入、原子写、dry-run；现在只有 `scripts.yml` 的语法门禁。
 
 详细缺口和新增用例记录见 `TEST-REPORT-2026-11-27.md`；旧 `TEST-REPORT-2026-11-25.md` 只作历史基线，结论以新报告为准。审计结论见 `AUDIT-REPORT-2026-11-27.md`。

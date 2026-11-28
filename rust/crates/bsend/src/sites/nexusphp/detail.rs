@@ -39,7 +39,7 @@ pub fn is_detail_href(href: &str) -> bool {
 }
 
 /// 详情页 id（`id=(\d+)`）
-fn detail_id(detail_url: &str) -> Option<u64> {
+pub(crate) fn detail_id(detail_url: &str) -> Option<u64> {
     let i = detail_url.find("id=")?;
     let rest = &detail_url[i + 3..];
     let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
@@ -394,6 +394,7 @@ pub fn parse_torrent_page(html: &str, detail_url: &str, base: &Url) -> Option<To
         return None;
     }
     let (uploader_uid, uploader_name) = page_uploader(html);
+    let (current_uid, current_name) = page_current_user(html);
     let size = page_size_display(html);
     Some(TorrentPage {
         name,
@@ -402,6 +403,8 @@ pub fn parse_torrent_page(html: &str, detail_url: &str, base: &Url) -> Option<To
         size_slack_bytes: size.map(|s| s.slack_bytes),
         uploader_uid,
         uploader_name,
+        current_uid,
+        current_name,
     })
 }
 
@@ -638,6 +641,155 @@ pub fn page_uploader(html: &str) -> (Option<String>, Option<String>) {
     (None, None)
 }
 
+/// 从详情页页眉识别当前登录账号 `(uid, 展示名)`。
+///
+/// NexusPHP 页眉通常是“欢迎回来, <a href="userdetails.php?id=…">名字</a>”。
+/// 不能拿 `page_uploader` 的结果代替：那是种子发布者，别人发的种子和当前账号不是同一个人。
+pub fn page_current_user(html: &str) -> (Option<String>, Option<String>) {
+    for marker in ["欢迎回来", "Welcome back", "Welcome Back"] {
+        let Some(pos) = html.find(marker) else {
+            continue;
+        };
+        if let Some((uid, name)) = user_link_after(&html[pos..]) {
+            return (Some(uid), name);
+        }
+    }
+    // 没有页眉问候语的主题：认带“用户信息/个人资料”标题的页眉图标链接。
+    // 不能随便拿第一个用户链接——那可能是种子发布者。
+    let doc = Html::parse_document(html);
+    let title_sel = Selector::parse("a[title]").expect("固定选择器 a[title] 必须能解析");
+    for el in doc.select(&title_sel) {
+        let title = el.value().attr("title").unwrap_or("").to_lowercase();
+        if !(title.contains("用户信息")
+            || title.contains("个人资料")
+            || title.contains("user details")
+            || title.contains("profile"))
+        {
+            continue;
+        }
+        let Some(href) = el.value().attr("href") else {
+            continue;
+        };
+        if let Some(uid) = uploader_uid_from_href(href) {
+            return (Some(uid), None);
+        }
+    }
+    // 认不出就返回空：宁可这轮不确认，也不能拿发布者当当前账号去同伴表里“看到自己”。
+    (None, None)
+}
+
+/// 从一段 HTML 里找第一个用户主页链接，返回 `(uid, 展示名)`。
+fn user_link_after(html: &str) -> Option<(String, Option<String>)> {
+    const PATTERNS: &[&str] = &["userdetails.php?id=", "usercp.php?id=", "user.php?id="];
+    let (start, pat_len) = PATTERNS
+        .iter()
+        .filter_map(|pat| html.find(pat).map(|i| (i, pat.len())))
+        .min_by_key(|(i, _)| *i)?;
+    let after = &html[start + pat_len..];
+    let digits: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if digits.is_empty() {
+        return None;
+    }
+    let link_end = after.find("</a>").unwrap_or(after.len());
+    let link = &after[..link_end];
+    let name = link
+        .find('>')
+        .map(|i| strip_tags(&link[i + 1..]))
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    Some((digits, name))
+}
+
+/// 站点同伴表（`viewpeerlist.php`）的摘要。只关心“当前账号在不在做种者列表里”。
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PeerListSummary {
+    /// 页面上写的做种者总数；解析不出为 None
+    pub seeders: Option<usize>,
+    /// 页面上写的下载者总数；解析不出为 None
+    pub leechers: Option<usize>,
+    /// 当前账号是否出现在做种者表格里
+    pub self_seeding: bool,
+}
+
+/// 解析 `viewpeerlist.php` 返回的同伴表。
+///
+/// 页面结构：`<b>N 做种者</b>` → 做种者表 → `<b>M 下载者</b>` → 下载者表。
+/// 优先认表头同时写着“用户”和“客户端”的表，避开带当前账号链接的页眉/导航表；
+/// 认不出表头再退回第一张表。只看做种者表，避免把“当前账号正在下载”误当成“正在做种”。
+pub fn parse_peerlist(
+    html: &str,
+    self_uid: Option<&str>,
+    self_name: Option<&str>,
+) -> PeerListSummary {
+    let doc = Html::parse_document(html);
+    let count = |suffix: &str| -> Option<usize> {
+        let sel = Selector::parse("b").expect("固定选择器 b 必须能解析");
+        doc.select(&sel).find_map(|el| {
+            let text: String = el.text().collect::<String>();
+            let text = text.trim();
+            let head = text.strip_suffix(suffix)?.trim();
+            head.parse::<usize>().ok()
+        })
+    };
+    let seeders = count("做种者");
+    let leechers = count("下载者");
+    // 认不出做种者数字时不能猜：第一张表可能是下载者表，猜错会把“正在下载”当成“正在做种”。
+    if seeders.unwrap_or(0) == 0 {
+        return PeerListSummary {
+            seeders,
+            leechers,
+            self_seeding: false,
+        };
+    }
+    let table_sel = Selector::parse("table").expect("固定选择器 table 必须能解析");
+    let colhead_sel = Selector::parse("td.colhead").expect("固定选择器 td.colhead 必须能解析");
+    let tables: Vec<_> = doc.select(&table_sel).collect();
+    // 有页眉/导航表的主题，第一张表可能只是导航，里面也带当前账号链接；
+    // 先认表头同时写着“用户”和“客户端”的同伴表，认不出再退回第一张（紧凑页面没有表头）。
+    let table = tables
+        .iter()
+        .find(|t| {
+            let headers: String = t
+                .select(&colhead_sel)
+                .map(|c| c.text().collect::<String>())
+                .collect();
+            headers.contains("用户") && headers.contains("客户端")
+        })
+        .or_else(|| tables.first());
+    let Some(table) = table else {
+        return PeerListSummary {
+            seeders,
+            leechers,
+            self_seeding: false,
+        };
+    };
+    let row_sel = Selector::parse("tr").expect("固定选择器 tr 必须能解析");
+    let link_sel = Selector::parse("a").expect("固定选择器 a 必须能解析");
+    let mut self_seeding = false;
+    for row in table.select(&row_sel) {
+        let Some(link) = row.select(&link_sel).next() else {
+            continue;
+        };
+        let Some(href) = link.value().attr("href") else {
+            continue;
+        };
+        let uid = uploader_uid_from_href(href);
+        let name: String = link.text().collect::<String>().trim().to_string();
+        let uid_hit = matches!((uid.as_deref(), self_uid), (Some(a), Some(b)) if a == b);
+        let name_hit =
+            !name.is_empty() && self_name.is_some_and(|n| name.eq_ignore_ascii_case(n.trim()));
+        if uid_hit || name_hit {
+            self_seeding = true;
+            break;
+        }
+    }
+    PeerListSummary {
+        seeders,
+        leechers,
+        self_seeding,
+    }
+}
+
 /// 从链接 href 里取上传者 uid；种子详情锚（`details.php?id=`）与导航链接不参与。
 fn uploader_uid_from_href(href: &str) -> Option<String> {
     const PATTERNS: &[&str] = &[
@@ -716,4 +868,94 @@ fn clean_title_tag(raw: &str) -> String {
     t.trim_matches(|c: char| matches!(c, '"' | '“' | '”' | '\'' | ' '))
         .trim()
         .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn current_user_comes_from_welcome_header_not_uploader() {
+        let html = r#"
+            <div>欢迎回来, <span class="nowrap"><a href="https://pandapt.net/userdetails.php?id=10265" class='User_Name'><b>Schalkiii</b></a></span> [<a href="logout.php">退出</a>]</div>
+            <div>由 <a href="https://pandapt.net/userdetails.php?id=999" class='User_Name'><b>someone-else</b></a> 发布</div>
+        "#;
+        assert_eq!(
+            page_current_user(html),
+            (Some("10265".to_string()), Some("Schalkiii".to_string()))
+        );
+    }
+
+    #[test]
+    fn current_user_can_come_from_header_icon_title() {
+        let html = r#"
+            <a href="usercp.php" title="控制面板"></a>
+            <a href="/userdetails.php?id=100510" title="用户信息"></a>
+            <div>由 <a href="/userdetails.php?id=999" title="用户信息"></a> 发布</div>
+        "#;
+        assert_eq!(page_current_user(html), (Some("100510".to_string()), None));
+    }
+
+    #[test]
+    fn peerlist_reads_seeders_table_only() {
+        let html = r#"
+            <b>2 做种者</b>
+            <table>
+              <tr><td><a href="userdetails.php?id=1" class="User_Name"><b>alice</b></a></td></tr>
+              <tr><td><a href="userdetails.php?id=10265" class="User_Name"><b>Schalkiii</b></a></td></tr>
+            </table>
+            <b>1 下载者</b>
+            <table>
+              <tr><td><a href="userdetails.php?id=999" class="User_Name"><b>bob</b></a></td></tr>
+            </table>
+        "#;
+        let summary = parse_peerlist(html, Some("10265"), Some("Schalkiii"));
+        assert_eq!(summary.seeders, Some(2));
+        assert_eq!(summary.leechers, Some(1));
+        assert!(summary.self_seeding);
+    }
+
+    #[test]
+    fn peerlist_leecher_self_does_not_count_as_seeding() {
+        let html = r#"
+            <b>1 做种者</b>
+            <table><tr><td><a href="userdetails.php?id=1" class="User_Name"><b>alice</b></a></td></tr></table>
+            <b>1 下载者</b>
+            <table><tr><td><a href="userdetails.php?id=10265" class="User_Name"><b>Schalkiii</b></a></td></tr></table>
+        "#;
+        let summary = parse_peerlist(html, Some("10265"), Some("Schalkiii"));
+        assert_eq!(summary.seeders, Some(1));
+        assert!(!summary.self_seeding);
+    }
+
+    #[test]
+    fn peerlist_skips_nav_table_before_seeders_table() {
+        let html = r#"
+            <b>1 做种者</b>
+            <table>
+              <tr><td><a href="userdetails.php?id=10265" class="User_Name"><b>Schalkiii</b></a></td></tr>
+            </table>
+            <table>
+              <tr><td class="colhead">用户</td><td class="colhead">可连接</td><td class="colhead">客户端</td></tr>
+              <tr><td><a href="userdetails.php?id=1" class="User_Name"><b>alice</b></a></td><td>是</td><td>qBittorrent</td></tr>
+            </table>
+            <b>0 下载者</b>
+        "#;
+        let summary = parse_peerlist(html, Some("10265"), Some("Schalkiii"));
+        assert_eq!(summary.seeders, Some(1));
+        // 第一张表只是带当前账号链接的导航表，不能据此确认在做种。
+        assert!(!summary.self_seeding);
+    }
+
+    #[test]
+    fn peerlist_zero_seeders_never_confirms() {
+        let html = r#"
+            <b>0 做种者</b>
+            <b>1 下载者</b>
+            <table><tr><td><a href="userdetails.php?id=10265" class="User_Name"><b>Schalkiii</b></a></td></tr></table>
+        "#;
+        let summary = parse_peerlist(html, Some("10265"), Some("Schalkiii"));
+        assert_eq!(summary.seeders, Some(0));
+        assert!(!summary.self_seeding);
+    }
 }
