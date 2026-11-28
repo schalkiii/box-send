@@ -400,6 +400,54 @@ fn lajidui_unknown_team_uses_other_and_mkv() {
 }
 
 #[test]
+fn ptzone_adds_year_to_title_and_unknown_team_uses_other() {
+    let form = r#"<form action="takeupload.php" method="post">
+<select name="team_sel[4]"><option value="0" selected>请选择一项</option><option value="5">Other</option></select>
+<input type="text" name="name" value="">
+<textarea name="descr"></textarea>
+</form>"#;
+    let info = ReleaseInfo {
+        name: "The Disguiser 1080p HDTV x264 AAC-JING".into(),
+        subtitle: "国产剧--伪装者[无台标完整版 全41集1080P]".into(),
+        descr: "◎出品时间  2015年1月\n◎首播日期  2015年8月31日".into(),
+        mediainfo: "Complete name : J:\\Download\\EP01.mp4\nFormat : MPEG-4".into(),
+        ..Default::default()
+    };
+    let (fields, _, _) = build_upload_fields_for_site(&info, form, &[], "ptzone");
+    assert_eq!(
+        fields
+            .iter()
+            .find(|(n, _)| n == "name")
+            .map(|(_, v)| v.as_str()),
+        Some("The Disguiser 2015 1080p HDTV x264 AAC-JING")
+    );
+    assert!(fields.contains(&("team_sel[4]".into(), "5".into())));
+}
+
+#[test]
+fn ptzone_keeps_title_without_a_year() {
+    let form = r#"<form action="takeupload.php" method="post">
+<select name="team_sel[4]"><option value="0" selected>请选择一项</option><option value="5">Other</option></select>
+<input type="text" name="name" value="">
+<textarea name="descr"></textarea>
+</form>"#;
+    let info = ReleaseInfo {
+        name: "Unknown.Title.1080p.BluRay.x264-GRP".into(),
+        descr: "没有发行年份的简介".into(),
+        ..Default::default()
+    };
+    let (fields, _, _) = build_upload_fields_for_site(&info, form, &[], "ptzone");
+    assert_eq!(
+        fields
+            .iter()
+            .find(|(n, _)| n == "name")
+            .map(|(_, v)| v.as_str()),
+        Some("Unknown.Title.1080p.BluRay.x264-GRP")
+    );
+    assert!(fields.contains(&("team_sel[4]".into(), "5".into())));
+}
+
+#[test]
 fn bracket_name_handles_multibyte_brackets() {
     assert_eq!(
         first_bracket_name("【大侦探波洛】国英双配"),
@@ -1015,7 +1063,19 @@ Format : AVC
 Bit rate : 3500 Kbps
 Width : 1920
 Height : 1080</pre></div>"#;
-    assert!(verify_posted_html(good, &info).is_empty());
+    assert!(verify_posted_html(good, &info, "").is_empty());
+}
+
+#[test]
+fn verify_posted_html_accepts_ptzone_year_added_to_title() {
+    let info = ReleaseInfo {
+        name: "The Disguiser 1080p HDTV x264 AAC-JING".into(),
+        descr: "◎出品时间  2015年1月".into(),
+        ..Default::default()
+    };
+    let html = r#"<h1>The Disguiser 2015 1080p HDTV x264 AAC-JING</h1><div id="kdescr">简介</div>"#;
+    let w = verify_posted_html(html, &info, "ptzone");
+    assert!(!w.iter().any(|x| x.contains("标题与预期不一致")), "{w:?}");
 }
 
 #[test]
@@ -1029,7 +1089,7 @@ fn verify_posted_detects_missing_parts() {
         ..Default::default()
     };
     let bad = r#"<h1>别的名字</h1><div id="kdescr">什么都没有</div>"#;
-    let w = verify_posted_html(bad, &info);
+    let w = verify_posted_html(bad, &info, "");
     assert!(w.iter().any(|x| x.contains("标题与预期不一致")), "{w:?}");
     assert!(w.iter().any(|x| x.contains("MediaInfo")), "{w:?}");
     assert!(w.iter().any(|x| x.contains("tt4823720")), "{w:?}");
@@ -2057,6 +2117,35 @@ fn completed_series_detection() {
     // wanted_tags：中字 + 完结都要在
     let t = wanted_tags(&mk("Show.Complete", "中字"));
     assert!(t.contains(&"中字") && t.contains(&"完结"), "{t:?}");
+}
+
+#[test]
+fn candidate_keys_by_shape_narrows_by_size_and_file_count() {
+    let mut idx = ContentIndex::in_memory();
+    idx.contents.insert("m:a".into(), fake_entry(100, 2));
+    idx.contents.insert("m:b".into(), fake_entry(100, 3));
+    idx.contents.insert("m:c".into(), fake_entry(200, 2));
+    assert_eq!(
+        candidate_keys_by_shape(&idx, 100, 2),
+        vec!["m:a".to_string()]
+    );
+    assert!(candidate_keys_by_shape(&idx, 300, 2).is_empty());
+}
+
+fn fake_entry(total_size: i64, file_count: usize) -> crate::index::ContentEntry {
+    crate::index::ContentEntry {
+        name: "Test".into(),
+        total_size,
+        file_count,
+        manifest_digest: String::new(),
+        torrents: std::collections::BTreeMap::new(),
+        tracker_hosts: Vec::new(),
+        first_seen: 0,
+        gone_since: None,
+        coverage: std::collections::BTreeMap::new(),
+        source: None,
+        forbid_reseed: false,
+    }
 }
 
 #[test]

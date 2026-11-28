@@ -163,6 +163,9 @@ pub(crate) enum Cmd {
         /// 内容 key（m:…）；省略则按目标种 pieces 在索引里自动找
         #[arg(long)]
         key: Option<String>,
+        /// 已手工下载的站点 .torrent；给了就不再请求站点下载页（Cloudflare 分块响应卡住时用）
+        #[arg(long)]
+        file: Option<std::path::PathBuf>,
     },
 
     /// 回访待跟进的种子：再看一眼“等站点审核 / 审核没过 / 站上已找不到”的详情页，审完了就把站点种子挂回 qB（不上传、不发帖）
@@ -259,10 +262,40 @@ mod tests {
         ])
         .unwrap();
         match cli.cmd {
-            Cmd::Pull { site, url, key } => {
+            Cmd::Pull {
+                site,
+                url,
+                key,
+                file,
+            } => {
                 assert_eq!(site, "pthome");
                 assert!(url.contains("285040"));
                 assert!(key.is_none());
+                assert!(file.is_none());
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pull_accepts_local_torrent_file() {
+        let cli = Cli::try_parse_from([
+            "bsend",
+            "pull",
+            "--site",
+            "sbpt",
+            "--url",
+            "https://sbpt.link/details.php?id=21786",
+            "--file",
+            "artifacts/sbpt-21786.torrent",
+        ])
+        .unwrap();
+        match cli.cmd {
+            Cmd::Pull { file, .. } => {
+                assert_eq!(
+                    file.as_deref().and_then(|p| p.to_str()),
+                    Some("artifacts/sbpt-21786.torrent")
+                );
             }
             other => panic!("unexpected command: {other:?}"),
         }

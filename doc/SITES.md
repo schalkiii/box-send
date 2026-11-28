@@ -30,7 +30,7 @@ xingyunge, agsvpt, panda, iloli, muxuege, fenghuang, gtk
 
 | 站点 | 结论 | 实测结果 | 详情页 / 新种 hash | 备注 |
 | --- | --- | --- | --- | --- |
-| ptzone | 可发 | 已发布，五项发布检查全过 | https://ptzone.xyz/details.php?id=190916 ｜ `10d23b0e…` | 发布并挂回成功 |
+| ptzone | 可发 | 已发布 2 条；标题补年份、`team_sel` 自动选 `Other` | https://ptzone.xyz/details.php?id=194730 ｜ `2c5fc00e…`；历史 190916 | 2026-11-28 新发《伪装者》194730，作者 `Schalkiii`、创建 13:59:41；回包 `existed=1` 但页面作者/时间证明是新发。已挂回 qB、校验 100%，tracker 仍 `status=1`，覆盖 `verifying` |
 | kufei | 可发 | 已发布，五项发布检查全过 | https://kufei.org/details.php?id=141933 ｜ `266fbb06…` | 没有独立的 MediaInfo/IMDb 字段，内容并入简介 |
 | longpt | 上传入口未定位（2026-11-27 复核） | 2026-11-22 已发布 51065；11-27 复核 `upload.php` 只有 `bonusrain.php` 捐款表单（hidden + number，0 个 file input），`takeupload.php` GET 只回“上传失败！”页；11-28 复核已补「HDR」「英字」「高分」，站点页出现本账号做种 | https://longpt.org/details.php?id=51065 ｜ `91882f95…` | 程序现在按 `no-form` 中止，不再把种子 POST 到捐款接口；真实上传入口仍未定位，v1 暂不支持 |
 | tangpt | 可发 | 已发布，五项发布检查全过 | https://www.tangpt.top/details.php?id=72943 ｜ `2c7da189…` | 第一次抓到的是搜索表单；TLS 需要跳过校验 |
@@ -60,7 +60,7 @@ xingyunge, agsvpt, panda, iloli, muxuege, fenghuang, gtk
 | tey | 可发（限非蓝光） | 已发布 1 条并挂回，qB 校验 100% | https://pt.tey.cc/details.php?id=623 ｜ `c9570904…` | 表单 `medium_sel[4]` 只有 WEB-DL/HDTV/DVDR/CD/Track，没有 Blu-ray；蓝光源会被选档门禁拦住，HDTV/WEB-DL 正常。qB 里 5 条老种全走 `tracker.tey.cc`，已补 announce 别名；站上改写 hash，已加入白名单；新种状态“未审”，2026-11-24 回访仍标 `title="未审"`，覆盖记录已落 `pending_review`（等站点审核），由回访跟进 |
 | oshen | 可发 | 已发布 1 条并挂回，qB 校验 100% | http://www.oshen.win/details.php?id=57082 ｜ `22e3dd63…` | 两次失败后第三次恢复：判重搜索正常、上传成功；回包没给详情链接，落 `posted_unresolved`，按详情页补挂成功；站上 hash 与构造不同（构造 `0f73ae73…`，站上 `22e3dd63…`），已加入白名单；表单没有“完结”标签，发布后需人工补 |
 | ptfans | 2026-11-26 受限（类目/源站超时） | 2026-11-23 已发布 1 条并挂回，qB 校验 100% | https://ptfans.cc/details.php?id=11111 ｜ `fdf27b29…` | 此前上传页和 IMDb 判重都超时；2026-11-23 恢复后一次通过。站上已有 720p 其他版本 6095，按策略继续发布；上传同样改写 hash（构造 `4fd4392f…`，站上 `fdf27b29…`），已加入白名单；表单无“完结”标签，人工补。2026-11-26：Coraline 被归到 H 漫/动漫区、源详情页超时；配置 note 仍写 `publishEnabled false` |
-| itzmx | 可发（限小种） | 已发布 1 条并挂回，qB 校验 100% | https://pt.itzmx.com/details.php?id=13134 ｜ `88e3103b…` | 站点 torrent 文件上限 `266,240 bytes`，大合集/大剧包普遍超限；改用 `ubits` 源的《Liar Game》小种（源种 96,934 bytes）一次通过。上传后 hash 被站点改写（构造 `7744200c…`，站上 `88e3103b…`），已加入白名单；详情页没找到“中字/完结”标签，发布后手动补 |
+| itzmx | 可发（限小种） | 已发布 1 条并挂回，qB 校验 100% | https://pt.itzmx.com/details.php?id=13134 ｜ `88e3103b…` | 站点 torrent 文件上限 `266,240 bytes`，大合集/大剧包普遍超限；改用 `ubits` 源的《Liar Game》小种（源种 96,934 bytes）一次通过。上传后 hash 被站点改写（构造 `7744200c…`，站上 `88e3103b…`），已加入白名单；详情页没找到“中字/完结”标签，发布后手动补。2026-11-28 波洛合集 294GB / 155 文件，源种 371,586 bytes，超上限；不自动重做 32MB 分片，候选记 `skipped`，选种先看 `.torrent` 大小 |
 
 ### 2.2 2026-11-23 继续实发：railgun、lemonhd
 
@@ -416,7 +416,7 @@ qB 仍有 42,473 条种子，重启后的 announce 队列会拖慢新种。city1
 | 收敛层 | 站点/规则 | 现状 | 下一步 |
 |---|---|---|---|
 | 已收敛，代码会拦 | 全站单 tracker、上传后立即挂回、pieces/文件清单核对、剪死图、图片底线、标题技术参数顺序、完结去 `Complete`、青蛙 `Blu-ray`→`BluRay`、青蛙蓝光/原盘要 BDInfo、熊猫六段简介、hdvideo 地区/剧情必填 | 已在 `gates.rs`、`reseed/`、配置里执行；发布前会阻断或自动修正 | 保持，不为个别站关掉硬规则 |
-| 半收敛，已补自动化 | 青蛙/AGSVPT 海报必须在简介文字之前；LongPT 60fps→「高帧」、HDR→「HDR」；跨站整体复制简介要删掉源站免责声明/保种提示 | 2026-11-28 已加 `posterFirst`、`strip_cross_site_boilerplate`（`gates.rs`/`config.rs`/`form.rs`）和 `wanted_tags_for_site`（`reseed.rs`），补了三条单测；全量 551 条测试、fmt/clippy 绿；凤凰 39168 已用真实种子回放并修好 | 真站回放确认字段落点；AGSVPT 复审结果出来后核对 |
+| 半收敛，已补自动化 | 青蛙/AGSVPT 海报必须在简介文字之前；LongPT 60fps→「高帧」、HDR→「HDR」；跨站整体复制简介要删掉源站免责声明/保种提示 | 2026-11-28 已加 `posterFirst`、`strip_cross_site_boilerplate`（`gates.rs`/`config.rs`/`form.rs`）和 `wanted_tags_for_site`（`reseed.rs`），补了三条单测；全量 560 条测试、fmt/clippy 绿；凤凰 39168 已用真实种子回放并修好 | 真站回放确认字段落点；AGSVPT 复审结果出来后核对 |
 | 未收敛，仍需人工或补代码 | AGSVPT「方舟计划」入选条件、LongPT 真实上传入口和 `User` 等级发布时段、杏坛书籍专业分类/ISBN、haoxue 单页应用、audiences 的 Turnstile 判重、站点临时改规则和人工主观审核 | 这些不是“配置漏填”，是站点侧条件或外部链路；杏坛、haoxue 已明确移出自动名单；杏坛封面转官方图床已改成程序自动（2026-11-28），不再算人工缺口；AGSVPT 546963 虽有「⛵方舟」标签，仍因海报顺序被拒，说明“有标签≠会通过” | 规则表继续逐站记；只有能确定性判定的才进门禁，主观条件不硬编码成“所有种子” |
 | 外部依赖 | 图床/WAF/TLS/Cloudflare、站点详情页超时、收件箱 `messages.php` 连接重置 | 只能用真实浏览器或重试兜底；`hdbao` 本轮仍 `ERR_CONNECTION_TIMED_OUT` | 收件箱巡检继续保留“打不开”的证据，不把失败写成干净 |
 
@@ -445,6 +445,24 @@ qB 仍有 42,473 条种子，重启后的 announce 队列会拖慢新种。city1
 - **凤凰**（`rules.php`）：副标题不含广告/求种；影视必须有 IMDb 外链；必须有海报/横幅/封面；不要改管理员修改（上传者可以修正错误）。39168 被 admin 编辑后留下的跨站免责声明和死图，按这条清理，没有回滚管理员改动。
 
 规则表下一版建议每站固定记录：上传入口、权限、可发布时间窗；标题/副标题语言和禁止词；外链要求；海报是否第一位、最低图数、允许/禁止图床；简介分段、MediaInfo 位置；标签推导条件；书籍元数据（出版社/年份/ISBN/DOI/封面）；审核标记和是否有用户侧复审入口；发后核验方式（同伴表/tracker/progress）。
+
+### 2.13 2026-11-28 ptzone 自动补年份/制作组并真发；itzmx 294GB 合集结论
+
+**ptzone《伪装者》**：候选是 `The Disguiser 1080p HDTV x264 AAC-JING`，站点已有 2160p WEB-DL 条目，不是同一版本。程序现在会在标题缺年份时，从副标题/简介/MediaInfo 抽四位年份，插在第一个技术参数前；`team_sel` 为空或 `0` 时按站内选项选 `Other`（值 5）。本次提交标题为 `The Disguiser 2015 1080p HDTV x264 AAC-JING`，`team_sel[4]=5`、`medium_sel[4]=5`、`codec_sel[4]=1`、`audiocodec_sel[4]=6`、`standard_sel[4]=1`、`type=402`。
+
+真发回包是 `existed=1`，旧逻辑拿没有年份的原始标题去比对页面标题，误判成“站点已有、标题不符”。实际详情页 [194730](https://ptzone.xyz/details.php?id=194730) 标题就是带年份的提交标题，作者 `Schalkiii`、创建时间 `2026-11-28 13:59:41`，是本次新发。发后定位、`verify_posted_html` 和审阅标题比对现已统一走 `title_for_site`，并补了“页面标题带年份也算一致”的单测。站点种子已用 `bsend pull` 下回 qB，校验 100%，只挂 ptzone tracker，tracker 仍 `status=1`；覆盖记录是 `verifying`，不能写成“站点已看见做种”。
+
+**itzmx《大侦探波洛合集》**：内容 `Agatha.Christies.Poirot.S01-S13.Collection.Bluray.1080p.x265.10bit.MNHD-FRDS`，294,270,271,759 bytes、155 个文件；qB 里 16MB 分片导出的 `.torrent` 是 371,586 bytes，超过站点 `266,240 bytes` 上限。8MB/4MB/2MB 分片只会更大（722,394 / 1,423,983 / 2,827,244 bytes）。要压进上限，约需 32MB 分片并重新读取、哈希 294GB 文件；当前 `torrent_rewrite.rs` 只做单 tracker 字节级改写，保留 `info.pieces` 和分片长度，不支持重新分片或拆种。因此这一版**不自动重做 294GB 分片**，该候选按站点规则记 `skipped`（不是 `failed`，不重投），后续选种先看 `.torrent` 是否小于 266,240 bytes，优先换小种。站点提示本身允许“更大区块重制/拆种”，但那是人工重制流程，不是本项目当前的自动路径。
+
+### 2.14 2026-11-28 晚遗留收口：审核拒绝清零、城市/高清视界审核结束、tracker 拒绝客户端
+
+**审核拒绝三条已改完**：cspt [259870](https://cspt.top/details.php?id=259870)、qingwa [208692](https://qingwapt.com/details.php?id=208692) 和 [208575](https://qingwapt.com/details.php?id=208575)。改动包括删掉源站 1PTBA `[quote]`、拆掉图片外 `[url]`、删简介里的技术参数块、把技术参数留在独立栏、用 pixhost 换 3 张可访问截图、补 676 字节 BDInfo、音频改 `Other`。cspt 已审核结束，站点种子本来就在 qB 里做种；qingwa 两条页面仍显示历史拒绝文案，按站点“修改后自动进待审队列”记 `pending_review`，不再当 `review_rejected`。
+
+**审核结束的三条**：city13 [88464](https://13city.org/details.php?id=88464)（波洛合集）和 [88256](https://13city.org/details.php?id=88256)（知否）页面已无审核标记，qB 分别只挂 city13 tracker、progress=1，已上传 5.6GB / 1.4GB；hdvideo [79086](https://hdvideo.top/details.php?id=79086)（侠女）页面也无审核标记，qB 已上传 227MB。三条都改 `reseeded`。
+
+**8 条 `verifying` 的真正原因**：逐条拿 announce URL 直接请求，hdvideo、ptzone、sbpt 回 `Banned Client, Please goto ... acceptable clients`，pthome 回 `Anti-Cheater`。当前 qBittorrent 5.3.0 被这些站禁用，qB 顶层 tracker 因此一直 `status=1`；种子已挂回、本地校验 100%，但站点没有接受这次 announce。换站点允许的客户端之前，不能写成“已做种”。这不是漏挂，也不是站点没这条种子。
+
+**旧草稿清理**：22 条 note 命中“旧草稿 / 批量测试清理”的 `failed` 改成 `skipped`，`failed` 从 47 降到 25。`skipped` 只表示这轮不自动发，不是站点拒绝；要发仍要重新生成草稿。
 
 ## 3. 全部站点（147 个）
 
@@ -534,7 +552,7 @@ qB 仍有 42,473 条种子，重启后的 announce 队列会拖慢新种。city1
 | hdu | 好多油 | pt.upxin.net | NexusPHP | 是 | — | — | fail | 目标站没有可解析的静态上传表单（JS/自定义上传界面，或 cookie 失效），v1 暂不支持：https://pt.upxin.net/upload.php | unsupported | 5 | 2026-11-27 两次真实浏览器复核：`/`、`/torrents.php`、`/upload.php`、`/login.php` 都回 200，但都是 253–264 字节自动刷新壳，原文「服务器负载过高，正在重试，请稍后...」，壳里没有真实表单；页面上 `[EASY-UPLOAD]` 按钮是本机 PT 助手浏览器扩展注入，不是站点组件。已移出白名单，站点恢复后复测，见 2.9 |
 | hdvideo | HDVideo | hdvideo.top | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 1 | 检查结论是上一次表单结果；`region_sel[4]`、`style_sel[4][]` 已补，78856 已补挂 qB；2026-11-27 晚实发 79168（《人民的名义》全 55 集 4K），已挂回 100%，强制 reannounce 后主 announce `status=2`、`tracker.hdvideo.top` 仍 `status=1`，0 peers/0 上传，站点未审，见 2.11 |
 | iloli | 爱萝莉 | mua.xloli.cc | NexusPHP | 是 | — | — | ok | source_sel[4] 未选 | ok | 1 | announce 主机是独立域 `a.x-anime.cc`（不是站点同域，74 字符，qB 里 163 条同 passkey）；填 `overrides.announceURL` 后该主机自动并入允许清单。2026-11-27 实发 56513（《Ghiblies Episode 2》，源 pter 332330），分类动画、tracker `status=2`、上传 131,072 字节、站点页 3 做种 / 14 下载；《知否》两次被账号二次元浓度门槛拒；《广告狂人》AC3 已补 `AC3/DD` 映射，见 2.9、2.10 |
-| itzmx | Itz | pt.itzmx.com | NexusPHP | 是 | — | — | ok | team_sel 未选 | 未测 | 5 | 2026-11-23 首次实发 `13134`（`88e3103b…`）并补挂校验 100%；站点 torrent 文件上限 `266,240 bytes`，大合集/大剧包会被拒，改用小种《Liar Game》通过；站上改写 hash，已加入白名单。2026-11-26：Coraline 又出现 403、War 通用上传失败；403 是本轮新现象（早期 403 曾归为超大请求体前置拦截），根因待查 |
+| itzmx | Itz | pt.itzmx.com | NexusPHP | 是 | — | — | ok | team_sel 未选 | 未测 | 5 | 2026-11-23 首次实发 `13134`（`88e3103b…`）并补挂校验 100%；站点 torrent 文件上限 `266,240 bytes`，大合集/大剧包会被拒，改用小种《Liar Game》通过；站上改写 hash，已加入白名单。2026-11-26：Coraline 又出现 403、War 通用上传失败。2026-11-28：波洛合集 294GB / 155 文件，源种 371,586 bytes，超上限；不自动重做 32MB 分片，候选记 `skipped`，选种先看 `.torrent` 大小 |
 | kelu | Kelu | our.kelu.one | NexusPHP | 是 | — | — | ok | type 未选 | 未测 | 1 |  |
 | kufei | 库非 | kufei.org | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 1 | 2026-11-25 核对《人民的名义》`142202`：站点种同 `info hash`，qB progress=1、只挂 kufei tracker，按 `bsend pull` 复核记 `seeding`；2026-11-27 真实下拉 `medium_sel[4]=6` 是 BD Remux，草稿 79 已落 6 |
 | lajidui | 垃圾堆 | pt.lajidui.top | NexusPHP | 是 | — | — | ok | processing_sel[4] 未选 | ok | 1 | 2026-11-26 程序已自动填 MP4/MKV、大陆/日韩/欧美、制作组或 Other；表单检查显示“未选”是检查工具只读原表单，不是发种时留空。**候选范围失守：85084、85085 是安全集（允许转载内容范围）之外误发**，这条此前没记；后续选种要先核对内容是否在安全集内，再谈下拉和图片 |
@@ -551,7 +569,7 @@ qB 仍有 42,473 条种子，重启后的 announce 队列会拖慢新种。city1
 | pthome | 铂金家 | pthome.net | NexusPHP | 是 | — | — | ok | team_sel 未选 | unsupported | 6 | 2026-11-24 首次实发 `284701`（《人民的名义》，源 hdfans）；2026-11-27 实发 `285040`（《A Touch of Zen》，源 1ptba 9321），已挂回 qB 校验 100%，tracker 16:32 变 `status=2`；17:19 真实浏览器详情页确认 `1 做种者`（自己，100%，qBittorrent/5.3.0）、`0 下载者`，见 2.10；晚场《Black》上传回包“该种子已存在！”，重复分支走通，没有重复挂种，见 2.11 |
 | ptlgs | 劳改所 | ptlgs.org | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | 未测 | 6 |  |
 | ptsbao | 烧包 | ptsbao.club | NexusPHP | 是 | — | — | ok | processing_sel[1] 未选 | ok | 1 | 2026-11-23 已实发 135787，`0b0087…`；`source_sel[1]` 二级分类已自动填 `剧集-大陆`；站点改写 hash，已加入白名单，挂回校验 100%；表单无“完结”标签需人工补；2026-11-27 草稿 82 已落 `medium_sel[1]=1`（BluRay）+ processing=Remux + source=电影-Remux |
-| ptzone | 葡萄汁 | ptzone.xyz | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 1 | 2026-11-26：详情页访问超时、`audiocodec_sel` 未选被门禁拦下；2026-11-27 已加检索/详情页超时重试，单测过，真站复测未做；真实下拉 `medium_sel[4]=3` 是 Remux，选档已覆盖；早期 190916 的“五项检查全过”是 11-22 实测，选档缺口此前没记 |
+| ptzone | 葡萄汁 | ptzone.xyz | NexusPHP | 是 | — | — | ok | team_sel[4] 自动选 Other | ok | 1 | 2026-11-28 新发 [194730](https://ptzone.xyz/details.php?id=194730)《伪装者》，标题自动补 2015、`team_sel[4]=5`（Other）；详情页作者 `Schalkiii`、创建 13:59:41，回包 `existed=1` 但确认是新发；已挂回 qB、校验 100%，tracker 仍 `status=1`，覆盖 `verifying`。历史 190916 曾五项检查全过；早期 `audiocodec_sel` 未选和详情页超时已补 |
 | qilin | 麒麟 | hdkyl.in | NexusPHP | 是 | — | — | ok | processing_sel[4] 未选 | ok | 8 | 479362 已补挂 qB；2026-11-28 复核站内信：354775 管理员 `白小纯` 审核通过，354776 同时间编辑，354778 同时间“因断种过久，被系统自动删除”，魔力值未扣。qB 同内容 `bd348dfc…` 的 tracker 现在回 `Torrent not exists`，是死条目，由外部清理工具处理，不能再记做种；覆盖记录保持 `gone_from_site`。重发前必须重新构造该站专属种子并确保挂回后 tracker 回包。2026-11-26：480763 首次挂回被“非目标站 tracker”拒绝、落“已发但未挂回”，原因是 tracker 别名识别缺口——页面域 `www.hdkyl.in`，站点种子 tracker 在 `www.hdkylin.top`；补别名后才挂回（详见 `SITE-DEBUG.md` 6.16） |
 | qingwa | 青蛙 | qingwapt.com | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 2 | announce 别名 `tracker.qingwapt.org` 已补；2026-11-24 Poirot 合集被站点判 `torrent_too_large`（要求改走 `offers.php` 候选），程序记 `pending_offers`（待走候选入口），不算失败、不自动重试，`status` 单列待跟进；同站《伪装者》发 `208575` 并挂回，校验 100%（构造 `c78e9cb2…`，站上 `d1eeec5c…`），当晚 9 张 `i13.tietuku.com` 死图已换 imgbox（复查 0 旧图 / 9 新图）；《知否》回包“已存在！”且 qB 已在做种（见 2.3）。2026-11-26：[208804](https://qingwapt.com/details.php?id=208804) 复核标题已是 `BluRay`、Remux 标签已勾、页面无审核标记，回访干净、`reseeded`，没有重复提交；[208692](https://qingwapt.com/details.php?id=208692)、[208575](https://qingwapt.com/details.php?id=208575) 仍审核没过、等站点重审，是历史待跟进；2026-11-27 已补“已存在！”精确识别，真实回包未复测。2026-11-28 复核：两条编辑后约 30 小时仍 `( 禁止 )`，没有新审核消息，按站点“修改后自动进复审”继续等；`posterFirst` 已加到程序，下一轮发种会自动把海报提到最前 |
 | railgun | Railgun | bilibili.download | NexusPHP | 是 | — | — | ok |  | ok | 2 | 2026-11-23 首次实发 60632（`72889498…`）并补挂校验 100%；站上改写 hash，已加入白名单 |

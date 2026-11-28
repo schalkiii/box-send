@@ -596,12 +596,18 @@ pub(super) fn cmd_reseed(
     Ok(())
 }
 
-pub(super) fn cmd_pull(cfg: &Config, site: &str, url: &str, key: Option<&str>) -> Result<()> {
+pub(super) fn cmd_pull(
+    cfg: &Config,
+    site: &str,
+    url: &str,
+    key: Option<&str>,
+    file: Option<&std::path::Path>,
+) -> Result<()> {
     let qb = connect_qb(cfg)?;
     let mut index = ContentIndex::load(&cfg.coverage_state_path());
     let mut log = |line: &str| println!("  {line}");
     let (status, detail) =
-        bsend::reseed::pull_published(cfg, &qb, site, url, key, &mut index, &mut log)?;
+        bsend::reseed::pull_published(cfg, &qb, site, url, key, file, &mut index, &mut log)?;
     println!("挂回结果：{} → {}", status.label(), detail);
     Ok(())
 }
@@ -1943,10 +1949,16 @@ mod tests {
         ])
         .unwrap();
         match cli.cmd {
-            Cmd::Pull { site, url, key } => {
+            Cmd::Pull {
+                site,
+                url,
+                key,
+                file,
+            } => {
                 assert_eq!(site, "hdvideo");
                 assert!(url.contains("78856"));
                 assert!(key.is_none());
+                assert!(file.is_none());
             }
             _ => panic!("expected pull command"),
         }

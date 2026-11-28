@@ -410,13 +410,14 @@ pub(super) fn locate_posted_by_search(
     log: &mut dyn FnMut(&str),
     held: &mut Option<(String, ReviewMark, String)>,
 ) -> Option<(String, Vec<u8>)> {
+    let expected_title = form::title_for_site(info, &tgt.site_id);
     for relaxed in [false, true] {
         if relaxed && !relaxed_retry {
             break;
         }
         let mut gate = || throttle.acquire(&tgt.site_id, BudgetKind::Search);
         let outcome = match tgt.search_sized(
-            &info.name,
+            &expected_title,
             "",
             relaxed,
             info.imdb.as_deref().unwrap_or(""),
@@ -447,12 +448,12 @@ pub(super) fn locate_posted_by_search(
             }
         };
         let page_title = strip_site_title_badges(&page.name);
-        if !search_names_match(page_title, &info.name, true)
-            && norm_post_title(page_title) != norm_post_title(&info.name)
+        if !search_names_match(page_title, &expected_title, true)
+            && norm_post_title(page_title) != norm_post_title(&expected_title)
         {
             log(&format!(
                 "发后定位·候选标题不符：页面「{}」，期望「{}」",
-                page.name, info.name
+                page.name, expected_title
             ));
             continue;
         }
@@ -601,12 +602,13 @@ pub(super) fn locate_existing_target(
     match tgt.fetch_torrent_page(hint) {
         Ok(p) => {
             let page_title = strip_site_title_badges(&p.name);
-            if norm_post_title(page_title) == norm_post_title(&info.name) {
+            let expected_title = form::title_for_site(info, &tgt.site_id);
+            if norm_post_title(page_title) == norm_post_title(&expected_title) {
                 Some(hint.to_string())
             } else {
                 log(&format!(
                     "existed 回包详情页标题不符（页面「{}」，用于比对「{}」），弃用该线索",
-                    p.name, page_title
+                    p.name, expected_title
                 ));
                 None
             }
@@ -627,8 +629,8 @@ pub fn verify_posted(
 ) -> (Vec<String>, Option<(ReviewMark, String)>) {
     match target.fetch_html(detail_url, target.base.as_str()) {
         Ok(html) => (
-            verify_posted_html(&html, info),
-            review_mark(&html, &info.name),
+            verify_posted_html(&html, info, &target.site_id),
+            review_mark(&html, &form::title_for_site(info, &target.site_id)),
         ),
         Err(e) => (
             vec![format!("抓新种详情页失败（{e:#}），请手动核对发布结果")],
@@ -638,11 +640,12 @@ pub fn verify_posted(
 }
 
 /// 发后自检的纯文本比对（单测友好）
-pub(super) fn verify_posted_html(html: &str, info: &ReleaseInfo) -> Vec<String> {
+pub(super) fn verify_posted_html(html: &str, info: &ReleaseInfo, site_id: &str) -> Vec<String> {
     let mut warns = Vec::new();
     let posted = parse_release_page(html, "");
     // 标题
-    let want = info.name.trim();
+    let want = form::title_for_site(info, site_id);
+    let want = want.trim();
     let got = posted.name.trim();
     if got.is_empty() {
         warns.push("新种页没解析出标题，无法核对".into());

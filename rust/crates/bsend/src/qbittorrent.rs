@@ -44,20 +44,57 @@ fn parse_tracker_entries(text: &str) -> Result<Vec<TrackerInfo>> {
             if !(url.starts_with("http://") || url.starts_with("https://")) {
                 return None;
             }
+            let mut status = t.get("status").and_then(Value::as_i64).unwrap_or(-1) as i32;
+            let mut message = t
+                .get("msg")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let mut num_seeds = t.get("num_seeds").and_then(Value::as_i64).unwrap_or(-1);
+            let mut num_leeches = t.get("num_leeches").and_then(Value::as_i64).unwrap_or(-1);
+            let mut num_downloaded = t
+                .get("num_downloaded")
+                .and_then(Value::as_i64)
+                .unwrap_or(-1);
+            // qB 5.3 的顶层 tracker 可能仍是 1（未联系），真正的连接在 endpoints 里：
+            // 有些 endpoint 已经 status=2 并带回同伴数。只看顶层会把“已回包”误判成
+            // “还没回包”，让种子永远卡在“校验中”。
+            if status != 2 {
+                if let Some(endpoint) =
+                    t.get("endpoints")
+                        .and_then(Value::as_array)
+                        .and_then(|eps| {
+                            eps.iter()
+                                .find(|e| e.get("status").and_then(Value::as_i64) == Some(2))
+                        })
+                {
+                    status = 2;
+                    message = endpoint
+                        .get("msg")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    num_seeds = endpoint
+                        .get("num_seeds")
+                        .and_then(Value::as_i64)
+                        .unwrap_or(num_seeds);
+                    num_leeches = endpoint
+                        .get("num_leeches")
+                        .and_then(Value::as_i64)
+                        .unwrap_or(num_leeches);
+                    num_downloaded = endpoint
+                        .get("num_downloaded")
+                        .and_then(Value::as_i64)
+                        .unwrap_or(num_downloaded);
+                }
+            }
             Some(TrackerInfo {
                 url: url.to_string(),
-                status: t.get("status").and_then(Value::as_i64).unwrap_or(-1) as i32,
-                message: t
-                    .get("msg")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string(),
-                num_seeds: t.get("num_seeds").and_then(Value::as_i64).unwrap_or(-1),
-                num_leeches: t.get("num_leeches").and_then(Value::as_i64).unwrap_or(-1),
-                num_downloaded: t
-                    .get("num_downloaded")
-                    .and_then(Value::as_i64)
-                    .unwrap_or(-1),
+                status,
+                message,
+                num_seeds,
+                num_leeches,
+                num_downloaded,
             })
         })
         .collect())
@@ -1323,6 +1360,25 @@ mod tests {
             tracker_status_note(&broken),
             "tracker 报错：stream truncated"
         );
+    }
+
+    #[test]
+    fn tracker_endpoint_status_2_overrides_top_level_not_contacted() {
+        // qB 5.3 实测：顶层 status=1，但 endpoints 里有一条 status=2 已经回包
+        let text = r#"[
+            {"url":"https://tracker.example/announce.php?passkey=x","status":1,
+             "num_seeds":-1,"num_leeches":-1,"num_downloaded":-1,
+             "endpoints":[
+                {"status":4,"msg":"timed out","num_seeds":-1,"num_leeches":-1},
+                {"status":2,"msg":"","num_seeds":1,"num_leeches":14,"num_downloaded":20}
+             ]}
+        ]"#;
+        let infos = parse_tracker_entries(text).expect("解析 tracker endpoints");
+        assert_eq!(infos[0].status, 2);
+        assert_eq!(infos[0].num_seeds, 1);
+        assert_eq!(infos[0].num_leeches, 14);
+        assert!(tracker_confirms_seeding(&infos));
+        assert!(tracker_status_note(&infos).contains("做种 1 / 下载 14"));
     }
 
     #[test]

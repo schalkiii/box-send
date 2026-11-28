@@ -227,6 +227,8 @@ pwsh scripts/seeding-audit.ps1 -Json -OutFile audit.json
 - `scripts/seed-images.py`：源站简介没有图时，按内容键从本地视频抽帧（默认 3 张，可多条视频各取一帧），也可用 `--douban <条目id>` 自动取豆瓣海报或传 `--poster-url`；上传 pixhost 后写 `screenshot-overrides.json`；`--dry-run` 只抽帧不上传。同一部剧有多个内容键（如 HDTV 和 WEB-DL）时，用 `--also-content <内容键>` 逐个带齐，或 `--for-name <名称片段>` 在覆盖记录里找齐同名内容键；不要只补一个键。
 - `scripts/imgbox-upload.py`：把本地海报/截图传到 imgbox，输出原图直链；匿名、无需 API key、单图 10MB。当前常规图床是 pixhost，imgbox 只作历史兼容，UBits 会把 imgbox 当死图。
 - `scripts/edit-seed.py`：只改已发布种子的标题/简介；默认演练，`--apply` 才提交，其余表单原样回填。`--processing` 改文件容器（MP4/MKV）下拉，`--team` 改制作组下拉，`--append-image <url>` 在简介末尾追加一张图（已有同链接就跳过）。
+- `scripts/clean-live-descr.py`：清理已发布种子的简介残留；默认只读演练，打印将删的源站 `[quote]`、图片外 `[url]` 包裹和简介里的技术参数块，逐图报 HTTP 状态，输出到 `artifacts/clean-descr-<站点>-<id>.txt`；`--apply` 才交给 `edit-seed.py` 提交。技术参数独立栏不动。
+- `scripts/reclassify-old-drafts.py`：把 note 命中“旧草稿 / 批量测试清理”的 `failed` 格子改成 `skipped`，一次备份。只用于早先演练草稿，不碰真实站点拒绝。
 - `scripts/replay-reseed.py`：按草稿号跑一次 `bsend reseed --draft <N>`（不提交），用 `--expect` 断言必须出现的字段/图片数，用 `--reject` 断言旧问题不能回来；修完问题先跑这个，再谈上线。
 - `scripts/fetch-descr.py`：读已发布种子的编辑页，把简介字段原样落到 `%TEMP%\bsend-review\`，给换图/改简介做准备；只读，不提交。
 - `scripts/swap-descr-images.py`：按出现顺序把简介里的图片链接 1:1 换成新直链；BBCode 与 HTML 都支持，张数对不上直接报错不写文件。
@@ -333,11 +335,15 @@ GUI 的 exe 用 `cargo build --profile gui-release -p bsend-gui` 出，路径是
 
 # 索引里同一内容有多条、或要指定内容：加 --key
 ... pull --site qilin --url https://www.hdkyl.in/details.php?id=479362 --key m:5826983b00126e58
+
+# 站点下载页能打开、但 bsend 被 Cloudflare 分块响应卡住：先用脚本下载站点生成的 .torrent，再 --file
+python scripts\download-site-torrent.py sbpt.link https://sbpt.link/details.php?id=21786 artifacts\sbpt-21786.torrent
+... pull --site sbpt --url https://sbpt.link/details.php?id=21786 --file artifacts\sbpt-21786.torrent
 ```
 
 这个命令原来叫 `reattach`，2026-11-24 改成 `pull`；旧名还能用，只是不出现在 `--help` 里。
 
-这条命令只从站点详情页下载目标种，不再接受 `--file` 本地构造种；站点下载不到就报错，宁可不挂也不塞废种。只按 pieces 和文件清单核对，允许站点改写 `info hash` 或标题；核对一致就挂回 qB，不会调用上传接口。目标种 pieces 或文件清单与本地内容对不上会直接拒绝。
+`--file` 只接受**站点生成的** `.torrent`（详情页下载下来的那一份），不是本地构造种；下载后仍由程序按 pieces 和文件清单核对，对不上直接拒绝。自动下载只在站点下载页可打开时用；如果 bsend 的 HTTP 客户端卡在 Cloudflare 分块响应上，用 `scripts/download-site-torrent.py` 先落盘再 `--file`，不要手工把种子塞进 qB。只按 pieces 和文件清单核对，允许站点改写 `info hash` 或标题；核对一致就挂回 qB，不会调用上传接口。
 
 站点还没审完的种子由回访接着管。自动发种每轮开头会自动回访一次（只看记了审核结论的格子），也可以随时手动跑：
 

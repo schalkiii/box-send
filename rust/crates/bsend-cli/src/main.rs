@@ -68,7 +68,12 @@ fn main() -> Result<()> {
             only,
             site,
         } => cmd_reseed(&cfg, draft, yes, only.as_deref(), site.as_deref()),
-        Cmd::Pull { site, url, key } => cmd_pull(&cfg, &site, &url, key.as_deref()),
+        Cmd::Pull {
+            site,
+            url,
+            key,
+            file,
+        } => cmd_pull(&cfg, &site, &url, key.as_deref(), file.as_deref()),
         Cmd::Followup {
             dry_run,
             all,

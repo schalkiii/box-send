@@ -81,7 +81,7 @@ impl CoverageStatus {
             CoverageStatus::WaitSource => "待找源",
             CoverageStatus::Failed => "失败",
             CoverageStatus::ReseedDraft => "转种草稿",
-            CoverageStatus::Skipped => "已跳过（内容类型）",
+            CoverageStatus::Skipped => "已跳过",
             CoverageStatus::PendingOffers => "待走候选入口",
             CoverageStatus::PendingReview => "等站点审核",
             CoverageStatus::ReviewRejected => "站点审核没过",

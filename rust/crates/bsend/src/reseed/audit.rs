@@ -168,7 +168,7 @@ pub(super) fn analyze_form(
     } else {
         f("title")
     };
-    d.title_set = title == info.name;
+    d.title_set = title == form::title_for_site(info, site_id);
     // 无标题输入框（tjupt 实测）：标题由种子文件名自动生成，不算缺口
     d.title_auto =
         !d.title_set && !form_has(&prep.form_html, "name") && !form_has(&prep.form_html, "title");

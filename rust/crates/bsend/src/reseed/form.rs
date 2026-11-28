@@ -248,7 +248,7 @@ pub fn build_upload_fields_for_site(
     // 标题按目标站规范改写后再参与选档；否则 qingwa 的 `Blu-ray` 会被站点
     // 审核要求改成 `BluRay`，而且改写后仍要用同一份标题匹配下拉/标签。
     let mut site_info = info.clone();
-    site_info.name = normalize_title_for_site(&site_info.name, site_id);
+    site_info.name = title_for_site(info, site_id);
     let (mut fields, picked, mut notes) = build_upload_fields(&site_info, page, tags_wanted);
     if site_id == "qingwa" && is_bdinfo_block(&site_info.mediainfo) {
         // 青蛙站规：蓝光原盘/DIY 交 BDInfo 时，音频下拉要选 Other；具体音轨信息让审核看 BDInfo。
@@ -264,7 +264,60 @@ pub fn build_upload_fields_for_site(
     if site_id == "lajidui" {
         fill_lajidui_quality_fields(&mut fields, &site_info, page);
     }
+    if site_id == "ptzone" {
+        fill_ptzone_quality_fields(&mut fields, page);
+    }
     (fields, picked, notes)
+}
+
+/// 目标站实际提交的标题：先按站点写法规整，再按站点习惯补年份。
+/// 审阅/门禁也用这一个函数，避免“表单已改写、门禁还拿旧标题比对”。
+pub(super) fn title_for_site(info: &ReleaseInfo, site_id: &str) -> String {
+    let mut site_info = info.clone();
+    site_info.name = normalize_title_for_site(&site_info.name, site_id);
+    if site_id == "ptzone" {
+        site_info.name = add_ptzone_release_year(&site_info);
+    }
+    site_info.name
+}
+
+/// ptzone 的标题习惯带发行年份；源标题没有年份时，从副标题/简介/MediaInfo
+/// 抽一个四位年份，插在第一个技术参数前。抽不到就保持原样，不硬编年份。
+fn add_ptzone_release_year(info: &ReleaseInfo) -> String {
+    let name = info.name.trim();
+    if name.is_empty() || name.contains('[') || has_release_year(name) {
+        return name.to_string();
+    }
+    let Some(year) = release_year(info) else {
+        return name.to_string();
+    };
+    let sep = if name.contains(' ') {
+        ' '
+    } else if name.contains('.') {
+        '.'
+    } else {
+        return name.to_string();
+    };
+    let mut parts: Vec<String> = name
+        .split(sep)
+        .filter(|t| !t.is_empty())
+        .map(ToString::to_string)
+        .collect();
+    let Some(at) = parts.iter().position(|t| super::tech_rank(t).is_some()) else {
+        return name.to_string();
+    };
+    parts.insert(at, year.to_string());
+    parts.join(&sep.to_string())
+}
+
+/// ptzone 的 `team_sel` 只有少数驻站组；源组不在列表里时不能留“请选择一项”，
+/// 按站内选项选 Other，避免冒充驻站组。
+pub(super) fn fill_ptzone_quality_fields(fields: &mut Vec<Field>, page: &str) {
+    if let Some(name) = select_field_names(fields, "team_sel").into_iter().next() {
+        if field_lookup(fields, &name).is_some_and(|v| v.is_empty() || v == "0") {
+            fill_select_by_label(fields, page, "team_sel", "Other");
+        }
+    }
 }
 
 /// UBits 的 `team_sel`（制作组）没有默认值：源组不是 UBits 自家组，按 Other 提交，

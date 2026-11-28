@@ -162,7 +162,7 @@ sites/nexusphp/detail.rs  结果页/详情页解析、大小/上传者/审核标
 sites/nexusphp/upload.rs  页面请求重试、限流/拦截页识别、站点提示页（119 行）
 ```
 
-拆分只移动代码，不改行为；当前全量 551 条、`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings` 通过。
+拆分只移动代码，不改行为；当前全量 560 条、`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings` 通过。
 
 ### 4.8 后续优化（r3 审计给出；P1 已完成，其余待做）
 
@@ -405,8 +405,8 @@ sites/nexusphp/upload.rs  页面请求重试、限流/拦截页识别、站点�
 
 | 优先级 | 站点 | 现状 | 下一步 | 结论 |
 | --- | --- | --- | --- | --- |
-| 1 | gtk | **2026-11-28 已真发** [56069](https://pt.gtkpw.xyz/details.php?id=56069)《知否》73 集 119.58GB；站点改写标题/hash，pieces 和文件清单一致；qB 校验 100%，tracker 还没回包 | 用 `bsend followup` 回访 tracker/审核；不要写成已做种 | 已补第一条新发，`posted_verifying` |
-| 2 | hdfans | **2026-11-28 已新发两条**：[288175](http://hdfans.org/details.php?id=288175)《A Touch of Zen》31.24GB、[288180](http://hdfans.org/details.php?id=288180)《Ghajini》18.00GB；详情页作者都是 `Schalkiii`，目标种内嵌源文件名，确认是新发，不是历史补挂 | 两条 qB 校验 100%，tracker 仍 `status=1`，等回包；不要写成已做种 | 首次 POST 已建种，旧版因链路中断重投回 `existed=1` 误判；已按 `posted_verifying` 纠正 |
+| 1 | gtk | **2026-11-28 已真发** [56069](https://pt.gtkpw.xyz/details.php?id=56069)《知否》73 集 119.58GB；站点改写标题/hash，pieces 和文件清单一致；qB 校验 100%，tracker 已回包 | 已按 tracker endpoint `status=2`、做种 1、站点同伴表 1 个做种者改 `reseeded` | 已补第一条新发 |
+| 2 | hdfans | **2026-11-28 已新发两条**：[288175](http://hdfans.org/details.php?id=288175)《A Touch of Zen》31.24GB、[288180](http://hdfans.org/details.php?id=288180)《Ghajini》18.00GB；详情页作者都是 `Schalkiii`，目标种内嵌源文件名，确认是新发，不是历史补挂 | 两条 tracker 已回包、站点同伴表各有 1 个做种者，已改 `reseeded` | 首次 POST 已建种，旧版因链路中断重投回 `existed=1` 误判；已按新发纠正 |
 | 3 | sbpt | 21785 是 3 天前自己发的 Ghajini，历史漏挂已补回；《Groundhog Day》真发被 0 张图门禁拦下，没发 | 补可达海报/截图或换候选；`The Residence` 标题顺序可疑，先不碰 | 历史补挂完成，新发仍缺 |
 | 4 | xingtan | 不在自动名单；站内只有书籍/PDF 等类目，没有影视；封面图床已自动化，真实上传 id 91773 返回 200 | 若要自动发书籍，需要补 ISBN/出版社/年份/目录等字段抽取和书籍类目判定；影视仍不发 | 封面已完成，书籍自动化另做 |
 | 5 | haoxue | 不在自动名单；Next.js 单页应用，静态表单走不了；2026-11-27 已走 `POST /api/v1/torrents` 真发 23943 待审 | 把 FluxTorrent 接口做成独立适配器，审核通过后由回访挂回 qB | 可做接口适配，不是补静态表单 |
@@ -415,7 +415,11 @@ sites/nexusphp/upload.rs  页面请求重试、限流/拦截页识别、站点�
 | — | agsvpt | 已在自动名单，0 条；546963 仍是 `( 禁止 )`，没有用户侧重审入口 | 等站点处理或换有发布权限的账号；不重复提交 | 硬阻塞，等站点 |
 | — | 35 个暂停站 | `reseedPausedSites` 里已有适配但暂停转种，如 hdsky、chdbits、hdhome、cmct、pter | 按站点恢复情况和缺口逐站解冻，不要一次全开 | 支持在，先别误判成缺口 |
 
-2026-11-28 下午低发种站点试跑：`ptzone` 的《绝世天劫》被 MediaInfo 不完整和 `team_sel=0` 挡下；《伪装者》`team_sel=0`、标题缺年份，未真发。`itzmx` 的《大侦探波洛合集》门禁虽过，但 294GB / 155 文件的种子文件很可能超过该站 266,240 字节上限，未真发。`hdfans` 的 Ghajini 已修好中文压制档，重试后实际新发 `288180`；同时确认此前 `288175` 也是新发，不是补挂，统计从 43 站 154 条修正为 **44 站 156 条**。`iloli` 仍受二次元浓度门槛限制；`fenghuang`、`muxuege`、`qilin`、`tjupt`、`itzmx`、`ptzone` 本轮没有新的成功发种。
+2026-11-28 下午低发种站点试跑：`ptzone` 的《绝世天劫》仍被 MediaInfo 不完整挡下；《伪装者》已补上“标题缺年份、`team_sel=0`”这两个缺口，真发 [194730](https://ptzone.xyz/details.php?id=194730)，详情页作者 `Schalkiii`、创建时间 `2026-11-28 13:59:41`。回包是 `existed=1`，旧逻辑拿没有年份的原始标题比对页面标题，误判成“站点已有”；现已把发后定位、自检和审阅统一到按站点标题比对，并补了回归测试。种子已挂回 qB、校验 100%，tracker 仍 `status=1`，覆盖记 `verifying`，不能写成“站点已看见做种”。
+
+`itzmx` 的《大侦探波洛合集》294GB / 155 文件，qB 16MB 分片导出的 `.torrent` 是 371,586 bytes，超过站点 266,240 bytes 上限；8MB/4MB/2MB 分片只会更大。要压进上限约需 32MB 分片并重新读取、哈希 294GB 文件，当前 `torrent_rewrite.rs` 不支持重新分片或拆种，所以这条记 `skipped`，不自动重发，后续选种先看 `.torrent` 大小、优先换小种。`hdfans` 的 Ghajini 已修好中文压制档，重试后实际新发 `288180`；同时确认此前 `288175` 也是新发，不是补挂。`iloli` 仍受二次元浓度门槛限制；`fenghuang`、`muxuege`、`qilin`、`tjupt` 本轮没有新的成功发种。
+
+2026-11-28 晚回访又收口三条：city13 [88464](https://13city.org/details.php?id=88464)、[88256](https://13city.org/details.php?id=88256) 和 hdvideo [79086](https://hdvideo.top/details.php?id=79086) 页面已无审核标记，qB 分别上传 5.6GB / 1.4GB / 227MB，已改 `reseeded`。剩下 8 条 `verifying` 不是漏挂：直接请求 announce 分别回 `Banned Client`（hdvideo、ptzone、sbpt）和 `Anti-Cheater`（pthome），当前 qBittorrent 5.3.0 被站点禁用；换允许的客户端前不能写成已做种。cspt 259870 审核结束，qingwa 208692 / 208575 已按站规改完并记 `pending_review`，`review_rejected` 清零。
 
 ## 8. 相关文档
 

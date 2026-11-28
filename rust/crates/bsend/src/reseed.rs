@@ -2291,20 +2291,33 @@ pub fn run_reseed_reviewed(
 /// 再走与发后同一条 `push_target_torrent`。绝不重新上传、不占发布额度。
 /// 不接受本地构造的种子：站点审核没通过时，挂它只会得到一条没有 tracker 响应的废种。
 /// 返回最终格子状态和详情页 URL。
+#[allow(clippy::too_many_arguments)] // 命令入口：配置、下载器、站点、详情页、可选种子文件都要显式传入
 pub fn pull_published(
     cfg: &Config,
     qb: &QBittorrent,
     site_id: &str,
     detail_url: &str,
     content_key: Option<&str>,
+    torrent_file: Option<&Path>,
     index: &mut ContentIndex,
     log: &mut dyn FnMut(&str),
 ) -> Result<(CoverageStatus, String)> {
     let tgt = adapter_for(cfg, site_id)?;
     tgt.log_proxy(log);
-    log(&format!("拉取目标种：{detail_url}"));
-    let page = tgt.fetch_torrent_page(detail_url)?;
-    let tdata = tgt.download_torrent(&page, detail_url)?;
+    let tdata = match torrent_file {
+        Some(path) => {
+            log(&format!(
+                "使用本地已下载的站点种子：{}（不再请求站点下载页）",
+                path.display()
+            ));
+            std::fs::read(path).with_context(|| format!("读本地种子失败：{}", path.display()))?
+        }
+        None => {
+            log(&format!("拉取目标种：{detail_url}"));
+            let page = tgt.fetch_torrent_page(detail_url)?;
+            tgt.download_torrent(&page, detail_url)?
+        }
+    };
     pull_with_data(
         cfg,
         qb,
@@ -2369,17 +2382,40 @@ pub(crate) fn pull_with_data(
 }
 
 /// 没有给 `--key` 时，按 pieces 在索引里找这段内容；找不到要求用户指定。
+///
+/// 先用目标种的总大小和文件数把候选缩到个位数，再让每条候选去 qB 核对分片。
+/// 不能直接遍历全部内容：每个候选都要查 qB 进度、导出种子，内容一多就会跑成几小时。
 fn find_content_key_by_pieces(
     qb: &QBittorrent,
     index: &ContentIndex,
     tdata: &[u8],
 ) -> Result<String> {
-    for (key, entry) in &index.contents {
-        if matching_local_member(qb, entry, tdata)?.is_some() {
-            return Ok(key.clone());
+    let files = bencode::file_list(tdata).context("目标种缺少文件清单，无法按大小找内容")?;
+    let total_size: i64 = files.iter().map(|(_, size)| *size).sum();
+    let file_count = files.len();
+    let candidates = candidate_keys_by_shape(index, total_size, file_count);
+    for key in candidates {
+        if matching_local_member(qb, &index.contents[&key], tdata)?.is_some() {
+            return Ok(key);
         }
     }
-    bail!("索引里找不到分片一致的内容；确认 qB 里有本地源种，或用 --key 指定 contentKey")
+    bail!(
+        "索引里找不到分片一致的内容（按总大小 {total_size} 字节、{file_count} 个文件没有匹配）；确认 qB 里有本地源种，或用 --key 指定 contentKey"
+    )
+}
+
+/// 按总大小和文件数筛候选内容键；只用于缩小 qB 核对范围，不作为等价判据。
+fn candidate_keys_by_shape(
+    index: &ContentIndex,
+    total_size: i64,
+    file_count: usize,
+) -> Vec<String> {
+    index
+        .contents
+        .iter()
+        .filter(|(_, entry)| entry.total_size == total_size && entry.file_count == file_count)
+        .map(|(key, _)| key.clone())
+        .collect()
 }
 
 fn run_reseed_impl(
