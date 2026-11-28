@@ -462,7 +462,7 @@ qB 仍有 42,473 条种子，重启后的 announce 队列会拖慢新种。city1
 
 **8 条 `verifying` 的真正原因**：逐条拿 announce URL 直接请求，hdvideo、ptzone、sbpt 回 `Banned Client, Please goto ... acceptable clients`，pthome 回 `Anti-Cheater`。当前 qBittorrent 5.3.0 被这些站禁用，qB 顶层 tracker 因此一直 `status=1`；种子已挂回、本地校验 100%，但站点没有接受这次 announce。换站点允许的客户端之前，不能写成“已做种”。这不是漏挂，也不是站点没这条种子。
 
-**旧草稿清理**：22 条 note 命中“旧草稿 / 批量测试清理”的 `failed` 改成 `skipped`，`failed` 从 47 降到 25。`skipped` 只表示这轮不自动发，不是站点拒绝；要发仍要重新生成草稿。
+**旧草稿清理**：22 条 note 命中“旧草稿 / 批量测试清理”的 `failed` 改成 `skipped`，`failed` 从 47 降到 23。`skipped` 只表示这轮不自动发，不是站点拒绝；要发仍要重新生成草稿。
 
 ## 3. 全部站点（147 个）
 
