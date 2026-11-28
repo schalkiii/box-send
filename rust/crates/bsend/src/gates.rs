@@ -135,6 +135,10 @@ pub struct SiteRules {
     /// BBCode 编辑器，原样提交 HTML 会被转义成字面 `<fieldset>`）；显式 `html`
     /// 才保持 HTML 原样（仅用于确认支持 HTML 的站）。
     pub descr_format: Option<String>,
+    /// 海报必须排在简介文字之前（青蛙、AGSVPT 实测：图在文末会被审核退回）。
+    /// 开启后，提交前把简介里的第一张图移到最前面；已有多张图时只移动第一张，
+    /// 其余截图顺序不变。
+    pub poster_first: Option<bool>,
     /// 每日自动发种上限（缺省 2）
     pub daily_limit: Option<u32>,
     /// 上传请求超时秒数（缺省 120）：站点在服务端解 torrent、查重慢时可逐站放宽

@@ -439,6 +439,62 @@ fn empty_upload_response_is_reported_as_timeout_not_unknown() {
 }
 
 #[test]
+fn upload_network_error_is_uncertain_and_posted_only_once() {
+    use std::io::Read as _;
+    use std::net::TcpListener;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    // 第一次 POST 收到请求后直接断开（模拟站点已建种、回包在链路上断掉）。
+    // 旧版会原样重投，第二次命中 existed=1，把新发误判成旧种；现在只交回“未确认”。
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let count = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&count);
+    let server = std::thread::spawn(move || {
+        let (mut sock, _) = listener.accept().unwrap();
+        counted.fetch_add(1, Ordering::SeqCst);
+        let mut buf = [0u8; 1024];
+        let _ = sock.read(&mut buf);
+        drop(sock);
+        listener.set_nonblocking(true).unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+        if listener.accept().is_ok() {
+            counted.fetch_add(1, Ordering::SeqCst);
+        }
+    });
+
+    let target = crate::sites::nexusphp::NexusPhp::new(
+        "mock",
+        "Mock",
+        &format!("http://{addr}/"),
+        None,
+        None,
+    )
+    .unwrap();
+    let prep = PreparedUpload {
+        action: format!("http://{addr}/takeupload.php"),
+        form_url: format!("http://{addr}/upload.php"),
+        fields: Vec::new(),
+        picked_tags: Vec::new(),
+        tag_warn: None,
+        select_notes: Vec::new(),
+        required_gaps: Vec::new(),
+        form_html: String::new(),
+        poster_field: None,
+        screenshot_field: None,
+    };
+    let up = submit_upload(&target, &prep, b"d4:infod4:name1:xee", "x.torrent", None).unwrap();
+    assert!(up.uncertain, "网络中断必须交回未确认");
+    assert!(!up.duplicate, "不能当成站点已有");
+    assert!(up.detail_url.is_none());
+    assert!(up.message.contains("不重投"), "{}", up.message);
+
+    server.join().unwrap();
+    assert_eq!(count.load(Ordering::SeqCst), 1, "POST 只能发一次");
+}
+
+#[test]
 fn http_200_unrecognized_response_is_unconfirmed_not_a_failure() {
     // city13/hdvideo 这类站会回 HTTP 200，但页面既不是详情页也不是错误框。
     // 这种回包不能直接判失败，先交给站内检索核对；403/空回包仍有明确含义。
@@ -1511,6 +1567,14 @@ fn site_title_badges_are_stripped_before_matching() {
         strip_site_title_badges("Some Pack 2020 1080p [50%] [Promotion] 剩余时间：1时"),
         "Some Pack 2020 1080p"
     );
+    // SBPT 的合并促销角标是繁体「[2X 50%] 剩餘時間」；旧列表只认 [50%]，
+    // 会把标题裁成半截，导致 existed 真重复被误判。
+    assert_eq!(
+        strip_site_title_badges(
+            "Ghajini 2008 1080p BluRay x264 DTS-CMCT [2X 50%] 剩餘時間：26天23時"
+        ),
+        "Ghajini 2008 1080p BluRay x264 DTS-CMCT"
+    );
     // 13city 的合并角标：[2X免费] 不能因为包含 [免费] 被裁成半截
     assert_eq!(
             strip_site_title_badges(
@@ -1711,6 +1775,28 @@ fn hdr10_tag_detected_from_uhd_title() {
         ..Default::default()
     };
     assert!(!wanted_tags(&sdr).contains(&"HDR10"));
+}
+
+#[test]
+fn longpt_site_tags_add_high_frame_and_hdr() {
+    // LongPT 自动审核明确点名：60fps 要勾「高帧」，1080p HDR 也要勾「HDR」。
+    // 1080p 不在通用 HDR10 分支，所以由站点包装补，其他站不跟着变。
+    let info = ReleaseInfo {
+        name: "The.Story.Of.Ming.Lan.2018.4k.60fps.WEB-DL.H265-GRP".into(),
+        mediainfo: "Video\nFrame rate : 60.000 fps\nHDR format : HDR10".into(),
+        ..Default::default()
+    };
+    let longpt = wanted_tags_for_site("longpt", &info);
+    assert!(longpt.contains(&"高帧"), "{longpt:?}");
+    assert!(longpt.contains(&"HDR"), "{longpt:?}");
+
+    let hd = ReleaseInfo {
+        name: "Cinderella.Man.2005.1080p.BluRay.HDR.x265-GRP".into(),
+        ..Default::default()
+    };
+    let tags = wanted_tags_for_site("longpt", &hd);
+    assert!(tags.contains(&"HDR"), "{tags:?}");
+    assert!(!wanted_tags_for_site("other", &hd).contains(&"HDR"));
 }
 
 #[test]
@@ -2243,6 +2329,26 @@ fn reencoded_disc_maps_to_encode() {
     };
     let (fs, _p, _n) = build_upload_fields(&remux, form, &[]);
     assert_eq!(field_lookup(&fs, "medium_sel"), Some("3"));
+}
+
+#[test]
+fn reencoded_disc_picks_chinese_encode_option_by_resolution() {
+    // hdfans 实测：medium_sel 没有 Encode/BluRay，只有「1080P/i压制」「720P压制」；
+    // Ghajini 是 1080p BluRay x264，必须落 1080P 档，不能留空也不能误选 720P。
+    let form = r#"<select name="medium_sel[4]"><option value="0">请选择一项</option><option value="24">1080P/i压制</option><option value="25">720P压制</option><option value="23">BD Remux</option></select>"#;
+    let info = ReleaseInfo {
+        name: "Ghajini 2008 1080p BluRay x264 DTS-CMCT".into(),
+        ..Default::default()
+    };
+    let (fs, _p, notes) = build_upload_fields(&info, form, &[]);
+    assert_eq!(field_lookup(&fs, "medium_sel"), Some("24"), "{notes:?}");
+
+    let hd = ReleaseInfo {
+        name: "Ghajini 2008 720p BluRay x264 DTS-CMCT".into(),
+        ..Default::default()
+    };
+    let (fs, _p, notes) = build_upload_fields(&hd, form, &[]);
+    assert_eq!(field_lookup(&fs, "medium_sel"), Some("25"), "{notes:?}");
 }
 
 #[test]
@@ -3005,6 +3111,64 @@ fn descr_order_skipped_when_rule_unconfigured() {
     assemble_descr_by_order(&mut prep, &rules, Some(&ctx));
     assert_eq!(submitted_descr(&prep, ""), before);
     assert_eq!(prep.fields, fields_before);
+}
+
+#[test]
+fn cross_site_boilerplate_is_stripped_but_target_site_quote_is_kept() {
+    // 凤凰 39168 的现场：源站 1PTBA 的免责声明/保种提示跟着简介一起复制到了凤凰。
+    let src =
+        "[quote]\n本站(1PTBA)提醒：……\n[/quote]\n\n[quote]\nASS 中英字幕说明\n[/quote]\n\n正文";
+    let (out, removed) = strip_cross_site_boilerplate(src, "https://pt.521.best/upload.php");
+    assert_eq!(removed, 1);
+    assert!(!out.contains("1PTBA"));
+    assert!(out.contains("ASS 中英字幕说明"));
+    assert!(out.contains("正文"));
+
+    let own = "[quote]\n本站(1PTBA)提醒：……\n[/quote]\n\n正文";
+    let (out, removed) = strip_cross_site_boilerplate(own, "https://1ptba.com/upload.php");
+    assert_eq!(removed, 0);
+    assert_eq!(out, own);
+}
+
+#[test]
+fn cross_site_boilerplate_is_stripped_after_html_to_bbcode() {
+    // 1PTBA 详情页是 HTML；如果先洗 BBCode 再转，源站 [`本站(1PTBA)`] 会漏到目标站。
+    let src = "<fieldset><legend>引用</legend><p>本站(1PTBA)提醒：仅供学习交流。</p></fieldset><p>正文</p>";
+    let mut prep = prep_with_descr(src, None);
+    prep.form_url = "http://hdfans.org/takeupload.php".into();
+    apply_site_rules_tail(&mut prep, &crate::gates::SiteRules::default());
+    let out = submitted_descr(&prep, "");
+    assert!(!out.contains("1PTBA"), "{out}");
+    assert!(out.contains("正文"), "{out}");
+    assert!(
+        prep.select_notes
+            .iter()
+            .any(|n| n.contains("源站免责声明") || n.contains("源站免责声明/保种提示")),
+        "{:?}",
+        prep.select_notes
+    );
+}
+
+#[test]
+fn poster_first_moves_first_image_to_top_without_reordering_rest() {
+    // 青蛙/AGSVPT 实测：海报放在简介文字后面会被审核退回。只移动第一张，
+    // 后面的截图顺序保持不变；已经合规的简介不动。
+    let rules = crate::gates::SiteRules {
+        poster_first: Some(true),
+        ..Default::default()
+    };
+    let descr = "简介文字在前。\n[img]https://img3.pixhost.to/images/1/poster.jpg[/img]\n[img]https://img3.pixhost.to/images/1/shot.jpg[/img]";
+    let mut prep = prep_with_descr(descr, None);
+    apply_site_rules_tail(&mut prep, &rules);
+    assert_eq!(
+        submitted_descr(&prep, ""),
+        "[img]https://img3.pixhost.to/images/1/poster.jpg[/img]\n\n简介文字在前。\n\n[img]https://img3.pixhost.to/images/1/shot.jpg[/img]"
+    );
+
+    let compliant = "[img]https://img3.pixhost.to/images/1/poster.jpg[/img]\n\n简介文字。";
+    let mut prep2 = prep_with_descr(compliant, None);
+    apply_site_rules_tail(&mut prep2, &rules);
+    assert_eq!(submitted_descr(&prep2, ""), compliant);
 }
 
 #[test]

@@ -8,3 +8,4 @@ pub(crate) mod drafts;
 pub(crate) mod help;
 pub(crate) mod log;
 pub(crate) mod overview;
+pub(crate) mod poststats;

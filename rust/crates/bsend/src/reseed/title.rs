@@ -5,7 +5,7 @@
 
 /// 裁掉尾部促销角标，返回标题正文前缀；找不到角标时返回去空白后的原串。
 pub(super) fn strip_site_title_badges(title: &str) -> &str {
-    const BADGES: [&str; 16] = [
+    const BADGES: [&str; 20] = [
         "[免费]",
         "[免費]",
         "[Free]",
@@ -14,6 +14,8 @@ pub(super) fn strip_site_title_badges(title: &str) -> &str {
         "[2x免费]",
         "[2X免費]",
         "[2x免費]",
+        "[2X 50%]",
+        "[2x 50%]",
         "[2x]",
         "[2X]",
         "[50%]",
@@ -22,6 +24,8 @@ pub(super) fn strip_site_title_badges(title: &str) -> &str {
         "[HR]",
         "[官方]",
         "剩余时间",
+        "剩餘時間",
+        "剩余時間",
     ];
     // 裁在标题里最早出现的角标上，而不是内置列表里靠前的那个：
     // 标题是 `X [2X] [Free]` 时若先按列表顺序裁 [Free]，会留下 `X [2X]` 仍带着角标。

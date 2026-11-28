@@ -68,6 +68,12 @@ pub(crate) enum Cmd {
     },
     /// 看索引现状：内容数、覆盖分布、转种草稿、待找源
     Status,
+    /// 按站点汇总已发种数量与最后发种时间（只读 auto-audit / reseed-log）
+    Stats {
+        /// 输出 camelCase JSON（给脚本/GUI 吃）
+        #[arg(long)]
+        json: bool,
+    },
     /// 转种草稿的审阅与提交（默认只审阅不提交）
     Reseed {
         /// 转第 N 条草稿（1 起编号；不带此参数只列草稿）

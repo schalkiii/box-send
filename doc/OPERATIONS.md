@@ -80,6 +80,8 @@ status / at / url / note / verifyHash
 | `existed_pending` | 回包说重复，但回包里没有可核对的详情页/下载链接；回包 id 经常是错的。note 以 `existed_unresolved` 开头时，表示站上已有、下载/挂回 qB 失败 |
 | `posted_unresolved` | 站上已发布（新发或 existed），但下载目标种、校验或挂回 qB 失败；待人工补挂，不记失败、不进失败冷却、不占发布额度 |
 | `posted_verifying` | 上传成功、种子已加入 qB，但校验没跑完，或校验到 100% 但 tracker 还没回包；界面不写“转种完成”，下一轮接着收尾。算一次发布额度，但还不算已做种 |
+
+**发布成功不等于做种成功**：上传成功和审核通过都不等于站点已经看到你在做种。站点会按“候选 24 小时没做种”或“断种过久”自动删种；只有“只挂目标站 tracker + `progress=1` + tracker `status=2` + 站点同伴表能看到自己”才是 `seeded_confirmed`。熊猫 141276、麒麟 479362 都是现场。被断种删掉后不要盲目重发；qB 里的失效残留交给外部清理工具，不手工删。
 | `wait_source` | 没有任何可用成员种子，导不出源文件 |
 | `review_pending` | 站上命中了，但清单或 hash 对不上，等人核对 |
 | `pending_offers` | 站点要求改走候选入口（`offers.php`），程序不自动重试；等人工去候选页提交，`status` 里单列“待跟进” |
@@ -157,14 +159,14 @@ qB 的 `GET /api/v2/torrents/info` 单页最多返回 50,000 条。2026-11-27 �
 
 原先所有失败都笼统显示“上传失败”。现在按回包特征分六类报：
 
-1. **请求层超时/断连** → “上传请求没通”；网络层会同一字节重投一次，第二次仍不通才报失败。
+1. **请求层超时/断连** → “上传请求没通”；**不原样重投**（2026-11-28 起）。第一次 POST 可能已被站点收下，重投会回 `existed=1`，把新发误判成旧种；改为交回“未确认”，按名称+总大小站内核对，找到就挂回，找不到才落 `posted_unresolved`。hdfans 288175/288180 就是旧版重投造成的误判现场。
 2. **后端空回包**（正文 0 字节，或只剩 HTML 标签没有可见文本）→ 明确写“HTTP 200 空回包，通常是站点后端处理超时或崩溃，本次未确认发布”。
 3. **缺必填项拒绝**（正文出现“有项目没有填写 / 请填写必填”一类）→ “站点提示缺少必填项”并带片段。
 4. **种子过大**（`torrent_too_large` / `add_offer=1`）→ 落“待走候选入口”（`pending_offers`），不自动重试。
 5. **其他站点拒绝** → 取错误框原文，兜底改成“站点拒绝（回包未展开具体原因）”，不再假装是“上传失败”。
 6. **登录失效、回到上传表单**：各自保留原来的判定；**HTTP 200 但页面认不出来**先不判失败，走下面的“未确认发布”核对。
 
-**HTTP 200 未识别回包先核对（2026-11-27 起）**：回包是 `HTTP 200 未识别的返回`（含“回包已存 …”变体）时，按发布名 + 本地总大小做站内检索；找到就把站点种子下回来、核对 pieces 并挂进 qB，找不到落 `posted_unresolved` 待人工，不记 `failed`、不进失败冷却。403/404、空回包、明确的站点拒绝仍按原失败口径。
+**HTTP 200 未识别 / POST 网络中断先核对（2026-11-27 起，2026-11-28 扩到网络中断）**：回包是 `HTTP 200 未识别的返回`（含“回包已存 …”变体），或 POST 时连接中断，都按发布名 + 本地总大小做站内检索；找到就把站点种子下回来、核对 pieces 并挂进 qB，找不到落 `posted_unresolved` 待人工，不记 `failed`、不进失败冷却。403/404、空回包、明确的站点拒绝仍按原失败口径。
 
 **重复回包不按失败报**（2026-11-27 起）：最终跳转带 `existed=1`、错误框里有明确重复措辞，或重填页/超过 8KB 的长页面里出现“该种子已存在！”/“该种子已经存在！”/“已存在！”精确提示时，走重复分支，不落 `failed`；上传页帮助文案里的泛化“提示种子已存在”不算，避免误判。
 
@@ -221,6 +223,7 @@ pwsh scripts/seeding-audit.ps1 -Json -OutFile audit.json
 - `bsend report`：看整体覆盖率。
 - `bsend autopost`：找缺口、生成待发、审阅、发布、挂回。
 - `seeding-audit.ps1`：看哪里卡住了。
+- `scripts/live-smoke.ps1`：跑一遍真站只读巡检，核对已发种子的详情页、上传量和 tracker 回包。
 - `scripts/seed-images.py`：源站简介没有图时，按内容键从本地视频抽帧（默认 3 张，可多条视频各取一帧），也可用 `--douban <条目id>` 自动取豆瓣海报或传 `--poster-url`；上传 pixhost 后写 `screenshot-overrides.json`；`--dry-run` 只抽帧不上传。同一部剧有多个内容键（如 HDTV 和 WEB-DL）时，用 `--also-content <内容键>` 逐个带齐，或 `--for-name <名称片段>` 在覆盖记录里找齐同名内容键；不要只补一个键。
 - `scripts/imgbox-upload.py`：把本地海报/截图传到 imgbox，输出原图直链；匿名、无需 API key、单图 10MB。当前常规图床是 pixhost，imgbox 只作历史兼容，UBits 会把 imgbox 当死图。
 - `scripts/edit-seed.py`：只改已发布种子的标题/简介；默认演练，`--apply` 才提交，其余表单原样回填。`--processing` 改文件容器（MP4/MKV）下拉，`--team` 改制作组下拉，`--append-image <url>` 在简介末尾追加一张图（已有同链接就跳过）。
@@ -251,6 +254,53 @@ python scripts\replay-reseed.py --draft 85 --expect '注入本机视频截图 3 
 
 修复要留两层证据：纯逻辑补单测（例如 lajidui 的 `lajidui_quality_fields_fill_region_container_and_team`、`lajidui_unknown_team_uses_other_and_mkv`），全链路用上面的草稿回放。下一轮遇到相同现场，先跑回放，不靠记忆判断。
 
+### 5.5 `scripts/live-smoke.ps1`：真站只读巡检
+
+把 `bsend status`、`bsend report`、`bsend followup --dry-run` 和 qB 的 `torrents/info`、`torrents/trackers` 串成一次巡检。不发布、不挂种、不改 `coverage.json`；`followup` 一定带 `--dry-run`。
+
+```powershell
+pwsh scripts/live-smoke.ps1
+pwsh scripts/live-smoke.ps1 -Sites city13,hdvideo -FollowupLimit 2
+pwsh scripts/live-smoke.ps1 -SkipFollowup
+```
+
+默认核对三条真实种子：
+
+- city13 [88467](https://13city.org/details.php?id=88467)：覆盖状态、上传量、同伴数、tracker 状态。
+- hdvideo [79168](https://hdvideo.top/details.php?id=79168)：同上；`tracker` 可能同时出现 `2/4`，表示主 announce 与备用 tracker 不一致。
+- pthome [285040](https://www.pthome.net/details.php?id=285040)：同上。
+
+输出目录默认 `artifacts/live-smoke-<时间戳>/`，含 `status.txt`、`report.txt`、`followup.json`、`summary.json`、`summary.md`。`summary.md` 的每条种子都带详情页链接、qB hash、上传量、同伴和 tracker 状态；`followup` 的日志和 JSON 在同一文件，脚本只截取 JSON 对象解析。
+
+退出码：`0` 全部命令成功且 followup 没有打不开的详情页；`2` 有命令失败、站点不可达或 followup 报错。站点打不开只记失败，不改覆盖格。
+
+### 5.6 真发前人工核对：站规 + 门禁 + AI 判断（2026-11-28 起）
+
+`dry-run` 或审阅里出现“预检通过”只说明程序没拦，不等于可以提交。每次真发前按下面三层顺序看，任何一层有异常都停下来修，不靠“先发出去再说”。
+
+**第一层：站点规则和账号状态**
+
+- 当前账号等级能不能发、今天在不在发布窗口（gtk 的 User 只能周六 12:00–周日 23:59；LongPT 也只限周末且上传页没有发布表单）。
+- 目标站要哪些字段和图片：海报/截图是独立字段还是简介图，最低几张，是否必须 MediaInfo、IMDb/豆瓣/TMDB 链接、中字/Remux/方舟等标签。
+- 站内先搜同片、同剧、同版本：`existed=1` 是“站上已有同 `info hash`”，不是“这次新发”；同名不同总大小、不同集数、不同编码/音频版本要按“其他版本可发”判断，不能只凭标题像就跳过。
+- 站点搜索可能不完整：sbpt 搜 `Ghajini` 没结果，但 21785 确实存在；搜不到不能当成没有。
+
+**第二层：程序门禁和实际提交字段**
+
+- 看审阅打印的每一个字段，不只看“预检通过”：标题技术参数顺序、分类、媒介、编码、分辨率、音频、制作组、标签值、简介首图/图片数、MediaInfo 是否在独立字段。
+- 站规门禁：`titleNoCjk`、`descrOrder`、`requireLinks`、`requireMediainfo`、必填标签；图片硬规则是逐图探测后剪死图，藏宝阁/优堡/太乙/麒麟至少 3 张、熊猫 4 张、ptlgs 4 张（1 海报 + 3 截图）、tjupt 至少 1 张。
+- 源站残留：HTML 简介先转 BBCode 再洗 `[quote]` 里的源站广告；死图逐张剪掉；目标站自己的 `[quote]` 要保留。
+- 标题角标：站点会在标题前加 `[2X 50%] 剩餘時間：…` 这类繁体促销角标，判重前要裁掉；裁不干净会把同一条误判成“标题不符”。
+
+**第三层：AI 判断，补门禁覆盖不到的上下文**
+
+- 这条是不是真缺口：站内已有的是同文件、同内容其他版本，还是只是标题相似；qB 里有没有目标站 tracker，不能只看日志。
+- 站点表单的“请选择一项”是不是还没选：hdfans 的 `medium_sel` 没有 `Encode`/`BluRay`，x264 的 1080p 重编码应落「1080P/i压制」；程序曾留 `0` 但预检仍显示通过，真发会被站点打回。2026-11-28 已加 `pick_encode_option` 按分辨率选「1080P/i压制 / 720P压制」并补单测。
+- 图片探测是否稳定：同一条审阅可能出现 7→6、7→3、甚至 0 张；0 张时门禁必须拦住（sbpt《Groundhog Day》2026-11-28 就是被 0 张图拦下），不能重试到“碰巧过”就发。
+- 站点改写标题或 hash 时，只认 pieces 指纹和文件清单；标题不完全一致、hash 不同都可以挂回，pieces 或文件清单对不上就拒绝。
+
+三层都过才加 `--yes` / 点“确认转种”。真发后记录详情页、站点 hash、构造 hash、qB 校验/tracker 状态；上传成功只算 `posted`，校验/tracker 没确认只能算 `posted_verifying`，要审的站落 `pending_review`，回包认不出且站内定位不到落 `posted_unresolved`。发现字段、图片、标题或挂回问题，先改代码或仓库脚本并补回归测试，再按 5.4 回放，不手点站点表单当常规修复。
+
 ## 6. 常用命令
 
 ```powershell
@@ -261,10 +311,16 @@ cargo build --release -p bsend-cli
 
 .\target\release\bsend.exe --config "$env:LOCALAPPDATA\BoxSend\boxsend.json" status
 .\target\release\bsend.exe --config "$env:LOCALAPPDATA\BoxSend\boxsend.json" report --json out.json
+.\target\release\bsend.exe --config "$env:LOCALAPPDATA\BoxSend\boxsend.json" stats
+.\target\release\bsend.exe --config "$env:LOCALAPPDATA\BoxSend\boxsend.json" stats --json
 .\target\release\bsend.exe --config "$env:LOCALAPPDATA\BoxSend\boxsend.json" audit --days 7
 .\target\release\bsend.exe --config "$env:LOCALAPPDATA\BoxSend\boxsend.json" autopost --dry-run --limit 5
 .\target\release\bsend.exe --config "$env:LOCALAPPDATA\BoxSend\boxsend.json" autopost --loop-mode --interval-secs 1800
 ```
+
+`bsend stats` 只读数据目录里的 `auto-audit.jsonl` 和 `reseed-log.jsonl`，不连站点、不改覆盖记录。口径是“按站点 + 内容键去重”：只算 `posted` / `posted_verifying` / `pending_review` / `posted_unresolved`；`existed_pending`（站上本来就有）、`skipped_duplicate`、`same_hash_skipped`、`other_version`、`blocked`、`failed`、`review_rejected` 都不算新发种，URL 带 `existed=1` 的历史记录也不算。最后时间取该站成功记录里最大的 `at`，按北京时间显示；最后一条种是该条记录的详情页。GUI 的「发种统计」Tab 用同一份数据，不改统计口径。
+
+GUI 的 exe 用 `cargo build --profile gui-release -p bsend-gui` 出，路径是 `rust/target/gui-release/bsend-gui.exe`。这个 profile 打开 debug-assertions，走 GPUI 的运行时着色器编译，不依赖 Windows SDK 的 `fxc.exe`；普通 `cargo build --release -p bsend-gui` 仍需要 `fxc.exe`，本机没装 Windows SDK 时不要用那个 profile。GUI 工具栏第 2 个 Tab「发种统计」和 `bsend stats` 用同一份本地日志、同一口径；表格和 `bsend stats` 文本输出应当一致。
 
 `--dry-run` 是试运行：会连站点做审阅和发布检查，但不上传、不写覆盖记录。
 
@@ -388,6 +444,7 @@ NexusPHP 的简介框是 BBCode 编辑器。源站简介里的 `<fieldset>`、`<
 - **要图的站有硬性最低图数**：`gates::image_floor` 按站点硬编码——藏宝阁、优堡、太乙、麒麟 3 张；熊猫高清 4 张（站规更严）；ptlgs 4 张（1 张海报 + 3 张截图）。配置里写 `requireImages` 会被覆盖，不用再配。
 - `descrOrder`：按标记检查段落顺序，缺段或倒置都拦；只对配置了的站点生效。2026-11-27 起，配了该规则的站还会在发种前自动装配分段（源简介六段齐就逐字节不动），装配后自查段序、图数下限、MediaInfo，缺任一项阻断不提交；详见 `ARCHITECTURE.md` 5.5.1。
 - `titleNoCjk`：主标题含汉字直接拦，中文名放副标题。
+- **杏坛封面自动转存（2026-11-28 起）**：`xingtan` 正式提交前，程序取简介第一张图；已在 `img.xingtan.one` 就跳过，否则用 `cookies.json` 里的图床登录态上传并替换简介/相关字段。登录入口是 `https://img.xingtan.one/login`；Cookie 失效时程序会明确中止，先在浏览器登录一次，再跑 `bsend cookies --from cookiecloud --write` 刷新。图床默认直连，本机直连被挡时在 `xingtan` 的 `overrides.proxy` 配代理；审阅/dry-run 不触发上传。图床自动化只解决封面，不等于杏坛影视发种。
 - **独立海报/截图字段**：上传页把海报、截图单列时，在 `sourceSites[].overrides` 写 `posterField` / `screenshotField`（ptlgs 是 `cover` / `screenshots`）。程序从最终简介按顺序抽图：第一张填海报，其余一行一个填截图；字段不存在不硬塞，简介没图时清空。
 - **海报/截图分开算底线（2026-11-26 起）**：除总图数底线（藏宝阁、优堡、太乙、麒麟、熊猫、ptlgs），另有两条独立口径：AGSVPT 至少 1 张海报 + 1 张截图；北洋园（tjupt）至少 1 张图。有独立海报/截图字段的站按字段算，没有独立字段的按“首图算海报、其余算截图”。
 - **必需标签门禁**：站点配置可以声明上传必须勾选的标签（字段名 + 值 + 文案）；构造完成后没勾上，提交前拦下并说明缺哪个。代码不预设任何站点“一律勾某标签”，AGSVPT 在配置里声明 `tags[4][]` + `52`。注意标签值：方舟计划是 52，13 是杜比，51 是合并，不要混用。

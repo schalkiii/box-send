@@ -201,6 +201,11 @@ impl CoverageSettings {
         rules.require_screenshots = floor
             .filter(|f| f.min_screenshots > 0)
             .map(|f| f.min_screenshots);
+        if rules.poster_first.is_none() {
+            // 青蛙和 AGSVPT 审核明确要求海报在简介文字之前；这是站规硬规则，
+            // 不依赖配置里有没有写，避免配置漏项时又把图放到文末被退回。
+            rules.poster_first = Some(matches!(site, "qingwa" | "agsvpt"));
+        }
         if rules.category_rules.is_empty() {
             rules.category_rules = crate::gates::category_rules_default(site);
         }

@@ -29,6 +29,7 @@ use bsend::autopost::AutopostOptions;
 use bsend::config::Config;
 use bsend::coverage::RoundOptions;
 use bsend::index::{ContentIndex, CoverageStatus};
+use bsend::poststats::SitePostStat;
 use bsend::qbittorrent::QBittorrent;
 use bsend::report::DraftRow;
 use bsend::reseed::{request_from_draft, review_reseed, run_reseed};
@@ -50,6 +51,7 @@ struct BsendGui {
     stats: SharedString,
     sites: Vec<SiteRow>,
     drafts: Vec<DraftRow>,
+    post_stats: Vec<SitePostStat>,
     log: Vec<SharedString>,
     tx: Sender<GuiEvent>,
     rx: Arc<Mutex<Receiver<GuiEvent>>>,
@@ -87,6 +89,7 @@ impl BsendGui {
             stats: "载入中…".into(),
             sites: Vec::new(),
             drafts: Vec::new(),
+            post_stats: Vec::new(),
             log: Vec::new(),
             tx,
             rx: Arc::new(Mutex::new(rx)),
@@ -124,6 +127,7 @@ impl BsendGui {
         self.stats = s.stats.into();
         self.sites = s.sites;
         self.drafts = s.drafts;
+        self.post_stats = s.post_stats;
     }
 
     fn push_log(&mut self, line: String) {
@@ -358,7 +362,10 @@ impl BsendGui {
             async move |this: WeakEntity<Self>, cx: &mut AsyncApp| loop {
                 Timer::after(Duration::from_millis(200)).await;
                 let batch: Vec<GuiEvent> = {
-                    let lock = rx.lock().unwrap();
+                    let lock = match rx.lock() {
+                        Ok(lock) => lock,
+                        Err(poisoned) => poisoned.into_inner(),
+                    };
                     let mut out = Vec::new();
                     while let Ok(ev) = lock.try_recv() {
                         out.push(ev);
@@ -400,6 +407,7 @@ impl Render for BsendGui {
         let toolbar = self.render_toolbar(cx);
         let body = match self.tab {
             Tab::Overview => self.render_overview(cx),
+            Tab::PostStats => self.render_poststats(),
             Tab::Drafts => self.render_drafts(cx),
             Tab::Autopost => self.render_autopost(cx),
             Tab::Config => self.render_config(cx),
@@ -479,8 +487,9 @@ impl BsendGui {
 
     /// 工具栏：左侧 tab（不能被压缩），右侧常驻任务按钮
     fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let tabs: [(&str, &str, Tab); 6] = [
+        let tabs: [(&str, &str, Tab); 7] = [
             ("tab-overview", "概览", Tab::Overview),
+            ("tab-poststats", "发种统计", Tab::PostStats),
             ("tab-drafts", "转种草稿", Tab::Drafts),
             ("tab-autopost", "自动发种", Tab::Autopost),
             ("tab-config", "配置", Tab::Config),
@@ -574,8 +583,9 @@ impl BsendGui {
                     .flex_none()
                     .text_color(rgb(theme::TEXT_FAINT))
                     .child(format!(
-                        "站点 {} · 草稿 {} · 日志 {}",
+                        "站点 {} · 发种 {} · 草稿 {} · 日志 {}",
                         self.sites.len(),
+                        self.post_stats.iter().map(|r| r.posted).sum::<usize>(),
                         self.drafts.len(),
                         self.log.len()
                     )),

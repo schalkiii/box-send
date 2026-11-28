@@ -204,6 +204,46 @@ pub(super) fn print_follow_up_items(items: &[String]) {
     }
 }
 
+pub(super) fn cmd_stats(cfg: &Config, json: bool) -> Result<()> {
+    let data_dir = cfg
+        .coverage_state_path()
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let rows = bsend::poststats::site_post_stats(&data_dir);
+    if json {
+        println!("{}", serde_json::to_string_pretty(&rows)?);
+        return Ok(());
+    }
+    let total: usize = rows.iter().map(|r| r.posted).sum();
+    println!(
+        "发种统计（{}）：{} 个站点、去重后 {} 条\n",
+        data_dir.display(),
+        rows.len(),
+        total
+    );
+    println!("| 站点 | 已发种 | 最后发种时间 | 最后一条种 |");
+    println!("|------|--------|--------------|------------|");
+    for r in rows {
+        println!(
+            "| {} | {} | {} | {} |",
+            r.site,
+            r.posted,
+            if r.last_at_text().is_empty() {
+                "—".to_string()
+            } else {
+                r.last_at_text()
+            },
+            if r.last_url.is_empty() {
+                "—"
+            } else {
+                r.last_url.as_str()
+            }
+        );
+    }
+    Ok(())
+}
+
 pub(super) fn cmd_status(cfg: &Config) -> Result<()> {
     let index = ContentIndex::load(&cfg.coverage_state_path());
     let mut by_status: BTreeMap<CoverageStatus, usize> = BTreeMap::new();
@@ -518,7 +558,7 @@ pub(super) fn cmd_reseed(
             .find(|d| d.name.contains(filter) || d.content_key.starts_with(filter))
             .ok_or_else(|| anyhow::anyhow!("没有名称或 content key 含「{filter}」的草稿"))?
     } else {
-        let n = draft.expect("上面已保证 draft/only 至少有一个");
+        let n = draft.ok_or_else(|| anyhow::anyhow!("草稿序号和筛选条件至少要有一个"))?;
         candidates
             .get(n.checked_sub(1).unwrap_or(usize::MAX))
             .copied()

@@ -162,7 +162,7 @@ sites/nexusphp/detail.rs  结果页/详情页解析、大小/上传者/审核标
 sites/nexusphp/upload.rs  页面请求重试、限流/拦截页识别、站点提示页（119 行）
 ```
 
-拆分只移动代码，不改行为；当前全量 536 条、`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings` 通过。
+拆分只移动代码，不改行为；当前全量 551 条、`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings` 通过。
 
 ### 4.8 后续优化（r3 审计给出；P1 已完成，其余待做）
 
@@ -322,7 +322,7 @@ sites/nexusphp/upload.rs  页面请求重试、限流/拦截页识别、站点�
 | tjupt（超大合集部分） | 站点后端处理大种子超时，空回包 | 25GB 左右单条能自动发；几百 GB 合集要拆小或换内容 |
 | qingwa（大合集） | `torrent_too_large`，站点要求走 `offers.php` 候选入口 | 记 `pending_offers`，候选表单不代填，等人去候选页提交 |
 | audiences | 判重依赖真实浏览器前台渲染 Turnstile；上传页是自定义 JS 表单 | 检索走 Kimi WebBridge；后台标签页明确报错，不盲发；表单选档未接 |
-| panda | 2026-11-27 闭环已跑通并恢复发种 | 141840 上传后立刻挂回 qB 校验 100%、只挂单站 tracker，等站点审核；旧账 141276 已删，残留 `3f8ed774…` 待人工清理 |
+| panda | 2026-11-27 闭环已跑通并恢复发种 | 141840 上传后立刻挂回 qB 校验 100%、只挂单站 tracker，等站点审核；旧账 141276 已删，残留 `3f8ed774…` 由外部清理工具处理，不列本项目人工待办 |
 | hddolby、mypt、ptt、rousi、ttg、haoxue 等动态表单站 | 静态表单拿不到，适配器形态不支持 | 只能记录站点形态，要按前端接口重做；haoxue 2026-11-27 已走站点接口发一条，长期是否维护浏览器流程见 7.9 待办 |
 | 连不通站（hdclone、hudbt、u2、shadow、sunny、piggo、tu88） | 网络/TLS/登录态不通 | 整站暂停，连通后再测；freefarm 的 `pt.0ff.cc` 与 `farmm.cc` 是镜像，维持 `pt.0ff.cc`，见 7.9 |
 | 类目不符站（haitang、kelu、vclib、nicept、ziran、soulvoice、musopia、dicmusic、xingtan） | 没有影视类目 | 影视只做提示，不转种；xingtan 书籍/PDF 类目手动发成一条 456304，见 7.9 |
@@ -354,7 +354,7 @@ sites/nexusphp/upload.rs  页面请求重试、限流/拦截页识别、站点�
 - **gtk 的卡点已用按站代理解决（2026-11-27）**：站点实测可用（登录态有效、共享 tracker `t.myaltbox.com` 有 170 条可抄 passkey，`overrides.announceURL` 已填）。配置 `overrides.proxy=http://127.0.0.1:7890` 后走代理链路可达；两条候选都停在提交前——波洛合集站内真重复不重发，知否字段补齐但 User 等级限发布窗口。已临时加进 `autoReseedSites`，等窗口，见 7.9。
 - **6 个"动态界面"站里只有 3 个真动态**：hddolby 其实标准静态表单（17 字段 / 9 下拉，只是要过 2FA）；hdcity 两段式（首段 5 字段，二段编辑页要真实上传后才拿得到）；mypt 时段禁传 + Cloudflare；rousi 是 SPA 需逆建种接口；ptt、ttg 是账号/板块没权限。
 - **7 个表单缺口站里 3 个已落地配置并实发**：iloli（team Other=5）、muxuege（team Other=52 + 普通 AAC=6）、fenghuang（team other=1）；代码侧补了通用地区匹配、同名候选取首个、年代档匹配、分类联动行不计缺口。2026-11-27 复核：xingtan 影视类目不收、书籍/PDF 手动发成一条；haoxue 单页应用走站点接口发一条；hdu 全站过载；aling 源站 500。
-- **熊猫已闭环并恢复（2026-11-27）**：141840《Liar Game S01 2007 2160p WEB-DL》上传后立刻挂回 qB 校验 100%、只挂单站 tracker，7 图逐张 200、简介六段齐全，`pending_review` 等审核；已从 `reseedPausedSites` 移出并留在白名单。旧账 141276 已删，残留 `3f8ed774…` 待人工清理。
+- **熊猫已闭环并恢复（2026-11-27）**：141840《Liar Game S01 2007 2160p WEB-DL》上传后立刻挂回 qB 校验 100%、只挂单站 tracker，7 图逐张 200、简介六段齐全，`pending_review` 等审核；已从 `reseedPausedSites` 移出并留在白名单。旧账 141276 已删，残留 `3f8ed774…` 由外部清理工具处理，不列本项目人工待办。
 
 下一步优先级（在前面的 5 件之后）：
 
@@ -382,6 +382,40 @@ sites/nexusphp/upload.rs  页面请求重试、限流/拦截页识别、站点�
 5. **freefarm 镜像入口（已定）**：`pt.0ff.cc` 和 `farmm.cc` 是同一站点的镜像；配置维持 `pt.0ff.cc`，不切 `farmm.cc`，也不再为切域补 cookie。该站仍在 `pausedSites`，本轮不动。
 6. **gtk 知否等窗口 + 判重风险**：账号是 User 等级，站规限周六 12:00–周日 23:59 发布，本次周五早上不能发；站内已有 5 个其他版本《知否》（18185 UBWEB、13068 DBTV、9015 QHstudIo、8611 HHWEB、5230 OurTV，都 78 集），本条 73 集 119.58GB，窗口内提交前要再核一次是否判重。
 7. ~~**city13 的 tracker 链路**~~（2026-11-27 已闭环，但有尾差）：`88464` 已发布、已挂回 qB 校验 100%；17:20 `tracker.13city.org` 仍 `status=4`、站点页 0 做种者；17:50 强制 reannounce 后 tracker 仍 `status=4 stream truncated`，但站点页出现自己 1 个做种者、上传 70.08 MB、45.33 KB/s、连接 30:24，按站点页人工证据改成 `reseeded`。尾差是 qB tracker 状态没到 2，自动判定仍会保守留在 verifying；后续如果持续 `status=4` 但仍真实做种，再评估要不要加“站点页/上传量”兜底，不要现在放宽。
+
+### 7.10 2026-11-28 站内信与规则收敛待办
+
+本轮读到 48 个曾发种站点中的 **47 个**收件箱；只有 `hdbao` 仍 `ERR_CONNECTION_TIMED_OUT`/HTTP 500，不能当成“没有消息”。详细证据见 `doc/SITE-REVIEW-2026-11-28.md`。本轮已完成：凤凰 [39168](https://pt.521.best/details.php?id=39168) 的 1PTBA 免责声明和 11 张死图已清理，换成 4 张 pixhost 图；代码新增 `strip_cross_site_boilerplate`，并把“跨站复制简介先洗源站残留”写进 `AGENTS.md`。杏坛 456304 的封面已从 imgbox 转到官方图床 `img.xingtan.one` 并替换简介首图（上传 id 91772，1080×1503），编辑返回“编辑成功”、标签「确认 修正」；页面仍是 `[免费]` 剩余 1 天 15 时、`title="未审"`，审核另算。
+
+同日收尾：杏坛封面已接进程序，正式提交前自动转存，登录态失效会中止而不是静默留外链；`bsend stats` 和 GUI「发种统计」Tab 已落地，按站点 + 内容键去重，URL 带 `existed=1` 的旧记录不计，当前 42 站 153 条。GUI exe 用 `gui-release` profile 构建，不依赖 Windows SDK；详细口径见 `doc/OPERATIONS.md` 第 6 节。
+
+新增待办：
+
+1. **收件箱巡检进程序**：`bsend followup` 目前只读详情页审核标记；先补只读 `messages.php` 巡检，至少能列出审核拒绝/删种/管理员警告，不自动回信。
+2. **发布后持续做种核验**：qilin 479362 审核通过后因断种被系统删除，熊猫 141276 是候选 24 小时没做种被删；需要在每轮回访里核对站点同伴表、qB tracker 和 progress，不能只验发布当天。发布状态分 `uploaded`、`pending_seed`、`seeded_confirmed`；qB 里的失效残留交给外部清理工具，不手删。
+3. **财神结构门禁**：MediaInfo 放独立栏、简介不带 MediaInfo、图片外不包 `[url]`、海报 + 3 张有效截图；先把 259870 这类旧重复草稿和 211128 的拒绝原因做成回放用例。
+4. **幸运中字标签（已核对 2026-11-28）**：LuckAudit 会查「中字」；`wanted_tags` 已有中字推导。61102 编辑页实际已勾「中字」（值 6），23 是「原创」，旧拒绝里的“中字未选”不再成立；后续只在预审里保留“有中文字幕必须勾中字”的断言。
+5. **藏宝阁图片复核**：提交前逐图探测还不够，站点审核时会再查一次；先记录图床稳定性，再决定是否把“提交后 10 分钟再探一次”做成可选步骤。
+6. **AGSVPT「方舟计划」与 LongPT 发布条件**：方舟是 `tag_id=52` 标签/专区，规则页和 FAQ 没写入选条件，不能自动勾所有种子；LongPT 只有授权用户能发、`User` 仅周六 12:00–周日 23:59 可发，真实上传入口仍未定位，程序继续按 `no-form` 中止。
+7. **hdbao 收件箱仍打不开**：浏览器 `ERR_CONNECTION_TIMED_OUT`、直连 500、代理连接重置；保留错误证据，不当作“没有消息”，也不为扫消息改站点配置。
+
+### 7.11 2026-11-28 站点推进优先级
+
+`autoReseedSites` 里没有新发种记录的站已缩小到 `audiences`、`sbpt`、`agsvpt`；`gtk`、`hdfans` 已有新发。 “没记录”不等于“能发”，按下面的阻塞逐项处理。`reseedPausedSites` 里的 35 个站是暂停转种，不是没支持；不要把它们当成“待补支持”。
+
+| 优先级 | 站点 | 现状 | 下一步 | 结论 |
+| --- | --- | --- | --- | --- |
+| 1 | gtk | **2026-11-28 已真发** [56069](https://pt.gtkpw.xyz/details.php?id=56069)《知否》73 集 119.58GB；站点改写标题/hash，pieces 和文件清单一致；qB 校验 100%，tracker 还没回包 | 用 `bsend followup` 回访 tracker/审核；不要写成已做种 | 已补第一条新发，`posted_verifying` |
+| 2 | hdfans | **2026-11-28 已新发两条**：[288175](http://hdfans.org/details.php?id=288175)《A Touch of Zen》31.24GB、[288180](http://hdfans.org/details.php?id=288180)《Ghajini》18.00GB；详情页作者都是 `Schalkiii`，目标种内嵌源文件名，确认是新发，不是历史补挂 | 两条 qB 校验 100%，tracker 仍 `status=1`，等回包；不要写成已做种 | 首次 POST 已建种，旧版因链路中断重投回 `existed=1` 误判；已按 `posted_verifying` 纠正 |
+| 3 | sbpt | 21785 是 3 天前自己发的 Ghajini，历史漏挂已补回；《Groundhog Day》真发被 0 张图门禁拦下，没发 | 补可达海报/截图或换候选；`The Residence` 标题顺序可疑，先不碰 | 历史补挂完成，新发仍缺 |
+| 4 | xingtan | 不在自动名单；站内只有书籍/PDF 等类目，没有影视；封面图床已自动化，真实上传 id 91773 返回 200 | 若要自动发书籍，需要补 ISBN/出版社/年份/目录等字段抽取和书籍类目判定；影视仍不发 | 封面已完成，书籍自动化另做 |
+| 5 | haoxue | 不在自动名单；Next.js 单页应用，静态表单走不了；2026-11-27 已走 `POST /api/v1/torrents` 真发 23943 待审 | 把 FluxTorrent 接口做成独立适配器，审核通过后由回访挂回 qB | 可做接口适配，不是补静态表单 |
+| — | audiences | 已在自动名单，0 条；判重和 Turnstile 走 Kimi WebBridge，上传表单是自定义 JS | 先把浏览器标签页切前台让 Turnstile 渲染；要全自动得找站点 API 或补浏览器提交流程 | 当前不能全自动 |
+| — | longpt | 已在自动名单，2 条历史；`upload.php` 只有捐款表单，`User` 限周末窗口 | 找真实上传入口或站点 API；找不到就保持 `no-form` 中止 | 硬阻塞，不硬发 |
+| — | agsvpt | 已在自动名单，0 条；546963 仍是 `( 禁止 )`，没有用户侧重审入口 | 等站点处理或换有发布权限的账号；不重复提交 | 硬阻塞，等站点 |
+| — | 35 个暂停站 | `reseedPausedSites` 里已有适配但暂停转种，如 hdsky、chdbits、hdhome、cmct、pter | 按站点恢复情况和缺口逐站解冻，不要一次全开 | 支持在，先别误判成缺口 |
+
+2026-11-28 下午低发种站点试跑：`ptzone` 的《绝世天劫》被 MediaInfo 不完整和 `team_sel=0` 挡下；《伪装者》`team_sel=0`、标题缺年份，未真发。`itzmx` 的《大侦探波洛合集》门禁虽过，但 294GB / 155 文件的种子文件很可能超过该站 266,240 字节上限，未真发。`hdfans` 的 Ghajini 已修好中文压制档，重试后实际新发 `288180`；同时确认此前 `288175` 也是新发，不是补挂，统计从 43 站 154 条修正为 **44 站 156 条**。`iloli` 仍受二次元浓度门槛限制；`fenghuang`、`muxuege`、`qilin`、`tjupt`、`itzmx`、`ptzone` 本轮没有新的成功发种。
 
 ## 8. 相关文档
 

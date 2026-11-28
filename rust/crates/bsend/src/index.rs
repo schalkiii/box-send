@@ -382,7 +382,9 @@ impl ContentIndex {
             let Some(key) = target_key else { continue };
             let already_member;
             {
-                let entry = self.contents.get_mut(&key).unwrap();
+                let Some(entry) = self.contents.get_mut(&key) else {
+                    continue;
+                };
                 already_member = entry.torrents.contains_key(&t.hash);
                 entry.gone_since = None;
                 if entry.name.is_empty() {

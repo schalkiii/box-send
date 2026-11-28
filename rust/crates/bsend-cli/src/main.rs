@@ -61,6 +61,7 @@ fn main() -> Result<()> {
         Cmd::Prime => cmd_round(&cfg, Some(0), None, None, false, true),
         Cmd::Cookies { from, write, all } => cmd_cookies(&mut cfg, &from, write, all),
         Cmd::Status => cmd_status(&cfg),
+        Cmd::Stats { json } => cmd_stats(&cfg, json),
         Cmd::Reseed {
             draft,
             yes,

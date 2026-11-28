@@ -32,7 +32,7 @@ xingyunge, agsvpt, panda, iloli, muxuege, fenghuang, gtk
 | --- | --- | --- | --- | --- |
 | ptzone | 可发 | 已发布，五项发布检查全过 | https://ptzone.xyz/details.php?id=190916 ｜ `10d23b0e…` | 发布并挂回成功 |
 | kufei | 可发 | 已发布，五项发布检查全过 | https://kufei.org/details.php?id=141933 ｜ `266fbb06…` | 没有独立的 MediaInfo/IMDb 字段，内容并入简介 |
-| longpt | 上传入口未定位（2026-11-27 复核） | 2026-11-22 已发布 51065；11-27 复核 `upload.php` 只有 `bonusrain.php` 捐款表单（hidden + number，0 个 file input），`takeupload.php` GET 只回“上传失败！”页 | https://longpt.org/details.php?id=51065 ｜ `91882f95…` | 程序现在按 `no-form` 中止，不再把种子 POST 到捐款接口；真实上传入口仍未定位，v1 暂不支持 |
+| longpt | 上传入口未定位（2026-11-27 复核） | 2026-11-22 已发布 51065；11-27 复核 `upload.php` 只有 `bonusrain.php` 捐款表单（hidden + number，0 个 file input），`takeupload.php` GET 只回“上传失败！”页；11-28 复核已补「HDR」「英字」「高分」，站点页出现本账号做种 | https://longpt.org/details.php?id=51065 ｜ `91882f95…` | 程序现在按 `no-form` 中止，不再把种子 POST 到捐款接口；真实上传入口仍未定位，v1 暂不支持 |
 | tangpt | 可发 | 已发布，五项发布检查全过 | https://www.tangpt.top/details.php?id=72943 ｜ `2c7da189…` | 第一次抓到的是搜索表单；TLS 需要跳过校验 |
 | ptlgs | 可发 | 已发布，五组下拉全填 | https://ptlgs.org/details.php?id=115117 ｜ `aa85a3ad…` | 硬性要求海报、至少 3 张截图（总图 ≥4）、MediaInfo；没有 DDP/E-AC3 |
 | dragonhd | 可发 | 已发布并挂回 | https://www.dragonhd.xyz/details.php?id=48745 ｜ `bac2dd51…` | 中字、国语、HDR10 标签要人工补 |
@@ -52,7 +52,7 @@ xingyunge, agsvpt, panda, iloli, muxuege, fenghuang, gtk
 | 站点 | 结论 | 实测结果 | 详情页 / 新种 hash | 备注 |
 | --- | --- | --- | --- | --- |
 | ptba | 可发 | 已发布并挂回，qB 校验 100% | https://1ptba.com/details.php?id=106718 ｜ `abf41c82…` | 站上把 `info.source` 写成 `[1ptba.com] 1PTBA.COM`；已加入 hash 改写白名单，后续同站不用再手工补挂 |
-| cspt | 权限疑似被收回（2026-11-26） | 2026-11-23 已发布并挂回，qB 校验 100%；11-26 四条审计均“该账号无发布权限” | https://cspt.top/details.php?id=259870 ｜ `cf568e1a…` | 目标种 tracker 在 `tracker.cspt.cc`，页面域是 `cspt.top`；已补 announce 别名，站点种自带两条同站 announce。11-23 的“可发”结论已被 11-26 的权限报错取代，能否再发待确认 |
+| cspt | 自动审核；发布权限已恢复（2026-11-28） | 2026-11-23 已发布并挂回，qB 校验 100%；11-26 四条审计均“该账号无发布权限”；11-28 收件箱 211299/211298 明确两条审核通过，权限已恢复 | https://cspt.top/details.php?id=259870 ｜ `cf568e1a…` | 目标种 tracker 在 `tracker.cspt.cc`，页面域是 `cspt.top`；已补 announce 别名，站点种自带两条同站 announce。259870 是旧重复草稿，页面仍 `(禁止)`，正确合集 `Mad Men S01-S07` 已另发；不把它编辑成第二条重复 |
 | dubhe | 可发 | 已发布并挂回，qB 校验 100% | https://dubhe.site/details.php?id=55492 ｜ `b5ebc539…` | 第一次判重搜索 30 秒超时，重试通过；站上已有同片 1080p 其他版本，按策略继续发布；表单没有“完结”标签，发布后手动补 |
 | ptsbao | 可发 | 已发布并挂回，qB 校验 100% | https://ptsbao.club/details.php?id=135787 ｜ `0b0087f7…` | `source_sel[1]` 是二级分类，已按 type 父类 + 标题自动填 `剧集-大陆`；上传也出现 hash 差异，已加入白名单；表单没有“完结”标签，发布后手动补 |
 | crabpt | 可发 | 已发布并挂回，qB 校验 100% | https://crabpt.vip/details.php?id=240242 ｜ `732e2c99…` | 此前候选源站 `hdfans` 502，被失败冷却挡住，改选 `hdsky` 源后成功；站上已有同片 2160p 其他版本，按策略继续发布；上传出现 hash 差异，已加入白名单 |
@@ -79,7 +79,7 @@ xingyunge, agsvpt, panda, iloli, muxuege, fenghuang, gtk
 | --- | --- | --- | --- | --- |
 | pthome | 已补挂 | qB 校验 100%，状态 `seeding` | https://www.pthome.net/details.php?id=284701 ｜ 构造 `b31d8eaf…`，站上 `ebaa6dd9…` | 源 hdfans 133877《人民的名义》2160p WEB-DL；qB 里 11-23 23:56 就在做种，本次补挂当时报“同 hash 跳过”，但没有查 tracker；后续按 qB 真值核对为只挂 pthome tracker、`bsend prime` 改回 `seeding` |
 | nanyang | 已补挂 | qB 校验 100%，状态 `seeding` | https://nanyangpt.com/details.php?id=226159 ｜ 构造 `187d1487…`，站上 `8a9b9ab2…` | 源 soulvoice 54682《知否知否应是绿肥红瘦》4K WEB-DL；表单没有“中字”类标签复选框，需人工补 |
-| ubits | 已补挂；审核没过已换图 | qB 校验 100%，做种中；覆盖记录 `review_rejected` | https://ubits.club/details.php?id=379266 ｜ 构造 `d9970bce…`，站上 `2a57b787…` | 源 hdsky 27637《伪装者》1080p HDTV；前两次报“上传失败！”，补 `source_sel[4]`（地区）和 `team_sel[4]`（`Other`）后通过。11-24 站内信判“海报与截图均无法访问（图床域名已失效）”：简介 9 张图全是已失效的 `i13.tietuku.com`；已换 imgbox 新图（1 海报 + 8 截图）并提交，页面仍显示不通过，等管理复审（详见 `SITE-DEBUG.md` 6.12） |
+| ubits | 已补挂；审核已通过 | qB 校验 100%，做种中；2026-11-28 详情页显示 `(通过)` | https://ubits.club/details.php?id=379266 ｜ 构造 `d9970bce…`，站上 `2a57b787…` | 源 hdsky 27637《伪装者》1080p HDTV；前两次报“上传失败！”，补 `source_sel[4]`（地区）和 `team_sel[4]`（`Other`）后通过。11-24 站内信判“海报与截图均无法访问（图床域名已失效）”：简介 9 张图全是已失效的 `i13.tietuku.com`；已换 imgbox 新图（1 海报 + 8 截图）并提交。11-28 复核 1604294 明确审核通过，同伴表有上传 98.80 GB；旧“页面仍显示不通过”作废 |
 | hdfans | 已确认并补挂 | 287791 就是同一条《伪装者》，qB `b1e600a6…` 校验 100% | http://hdfans.org/details.php?id=287791 | 覆盖记录已是 `reseeded`（11-23 23:49 转种成功），qB 里 11-23 23:49 就在上传，无需重发 |
 | tjupt | 已实发 25GB 单条；274GB 合集仍卡后端超时 | 652794 已挂回 qB、校验 100%，等站点审核 | https://www.tjupt.org/details.php?id=652794 | announce 地址按站点下载的种子定案为 `tracker-public.tjupt.org`（https、带 passkey，已写进 `overrides.announceURL`）。2026-11-25 真发《我们的父辈》25GB 成功，站上改写 hash/标题，按 pieces + 文件清单核对后挂回 qB，校验 100%；页面还标“待审核”。同内容的 274GB《波洛全季》合集上传 5 分钟仍回 HTTP 200、正文 0 字节，站点没有留下条目，重试仍会空回包；要发得先拆小或换内容。站上已有 `416154`（FLAC/DDP5.1）与 `236519`（同名 FRDS 合集、pieces 与本地不同），属实不同内容 |
 | qingwa | 分区：Poirot 不走普通上传；《伪装者》已发并挂回 | Poirot = 站点判定过大，记为待走候选入口；《伪装者》`208575` 校验 100% | https://qingwapt.com/details.php?id=208575 ｜ 构造 `c78e9cb2…`，站上 `d1eeec5c…` | Poirot 回包其实是 `torrent_too_large` 表单（自动 submit 到 `offers.php?add_offer=1`）：站点要求改走候选入口，不是未知回包；程序记 `pending_offers`（待走候选入口），不算失败、不自动重试，`bsend status` 单列“待跟进”等人工去候选页提交（2026-11-24 11:33 真跑复现一次，覆盖记录落 `pending_offers`、审计 result=`pending_offers`、`status` 显示“待走候选入口 1”）。同站《伪装者》发布后自动挂回被 hash 校验拒绝，改用 `bsend pull` 把站点种子下回来挂进 qB，成功 |
@@ -121,13 +121,13 @@ xingyunge, agsvpt, panda, iloli, muxuege, fenghuang, gtk
 | city13 | 1 条已发布；11-26 两条仍 200 未识别 | https://13city.org/details.php?id=88256 | 88256 上传回 200 未识别，站内搜索确认已发出后补挂；2026-11-26 另有 2 条仍是 HTTP 200 未识别回包。2026-11-27 起程序不再直接把 200 未识别记失败，改按名称 + 总大小核对，核对不到落 `posted_unresolved`；这 2 条仍待真实复测 |
 | novahd | 2 条已发布 | https://pt.novahd.top/details.php?id=227655 | 伪装者、人民的名义；4K 60fps 选档已修 |
 | qingwa | 1 条新发，等审核 | https://qingwapt.com/details.php?id=208692 | Bitter Moon；伪装者同内容已存在 |
-| cspt | 2 条已发布，补清 MediaInfo；11-26 权限疑似被收回 | https://cspt.top/details.php?id=260050 | 站点不收 MediaInfo 和图片外 URL 标签，已清 `technical_info`；2026-11-26 四条审计均“该账号无发布权限”，能否再发待确认 |
-| luckpt | 6 条已做种 | https://pt.luckpt.de/details.php?id=61704 | A Touch of Zen 61704、绿里奇迹 61705、The Intern 61706、Black 61707 已审核结束、qB progress=1、只挂 luckpt tracker；波洛 61665、广告狂人 61666 已做种；伪装者 61102 已补 MediaInfo |
-| hdfans | 已做种；11-26 A Touch 卡在媒介选档 | http://hdfans.org/details.php?id=287874 | 同 `info hash` 原种已挂目标站 tracker；qB progress=1、tracker 只有 `hdfans.org`。`info hash` `d8c48453…`，pieces 指纹 `7fcdb513…`。Liar Game；历史 `same_hash_skip` 只表示当时没 add 第二条，判断是否做种必须查 qB tracker。2026-11-26：A Touch 被 `medium_sel` 未选拦下，媒介选档缺口此前没记 |
-| sbpt | 七条都是本站账号的条目 | https://sbpt.link/details.php?id=21767 | 广告狂人 21767、A Touch of Zen 21768、知否 21764 已做种；绿里奇迹 21780、Aquarela 21782、我们的父辈 21783、The Intern 21784 已校验 100%。详情页作者均为 `Schalkiiii`，不是别人发的可辅种；七条链接和判断见 2.5.1。Aquarela、The Intern 缺“中字”标签需手动补 |
+| cspt | 自动审核；11-28 权限恢复 | https://cspt.top/details.php?id=260050 | 站点不收 MediaInfo 和图片外 URL 标签，已清 `technical_info`；2026-11-26 四条审计均“该账号无发布权限”，2026-11-28 收件箱 211299/211298 两条审核通过，权限已恢复；259870 旧重复草稿仍 `(禁止)` |
+| luckpt | 6 条已做种；61102 中字标签已勾 | https://pt.luckpt.de/details.php?id=61704 | A Touch of Zen 61704、绿里奇迹 61705、The Intern 61706、Black 61707 已审核结束、qB progress=1、只挂 luckpt tracker；波洛 61665、广告狂人 61666 已做种；伪装者 61102 已补 MediaInfo/IMDb 链接，编辑页中字标签已勾（值 6，23 是原创），页面无禁止标记、1 个做种者 |
+| hdfans | 已做种；11-28 新发 288175/288180 | http://hdfans.org/details.php?id=287874 | 同 `info hash` 原种已挂目标站 tracker；qB progress=1、tracker 只有 `hdfans.org`。`info hash` `d8c48453…`，pieces 指纹 `7fcdb513…`。Liar Game；历史 `same_hash_skip` 只表示当时没 add 第二条，判断是否做种必须查 qB tracker。2026-11-28：`288175`《A Touch of Zen》和 `288180`《Ghajini》详情页作者都是 `Schalkiii`、目标种内嵌源文件名，确认是新发；旧版首次 POST 已建种，链路中断后重投回 `existed=1` 被误判成补挂。两条 qB 校验 100%，tracker 仍 `status=1`，按 `posted_verifying` 记 |
+| sbpt | 七条都是本站账号的条目；11-28 补挂 21785 | https://sbpt.link/details.php?id=21767 | 广告狂人 21767、A Touch of Zen 21768、知否 21764 已做种；绿里奇迹 21780、Aquarela 21782、我们的父辈 21783、The Intern 21784 已校验 100%。详情页作者均为 `Schalkiiii`，不是别人发的可辅种；七条链接和判断见 2.5.1。2026-11-28：Ghajini 21785 是 3 天前自己发的同条、历史漏挂，已用 `bsend pull` 补回 qB 校验 100%、tracker 未确认；《Groundhog Day》真发被 0 张图门禁拦下，没发。Aquarela、The Intern 缺“中字”标签需手动补 |
 | cyanbug | 判重复核超时；已加重试待实测 | https://cyanbug.net/details.php?id=32829 | 未上传；2026-11-27 已加检索/详情页超时重试，单测过，真站未复测；不盲目重发 |
 | ubits | 上传被图床黑名单拦下 | https://ubits.club/details.php?id=379266 | 简介含 imgbox，站点要求换 pixhost 等图床 |
-| qilin | 审核未过，简介已转 BBCode | https://www.hdkyl.in/details.php?id=479362 | 等站点重审 |
+| qilin | 已审核通过后被系统删除 | https://www.hdkyl.in/details.php?id=479362 | 354775 管理员审核通过、354776 编辑、354778 因断种过久被系统删除（2026-11-28 复核）；qB tracker 回 `Torrent not exists`，覆盖记录 `gone_from_site` |
 | tey | 已补 3 张截图，质量档没有 Bluray 选项 | https://carpt.net/details.php?id=532 | 不是 tey 图床坏；tey 623《伪装者》9 张图正常。carpt 532 简介 0 个 [img]、编辑页无 takeedit 表单，已用 `scripts/seed-images.py` 补 3 张 pixhost 截图，tey 预检“3 张 ≥ 3”通过；卡在 `medium_sel` 只有 WEB-DL/HDTV/DVDR/CD/Track，没有 Bluray，不能硬填 HDTV，未上传 |
 | tjupt | 274GB 合集仍超时；25GB 单条已发并挂回 | https://www.tjupt.org/details.php?id=652794 | 652794 校验 100%；2026-11-26 补 1 海报 + 1 截图和 `[mediainfo]` 段后重新进待审（见 2.6）；剧集分类字段历史上已实现，本轮改成规则驱动 + 提交前硬拦，11-26 只读演练载荷带齐三个字段、无必填缺失；274GB 合集本站没留下条目，不自动重试 |
 | itzmx | 大种 403 / 超 266,240 字节；11-26 再出 403 | https://pt.itzmx.com/details.php?id=13134 | 2026-11-26 Coraline 403、War 通用上传失败；403 是新现象，根因待查，选种先看种子文件大小 |
@@ -174,7 +174,7 @@ xingyunge, agsvpt, panda, iloli, muxuege, fenghuang, gtk
 | --- | --- | --- |
 | audiences | 默认；判重必须走 Kimi WebBridge | Cloudflare Turnstile 只在页面可见时生成 iframe；后台标签页要报“标签页在后台”，不盲发，也不把验证页当“站内没有” |
 | baozi | 默认 | 常规 NexusPHP；tracker 别名已补，按 qB 覆盖真值核对 |
-| cangbao | 主标题禁中文；简介 BBCode；≥3 张可达图；链接 + MediaInfo | 死图先剪再计数；死图用 imgbox 重传，不要关图门禁 |
+| cangbao | 主标题禁中文；简介 BBCode；≥3 张可达图；链接 + MediaInfo | 死图先剪再计数；死图用 imgbox 重传，不要关图门禁。审核会在提交后再查一次图，2026-11-28 的《知否》《Quick Change》都是先因图拒绝、修图后同标题通过 |
 | dragonhd | 默认 | 上传表单没有“中字/国语/HDR10”复选框时，发布后人工补标签 |
 | hdfans | 默认 | 同 hash 必须查 qB：只挂 hdfans tracker、progress=1 才算做种，不能只看历史日志 |
 | hdtime | 默认 | 上传表单没有分辨率下拉，不要硬找分辨率字段 |
@@ -182,8 +182,8 @@ xingyunge, agsvpt, panda, iloli, muxuege, fenghuang, gtk
 | kufei | 默认 | 没有独立 MediaInfo/IMDb 字段，内容并进简介；上传回包正文可能才带唯一详情链接 |
 | lajidui | `processing_sel`=文件容器（MP4/MKV）；`source_sel`=地区；`team_sel`=制作组 | 2026-11-26 起程序按容器、地区、名尾制作组自动填；制作组不在站点列表时选 Other，不冒充驻站组 |
 | lemonhd | 默认（无规则） | 站上会改写元信息，按 pieces + 文件清单核对（白名单仅日志）；回包可能不给详情链接，必要时下载目标种补挂 |
-| longpt | 默认（无静态上传表单） | 2026-11-27 复核 `upload.php` 只有 `bonusrain.php` 捐款表单，`takeupload.php` GET 只回上传失败页；程序按 `no-form` 中止，不提交到捐款接口，真实入口待定位 |
-| luckpt | LuckAudit 官方预审；BDRip → `medium_sel=Encode(7)`；每日 20；链接 + MediaInfo | 预审 100/100 才发；截图不足先换图，不靠关图门禁；表单没有 BDRip 档 |
+| longpt | 自动审核看标签：60fps 要「高帧」、HDR 要「HDR」、豆瓣高分要「高分」；上传入口仍按 `no-form` 保守中止 | 2026-11-28 复核：51248 补「高帧」、51065 补「HDR」「英字」「高分」后，站点页标签已出现、断种警告消失；51065 的 qB 目标是独立种 `91882f95…`，不要把它和 0ff 同内容种 `ae9d48d6…` 混成一条。`upload.php` 仍只有 `bonusrain.php` 捐款表单，真实入口未定位，v1 不硬发 |
+| luckpt | LuckAudit 官方预审；BDRip → `medium_sel=Encode(7)`；每日 20；链接 + MediaInfo | 预审 100/100 才发；截图不足先换图，不靠关图门禁；表单没有 BDRip 档。LuckAudit 还查“中字”标签：标题/简介有中文字幕时必须勾「中字」（LuckPT 表单值 6；23 是「原创」，不要混）。2026-11-28 的 61102 旧拒绝里写中字未选，但实际编辑页已勾中字=6，旧拒绝原因已不成立 |
 | ptba | 默认 | 站上改写 `info.source`，按 pieces + 文件清单核对（白名单仅日志）；下载目标种后核对 pieces 和文件清单，不要求标题一字不差 |
 | ptcafe | 默认（无规则） | 同 hash 先查 tracker/progress；不要把“同 hash”直接当已做种 |
 | ptfans | `medium_sel=8`（表单有两个同名 Encode，取 8） | 站上改写 hash，按 pieces + 文件清单核对（白名单仅日志）；表单无“完结”复选框，发布后人工补 |
@@ -191,14 +191,14 @@ xingyunge, agsvpt, panda, iloli, muxuege, fenghuang, gtk
 | ptlgs | 海报 + ≥3 张截图（总图 ≥4）；链接 + MediaInfo；无 DDP/E-AC3 | 海报和截图是独立字段 `cover` / `screenshots`，不是只放进简介；总图不足 4 张不发；2026-11-25 真发 https://ptlgs.org/details.php?id=115350 已确认详情页两个区块都有图 |
 | ptsbao | 默认 | `source_sel` 是二级分类，按 type 父类 + 标题填；按 pieces + 文件清单核对（白名单仅日志）；无“完结”复选框 |
 | ptzone | 默认 | 常规 NexusPHP，五项发布检查全过；2026-11-27 已加检索/详情页超时重试，单测过，真站复测未做 |
-| qingwa | Remux 标题片源写 `BluRay`，不要带横杠；媒介为 Remux 时勾「Remux」标签；完结标题不带 `Complete`，技术顺序固定 | Poirot 合集被 `torrent_too_large` 要求走 `offers.php`，记 `pending_offers`；标题顺序/片源拼写/Remux 标签不对会被拒；2026-11-27 已补“已存在！”精确提示识别，真实回包未复测 |
+| qingwa | Remux 标题片源写 `BluRay`，不要带横杠；媒介为 Remux 时勾「Remux」标签；完结标题不带 `Complete`，技术顺序固定；海报必须在简介文字之前（`posterFirst` 已加到程序） | Poirot 合集被 `torrent_too_large` 要求走 `offers.php`，记 `pending_offers`；标题顺序/片源拼写/Remux 标签不对会被拒；2026-11-27 已补“已存在！”精确提示识别，真实回包未复测；2026-11-28 复核 208692、208575 编辑后约 30 小时仍 `(禁止)`，按站点“修改后自动进复审”继续等，不重复提交 |
 | sbpt | 链接 + MediaInfo；每日 20；无官方预审 | `existed=1` 不能推断作者；本次七条详情页作者都是本站账号，见 2.5.1；缺“中字”复选框时只能发布后人工补 |
 | shuioudao | 默认（无规则） | 简介图片可能需补图；改已发布种子只动简介，不换种子文件 |
 | tangpt | 默认 | 第一次抓到的可能是搜索表单；TLS 校验按站点实际情况处理，不能把搜索页当上传页 |
 | xdy | 默认（无规则） | 同 hash 按 qB tracker/progress 复核；不要凭日志判定 |
 | city13 | 默认 | 上传可能回 HTTP 200 但页面不可识别；2026-11-27 起程序先按名称 + 总大小站内核对，找到就挂回，找不到落 `posted_unresolved`，不再直接判失败 |
 | crabpt | 默认 | 站上改写 hash，按 pieces + 文件清单核对（白名单仅日志）；源站 hdfans 502 时换源，不重复发 |
-| cspt | 默认 | 简介不收 MediaInfo 和图片外的 URL；`technical_info` 要单独清空；按 pieces + 文件清单核对（白名单仅日志） + `tracker.cspt.cc` 别名 |
+| cspt | 自动审核 | 简介不收 MediaInfo 和图片外的 URL 标签；`technical_info` 单独填，不能为空；至少 1 张海报 + 3 张有效截图；按 pieces + 文件清单核对（白名单仅日志） + `tracker.cspt.cc` 别名 |
 | cyanbug | 默认 | 判重检索可能超时；2026-11-27 已加自动重试（真站未复测）；未确认站上没有之前不得上传 |
 | dubhe | 默认 | 判重搜索偶发 30 秒超时，重试一次；按 pieces + 文件清单核对（白名单仅日志）；无“完结”复选框 |
 | hdbao | 默认 | 站上改写 hash，按 pieces + 文件清单核对（白名单仅日志）；`--limit` 曾把待人工条目算进额度，已修 |
@@ -206,13 +206,13 @@ xingyunge, agsvpt, panda, iloli, muxuege, fenghuang, gtk
 | nanyang | 默认 | 站上改写 hash，按 pieces + 文件清单核对（白名单仅日志）；没有“中字”复选框时发布后人工补 |
 | novahd | 默认 | 4K 60fps 要选 `2160p/4K 60Fps`，不能选普通 2160p；站上已有其他版本仍可发 |
 | oshen | 默认 | 站上改写 hash，按 pieces + 文件清单核对（白名单仅日志）；无“完结”复选框；站点偶发抖动，重试前先核实上一轮结果 |
-| qilin | ≥3 张可达图；简介 BBCode | 海报防盗链、旧图床失效会被判“缺少海报或截图”；先把图换到 imgbox 再提交 |
+| qilin | ≥3 张可达图；简介 BBCode | 海报防盗链、旧图床失效会被判“缺少海报或截图”；先把图换到 imgbox 再提交。2026-11-28 复核：479362 曾被管理员 `白小纯` 审核通过并编辑，2 天 16 时前又因“断种过久”被系统自动删除（消息 354775/354776/354778）；qB 里同内容 `bd348dfc…` 的 tracker 现在回 `Torrent not exists`，是死条目，由外部清理工具处理，不能再算做种 |
 | railgun | 默认 | 站上改写 hash，按 pieces + 文件清单核对（白名单仅日志）；无“完结”复选框；回包可能没详情链接，需下载目标种补挂 |
 | tey | ≥3 张可达图；媒介只收 WEB-DL/HDTV/DVDR/CD/Track | 无 Blu-ray 档，蓝光/Remux 不能硬填 HDTV；按 pieces + 文件清单核对（白名单仅日志） + `tracker.tey.cc` 别名；已发但未审要记等审核 |
 | tjupt | 默认；剧集分类字段 `cname`/`ename`/`specificcat` 规则驱动 + 提交前硬拦 | announce 用 `tracker-public.tjupt.org`；上传超时秒数可逐站配（`uploadTimeoutSec`，缺省 120）；274GB 大合集先别自动重试，25GB 单条已实测成功并挂回。分类字段历史上是写死的 tjupt 特判，本轮改成站点规则抽象（`CategoryRule`，配置 `categoryRules` 可覆盖、缺省走内置兜底表），提交前拉 `showcategorydetail.php?catid=402` 片段按真实控件名核对，控件不在记缺口、不臆造字段；派生不出中/英文名时记本地缺口、真提交前硬拦点名缺哪个。2026-11-26 只读演练（`gatecheck --sites tjupt`，只 GET 不 POST）载荷带 `cname`/`ename`/`specificcat`，必填缺失清单为空 |
-| ubits | ≥3 张可达图；`source_sel` 地区、`team_sel=Other` 必填；图床黑名单 | imgbox 会被直接拒，改用 pixhost；按 pieces + 文件清单核对（白名单仅日志） |
+| ubits | ≥3 张可达图；`source_sel` 地区、`team_sel=Other` 必填；图床黑名单 | imgbox 会被直接拒，改用 pixhost；按 pieces + 文件清单核对（白名单仅日志）。2026-11-28 复核 379266 页面已显示 `(通过)`，站内信 1604294 明确“被站点管理员审核通过”，旧“页面仍标不通过”作废；同伴表有上传 98.80 GB |
 | xingyunge | 默认 | tracker 域名别名已补；按 qB 覆盖真值核对，不凭页面域名猜 |
-| panda | 主标题禁中文；简介按六段顺序装配；≥4 张可达图；链接 + MediaInfo | 站规简介按【转载出处】【制作说明】【海报】【简介】【info】【截图】六段排列；2026-11-27 闭环跑通，141840 等审核，见 2.8 |
+| panda | 主标题禁中文；简介按六段顺序装配；≥4 张可达图；链接 + MediaInfo | 站规简介按【转载出处】【制作说明】【海报】【简介】【info】【截图】六段排列；2026-11-27 闭环跑通。2026-11-28 复核 141840：详情页标题旁绿色 `title="通过"`、1 做种者、18 下载者，页面上限证据强于收件箱里“通过后又拒绝但原因为空”的消息；按页面通过记录，等后续消息再核实，见 2.12 |
 | iloli | `team_sel` 兜底 Other=5；只收动画/二次元，`allowedTypes=["动画"]` 硬拦；`selectPicks.type=405` 只在自动分类落动漫含糊分支时纠正 | announce 主机是独立域 `a.x-anime.cc`，不是站点同域；填了 `overrides.announceURL` 后该主机自动并入允许清单；AC3 有多个同名候选，引擎留空不猜；2026-11-27 首条动画《Ghiblies Episode 2》实发成功，见 2.9 |
 | muxuege | `team_sel` 兜底 Other=52；普通 AAC 取 6；年代档抽不到年份留空 | 源简介只剩 1 张豆瓣海报时，用抽帧脚本补 pixhost 截图满足门禁 |
 | fenghuang | `team_sel` 只有 other=1；无地区、无音频码下拉 | 详情页编号从站点下载种子的评论字段取到 |
@@ -306,7 +306,7 @@ xingyunge, agsvpt, panda, iloli, muxuege, fenghuang, gtk
 
 - 2026-11-27 实发 141840《Liar Game S01 2007 2160p WEB-DL》：上传成功后立刻从站点下载种子、按分片和文件清单核对，挂回 qB 校验 100%、只挂熊猫一个 tracker；7 张图（1 海报 + 6 截图）逐张 200，简介六段齐全，当前 `pending_review` 等站点审核。详情页 https://pandapt.net/details.php?id=141840 ；qB hash `d60643d0b6eb0d1759ae0f6c318d72e3647a1ada`（站点改写后；本地构造 hash `2d562e251808618560714b9955986951cf407605`）。
 - 这一条触发的新能力：发种前按站规 `descrOrder` 自动装配简介六段（只在配了该规则的站生效；源简介六段齐就逐字节不动）。历史上 141276 那版是发到站上之后手工重排的。
-- 旧账：站上 141276 已删（详情页回「错误 没有该ID的种子」）；qB 里另有 1 条残留 `3f8ed774…` 挂失效 tracker，属待人工清理，不能算"在做种"。
+- 旧账：站上 141276 已删（详情页回「错误 没有该ID的种子」）；qB 里另有 1 条残留 `3f8ed774…` 挂失效 tracker，由外部清理工具处理，不手删、不列本项目人工待办，不能算“在做种”。
 - 熊猫已从 `reseedPausedSites` 移出并留在 `autoReseedSites`；站上那条 141276 是候选种子 24 小时没做种被系统删的，重发必须满足"上传→立刻挂回 qB 做种"。
 
 ### 2.8 2026-11-27 实发五条
@@ -319,11 +319,11 @@ xingyunge, agsvpt, panda, iloli, muxuege, fenghuang, gtk
 | 慕雪阁 muxuege | https://pt.muxuege.org/details.php?id=59990 | 《知否知否》4K WEB-DL H265 60fps | soulvoice 54682 · 128,401,739,986 字节 / 73 文件 | `76692871e8c0ed233f0d7828e1f6d56a7566ae54` | 源简介只剩 1 张豆瓣海报，用抽帧脚本补 3 张 pixhost 截图后满足门禁 | `pending_review`，页面角标 `title="未审"`，progress 1，单 tracker `pt.muxuege.org`，已挂回 qB 100% |
 | 凤凰 fenghuang | https://pt.521.best/details.php?id=39168 | 《广告狂人 Mad Men S01-S07》 | ptba 5565 · 95.10GB / 107 文件 | 前缀 `f8a8abe66511` | 简介 10 张图 | 已挂回 qB 做种（`reseeded`）；详情页编号从站点下载种子的评论字段取到 |
 | 望雪 haoxue | https://www.hxpt.org/torrent/23943 | 《知否知否》 | — · 73 个 mp4 / 128401739986 字节 | 站点 info_hash `85edbcb1738078e8e9b71c7fe9728e3b53d6be5a`；pieces 指纹 `5804349c90ee57d3886f0c01d7b27f96bb6c9001`（与本地一致） | 5 张图（海报 1、九宫格 1、截图 3）HEAD/Range 全部 206 存活；MediaInfo 2323 字符；标签 国语/中字/完结 | `pending_review`，**当次没挂回 qB**，见下 |
-| 星潭 xingtan | https://xingtan.one/details.php?id=456304 | 「初中英语八年级上册【电子课本】」 | 源 hxpt 原种原样保留 · 7,830,090 字节 / 1 文件 | 上传用 info hash `7e028f0e3eaf9daf5ee0ea8db4888ed17cf182cf`；pieces 指纹 `608379ab68ae0c441483c264a30f37934f57783f`；`info.source` 是 `[xingtan.one] 杏坛` | 归到 课程与教学论 / 书籍 / PDF，标签「确认」 | 候选区待审核（候选区保留约 1 天 23 小时）；已作为独立种子挂回 qB，progress 100%、只挂星潭一个 announce |
+| 星潭 xingtan | https://xingtan.one/details.php?id=456304 | 「初中英语八年级上册【电子课本】」 | 源 hxpt 原种原样保留 · 7,830,090 字节 / 1 文件 | 上传用 info hash `7e028f0e3eaf9daf5ee0ea8db4888ed17cf182cf`；pieces 指纹 `608379ab68ae0c441483c264a30f37934f57783f`；`info.source` 是 `[xingtan.one] 杏坛` | 归到 课程与教学论 / 书籍 / PDF，封面已转[官方图床](https://img.xingtan.one/i/2026/11/28/6b0a2f2e597b3.png)，标签「确认 修正」；程序已接自动转存（`imagebed.rs`，正式提交前把简介首图换到 `img.xingtan.one`；2026-11-28 真实烟测 `id=91773`，HTTP 200 `image/png`） | 候选区待审核（2026-11-28 编辑后 `[免费]` 剩余 1 天 15 时，标题旁 `title="未审"`；旧 imgbox 封面 0 处）；已作为独立种子挂回 qB，progress 100%、只挂星潭一个 announce |
 
 望雪这条是走站点接口真发的，不是引擎发的。回包 `code=0`、`approval_status=0`，页面标「审核中」；上午又查了两次仍是 `approval_status=0`、页面「审核中」，收件箱没有驳回留言。待审期间下载接口 `/api/v1/torrents/23943/download` 回 404 `{"code":1004,...,"message":"资源不存在"}`（已审的 23941 / 23928 同接口 200），所以站点种子拿不到、当次没挂回；审核通过后由 `bsend followup` 下载核对再挂回。望雪站规明令禁 FRDS 作品，引擎给该站的两条候选都是 MNHD-FRDS 压制，已排除。
 
-星潭这条也是手动发的，走的是书籍/PDF 类目，不是影视。站点回传种子和上传种子在 announce、name、source、长度、pieces 指纹、文件清单、info hash 七项上完全一致。查重双证据：qB 里原种只挂 hxpt、没有星潭 announce；站内检索沪教8A、8A英语、英语课本 八年级、舒白梅、八年级 英语、沪教版 英语 等关键词均 0 条。覆盖账本：内容键 `m:a733ec64fdbb4fbd`（沪教8A英语课本.pdf，7,830,090 字节）的星潭格子落 `pending_review` + 上面这个详情页链接。
+星潭这条也是手动发的，走的是书籍/PDF 类目，不是影视。站点回传种子和上传种子在 announce、name、source、长度、pieces 指纹、文件清单、info hash 七项上完全一致。查重双证据：qB 里原种只挂 hxpt、没有星潭 announce；站内检索沪教8A、8A英语、英语课本 八年级、舒白梅、八年级 英语、沪教版 英语 等关键词均 0 条。覆盖账本：内容键 `m:a733ec64fdbb4fbd`（沪教8A英语课本.pdf，7,830,090 字节）的星潭格子落 `pending_review` + 上面这个详情页链接。**2026-11-28 封面转存完成**：官方图床上传 `id=91772`，图片 `https://img.xingtan.one/i/2026/11/28/6b0a2f2e597b3.png`，1080×1503；编辑页没有独立的封面字段，封面就是简介 `descr` 的第一张 `[img]`，已把首图换成这个官方地址。详情页复查 `编辑成功！`，旧 `images4.imgbox.com` 0 处、官方图 1 处，标签「确认 修正」。当前仍是候选未审：H1 是 `[免费] 剩余 1 天 15 时`，标题旁 `title="未审"`，不能按“审核通过”记。**2026-11-28 已把这条转存接进程序**：`bsend::imagebed::rehost_xingtan_cover` 在正式提交前取简介第一张图，用 `cookies.json` 里 `img.xingtan.one` 的登录态上传到官方图床并替换简介/相关字段；已在官方图床的图直接跳过，登录态失效或上传失败会中止，dry-run 不上传。手工 91772 是这次闭环的证据，后续由程序自动生成。
 
 ### 2.9 2026-11-27 复核结论：iloli、三个硬阻塞站、gtk、freefarm
 
@@ -379,6 +379,72 @@ qB 4 万多条种子重启后 announce 队列拥塞：`max_concurrent_http_annou
 
 qB 仍有 42,473 条种子，重启后的 announce 队列会拖慢新种。city13 88467 在 19:52 已转成 `status=2`，上传 71.1 MB、2 个下载者，实际做种已确认；2026-11-27 21:00 复查上传量已增到 227.16 MB。hdvideo 79168 主 announce `status=2`、`tracker.hdvideo.top` `status=4`（stream truncated），0 peers、0 上传，只能算“已挂回、tracker 已确认”，不能把 `progress=1` 当有流量的做种。两条站点页当天都仍标“未审”。旧格子 `verifyHash` 为空的问题已修：新发种会落盘；既有 hdvideo 格由 `run --sites hdvideo --limit 0` 按成员种子的目标 tracker 自动补回；后按“本站新发种落 `reseeded`、补挂才落 `assisted`”的语义人工纠正为 `reseeded`。
 
+
+### 2.12 2026-11-28 站内信复核、遗留处理与规则收敛
+
+这一节回答三件事：适配文档还在不在维护、站内信里还有哪些没处理的发种问题、规则表和自动化工具还缺什么。
+
+**适配文档的维护状态**：`doc/SITES.md` 就是之前那份“站点规则落盘”的适配文档，不是一次性临时表。它一直在维护：2.5 是逐站门禁总表，2.6 记站内信结论，2.8—2.11 记 11-27 的实发与复核，本节追加 11-28 的结论；第 3 节的 147 站大表由 `scripts/site-matrix.ps1` 从配置和 `formcheck.json` 生成，手改只改“备注”列。`doc/SITE-DEBUG.md` 继续记新站接入和上传失败排查。两份都在用，但它们是“人看的说明书”，不是发布前能直接执行的规则集合；真正会拦住发布的规则在 `crates/bsend/src/gates.rs`、`reseed/` 和站点配置里。
+
+**站内信复核结果**（只列审核、删种、警告类；普通福利/结算消息不算）。48 个曾发种站点 id 中，本轮读到 **47 个收件箱**；只有 `hdbao` 仍打不开（浏览器 `ERR_CONNECTION_TIMED_OUT`、直连 `messages.php` HTTP 500、代理连接重置），保留错误证据，不能写成“没有消息”。此前被 HTTP 500、TLS 超时、连接重置或 WAF 挡住的 7 个站已全部补读：kufei 直连重试 6 次后 200；ptba、xdy 直连 200；dubhe 用真实浏览器；gtk 走代理 + 解码后的 cookie；fenghuang 直连重试 4 次后 200；ptzone 用真实浏览器打开收件箱，5 条全是系统维护/认领结算，0 未读。
+
+| 站点 | 最新站内信/页面事实 | 本轮处理 | 当前状态 |
+|---|---|---|---|
+| LongPT | 78748（2 天 23 时前）51248 未勾「高帧」；78660（4 天前）51065 断种提醒 | 51248 补「高帧」；51065 补「HDR」「英字」「高分」；51065 的 qB tracker 从 33 位错误 passkey 改回 32 位，站点同伴表已出现 `Schalkiii`、断种警告消失 | [51248](https://longpt.org/details.php?id=51248) 标签“高帧 完结”；[51065](https://longpt.org/details.php?id=51065) 站点页已有本账号做种、断种警告消失；上传入口仍未定位，程序继续按 `no-form` 不硬发 |
+| AGSVPT | 647086（14 时前）546963 简介顺序拒绝；647085 同时间“种子被编辑”；646994 是 1 天 23 时前旧拒绝 | 把海报移到 `kdescr` 最前，顺序改为“海报→文字→截图”，`edited=1` | [546963](https://www.agsvpt.com/details.php?id=546963) 仍显示 `( 禁止 )` 和旧拒绝横幅；站点没有用户侧“重新审核”按钮，只能等管理重审。不重复提交，不发站内信 |
+| UBits | 1604294（3 天 1 时前）“被站点管理员审核通过”；1604480（1 天 17 时前）候选通过；1604226 是 3 天 7 时前旧拒绝 | 不需要再改种子；核对详情页 | [379266](https://ubits.club/details.php?id=379266) 页面已显示 `(通过)`，同伴表有 `d492602647` 上传 98.80 GB；旧“页面仍标不通过”结论作废 |
+| 熊猫 | 492589 审核通过 1 时 3 分前；492588 编辑 1 时 3 分前；492590 拒绝 1 时前但正文原因为空；492591 标记未审核 1 时前；492527 是 10 时前简介顺序拒绝 | 141840 已按“转载出处→制作说明→海报→简介→info→截图”重排，完整 MediaInfo 放独立框，`edited=1` | [141840](https://pandapt.net/details.php?id=141840) 标题旁绿色 `title="通过"`、1 做种者、18 下载者。页面证据强于“拒绝原因为空”的消息，按页面通过记录；等下一轮消息再确认，不重复提交 |
+| 青蛙 | 643787（1 天 20 时前）审核拒绝：`A Touch of Zen` 的 `Blu-ray` 应写 `BluRay`、Remux 要勾标签；643723 是 `Bitter Moon` 的 MediaInfo/BDInfo 原因；643710/643639 是《伪装者》的 Complete/标题顺序/缺封面 | 208692 已换 676 字节 BDInfo、音频选 Other、补原生原盘标签；208575 已去 `Complete`、补完结标签和海报；208804 已通过 | [208692](https://qingwapt.com/details.php?id=208692)、[208575](https://qingwapt.com/details.php?id=208575) 编辑后约 30 小时仍 `( 禁止 )`；按站点“修改后自动进复审”继续等，不重复提交。[208804](https://qingwapt.com/details.php?id=208804) 已通过并做种 |
+| qilin | 354775（2 天 16 时前）管理员 `白小纯` 审核通过；354776 同时间编辑；354778 同时间“因断种过久，被系统自动删除” | 479362 已确认被删；qB 同内容 `bd348dfc…` 的 tracker 现在回 `Torrent not exists` | [479362](https://www.hdkyl.in/details.php?id=479362) 覆盖记录保持 `gone_from_site`；qB 里这条是死条目，由外部清理工具处理，不能再记“做种”。重发前必须重新构造该站专属种子并确保挂回后 tracker 回包 |
+| 藏宝阁 | 58106（2 天 7 时前）《知否》拒绝“简介图片 1/3 张无法访问”；58117（1 天 12 时前）同标题通过。58042/58048（4 天 19/14 时前）《Quick Change》因缺媒介/分辨率/图片和图片全部失效拒绝；58072（3 天 11 时前）同标题通过 | 两条都是“先拒后过”，不重复提交；核对通过消息 | [44189](https://cangbao.ge/details.php?id=44189) 与 [43994](https://cangbao.ge/details.php?id=43994) 均已通过，无遗留。审核会在提交后再查一次图片可访问性，剪死图不能只在本地做一次 |
+| 财神 | 211299（1 天 8 时前）《The Disguiser 1080p HDTV》通过；211298（同时间）《知否》通过；211128/211037（2 天 2/22 时前）因 MediaInfo 错误、简介含 MediaInfo、MediaInfo 栏为空拒绝；211038/211036（2 天 22/23 时前）还因缺海报/截图、少于 3 张截图拒绝；211035 因简介含 MediaInfo 拒绝；210780（4 天 11 时前）《S07 Mad Men》因图片外 URL 标签和简介含 MediaInfo 拒绝，页面仍 `(禁止)` | 前三条已通过，无需再改；259870 是旧重复草稿，正确的 `Mad Men S01-S07` 已另发，旧条没有用户侧删除入口 | 211299/211298 通过；[259870](https://cspt.top/details.php?id=259870) 仍禁止，是旧重复草稿，不编辑成第二条重复，保留待人工处理 |
+| 幸运 | 85608（10 天 1 时前）61102《The Disguiser Complete HDTV》被 LuckAudit 拒绝：写中字标签未选、简介缺 IMDb/豆瓣/TMDB 链接、MediaInfo 为空（总分 81，错误 2，警告 1） | 详情页已有 IMDb 链接和 MediaInfo；编辑页实际已勾「中字」（值 6，23 是原创），标签是“原创中字完结”；页面无 `(禁止)`/`(未审)` 标记、1 个做种者；`edit-seed.py` 直连 30 秒超时，改用浏览器核对表单 | [61102](https://pt.luckpt.de/details.php?id=61102) 旧拒绝里的“中字标签未选”与实际不符，不再记为待修；不重复发；后续预审继续检查中字、链接和 MediaInfo 三项 |
+| 凤凰 | 消息 1557（23 时 37 分前）“种子被编辑”指向 [39168](https://pt.521.best/details.php?id=39168)：简介开头是 1PTBA 免责声明和保种提示，全文 11 张图全失效（9 张 `t1.picb.cc`、1 张 `i.loli.net`、1 张 `pt.keepfrds.com` 表情图），正文从 1PTBA 5565 整体复制 | 用 `seed-images.py` 从本地海报和 S01E01 抽帧，上传 4 张 pixhost 图并写入 `screenshot-overrides.json`；生成新简介，删掉两段含 1PTBA 的 `[quote]`、删掉全部死图、把 4 张新图放最前，`edit-seed.py` 先演练再 `--apply` | 详情页复查 `1PTBA` 计数 0，新海报/截图各出现 2 次，标签仍“中字”，标题/大小未变；`takeedit` 返回 302 `edited=1`。管理员改了什么没有编辑历史，本轮只清跨站残留和死图，不回滚管理员改动 |
+| iloli | 176980 等 10 条全是宕机补偿、做种积分、等级、TG 群和福利 | 无审核类消息 | 无需动作 |
+| PTFans | 5 条全是认领结算、恢复通知、证书过期补偿 | 无审核类消息 | 无需动作 |
+| Audiences | 13 条，最近 5 个月前的“种子被删除”和认领结算，没有新审核拒绝 | 无当前遗留 | 无需动作 |
+| kufei | 9 条：欢迎、2026-10/09/08/07/06 认领结算、七夕、魔力补偿、端午、上传无数据补偿 | 无审核类消息 | 无需动作 |
+| ptba | 8 条：3 张补签卡、茉莉 1w、故障补偿、4 条“[自动化发送]站点存在安全漏洞”、2026-09 认领结算 | 无审核类消息 | 无需动作 |
+| xdy | 6 条：国庆魔力 10010、自定义头衔、做种积分修复、种子数奖励、欢迎 | 无审核类消息 | 无需动作 |
+| dubhe | 5 条：临邀名额、数据库迁移补偿、邮箱更换、用户破千、象岛数据承接临时邀请 | 无审核类消息 | 无需动作 |
+| gtk | 第一页 10 条、第二页 1 条：安全漏洞提醒、连接问题、补签卡、魔力补偿、宕机补偿 | 无审核类消息 | 无需动作 |
+| ptzone | 5 条全是系统消息：2026-10 认领结算、维护补偿、站点维护补偿 1/2、2026-09 认领结算；0 未读 | 无审核类消息 | 无需动作 |
+| 其余已读站 | dragonhd、hdtime、hdvideo、lajidui、lemonhd、nanyang、novahd、ptcafe、ptlgs、pthome、ptsbao、railgun、shuioudao、tangpt、tjupt、city13、crabpt、cyanbug、muxuege、hdfans、haoxue、oshen、baozi、itzmx、xingyunge、tey、sbpt | 没有审核拒绝、删种或管理员警告；nanyang 只有旧邀请/招募，tjupt 只有评论通知，tangpt 只有红包领取 | 无需动作 |
+
+**规则收敛程度**（“已发过很多种”不等于规则已经收敛；按“能不能在发布前自动判定”分三层）：
+
+| 收敛层 | 站点/规则 | 现状 | 下一步 |
+|---|---|---|---|
+| 已收敛，代码会拦 | 全站单 tracker、上传后立即挂回、pieces/文件清单核对、剪死图、图片底线、标题技术参数顺序、完结去 `Complete`、青蛙 `Blu-ray`→`BluRay`、青蛙蓝光/原盘要 BDInfo、熊猫六段简介、hdvideo 地区/剧情必填 | 已在 `gates.rs`、`reseed/`、配置里执行；发布前会阻断或自动修正 | 保持，不为个别站关掉硬规则 |
+| 半收敛，已补自动化 | 青蛙/AGSVPT 海报必须在简介文字之前；LongPT 60fps→「高帧」、HDR→「HDR」；跨站整体复制简介要删掉源站免责声明/保种提示 | 2026-11-28 已加 `posterFirst`、`strip_cross_site_boilerplate`（`gates.rs`/`config.rs`/`form.rs`）和 `wanted_tags_for_site`（`reseed.rs`），补了三条单测；全量 551 条测试、fmt/clippy 绿；凤凰 39168 已用真实种子回放并修好 | 真站回放确认字段落点；AGSVPT 复审结果出来后核对 |
+| 未收敛，仍需人工或补代码 | AGSVPT「方舟计划」入选条件、LongPT 真实上传入口和 `User` 等级发布时段、杏坛书籍专业分类/ISBN、haoxue 单页应用、audiences 的 Turnstile 判重、站点临时改规则和人工主观审核 | 这些不是“配置漏填”，是站点侧条件或外部链路；杏坛、haoxue 已明确移出自动名单；杏坛封面转官方图床已改成程序自动（2026-11-28），不再算人工缺口；AGSVPT 546963 虽有「⛵方舟」标签，仍因海报顺序被拒，说明“有标签≠会通过” | 规则表继续逐站记；只有能确定性判定的才进门禁，主观条件不硬编码成“所有种子” |
+| 外部依赖 | 图床/WAF/TLS/Cloudflare、站点详情页超时、收件箱 `messages.php` 连接重置 | 只能用真实浏览器或重试兜底；`hdbao` 本轮仍 `ERR_CONNECTION_TIMED_OUT` | 收件箱巡检继续保留“打不开”的证据，不把失败写成干净 |
+
+**发布成功和做种成功要分开记（2026-11-28 补）**：
+
+- **上传成功**只代表站点收下种子、生成了详情页；**审核通过**只代表站点允许展示；**做种成功**要同时满足“只挂目标站 tracker + `progress=1` + tracker `status=2` + 站点同伴表能看到自己”。前两件都不保证第三件。
+- 站点会把 0 做种者的种子按“候选超时”或“断种过久”清掉。熊猫 141276 是候选 24 小时没做种被系统删；麒麟 479362 是审核通过后被“断种过久，被系统自动删除”。两条都不能用“发布成功”或“审核通过”当免死金牌。[141276](https://pandapt.net/details.php?id=141276) / [479362](https://www.hdkyl.in/details.php?id=479362)
+- 同 `info hash` 跳过是另一类假成功：qB 已有同 hash 的别站种子，站点种子加不进去，旧版却写成 `posted`。遇到同 hash 必须查 tracker/progress，不能只看日志。[10265](https://pandapt.net/details.php?id=10265)
+- 以后按三段状态记：`uploaded`（站点已收）、`pending_seed`（已挂回、tracker 未确认或站点未看到）、`seeded_confirmed`（四项真值齐全）。被删后不盲目重发；qB 里的失效残留交给外部清理工具，不手工删。
+
+**本轮新增的自动化**：
+
+- `posterFirst`：青蛙、AGSVPT 默认开启；提交前把简介第一张 `[img]` 图提到最前，已合规的简介不动，后面的截图顺序不变。代码在 `gates::SiteRules`、`CoverageSettings::rules_for`、`reseed/form.rs`。
+- `strip_cross_site_boilerplate`：`reseed/form.rs` 提交前删掉“引用块里有源站 bare host”的整段；只删源站引用，目标站自己的 `[quote]` 保留；已有单测覆盖“删源站引用、保留目标站引用”。
+- LongPT 站点标签：`wanted_tags_for_site` 在通用标签后补「高帧」「HDR」；只对 `longpt` 生效，避免影响其他站。
+- 收件箱扫描脚本：`scripts/scan-site-messages.py`，按配置里的站点和 `cookies.json` 并发读 `messages.php`，输出 `artifacts/site-message-scan3-20261128.json`；它只读，不点消息、不回信。另加 `scripts/browser-inbox-check.py` 用真实浏览器补读打不开的站。
+- 图片与编辑脚本：`scripts/seed-images.py` 新增 `--poster-file`，`upload_pixhost` 改成 6 次重试（20 秒超时、间隔 4 秒）；`scripts/edit-seed.py` 的 cookie 值先 `unquote` 再设置，编辑页 GET 改成 6 次重试（每次 25 秒、间隔 4 秒）。
+- 仍缺的自动化：`bsend` 还没有内置 `messages` 命令；`bsend followup` 仍只读详情页审核标记；发布后持续做种真值核验（站点页同伴表 + qB tracker + progress）还没有做成每轮自动任务。这三项列进下一版，不在本轮假装完成。
+
+**本轮补读的站内规则**（只记和发布/审核直接相关的）：
+
+- **AGSVPT**（`rules.php` + FAQ）：标题严禁非英文字符；副标题可以用中文，但不能含广告/求种；电影电视剧必须有 IMDb 等外链；简介必须有海报/横幅/封面，尽可能有截图、文件详情、演职员和剧情；MediaInfo 要规范、不能放正文；不得改动种审员修改（上传者可以修正错误）。`方舟计划` 是 `torrents.php?tag_id=52` 的标签/专区，规则页和 FAQ 都没写入选条件，不能给所有种子自动勾 52；546963 已有「⛵方舟」标签，仍因海报顺序被 `(禁止)`。
+- **LongPT**（`rules.php` + FAQ）：规则模板和 AGSVPT 同一套，标题/副标题/外链/海报要求相同；FAQ 写明“只有授权用户才能发布种子”，`User` 等级只能在周六 12:00–周日 23:59 发布；`upload.php` 仍只有 `bonusrain.php` 捐款表单，真实上传入口没定位，程序继续按 `no-form` 中止。
+- **杏坛**（`rules.php` + 论坛指南）：只收专业/学术资源；单资源为主，不允许大包/集合（独家大包走大包专区）；同系列有连续/从属关系才可合发；期刊按年发；小说只收近现代经典/获奖作品；论文只收付费文献；标题只写书名/视频名，不带作者、出版社、无关符号；翻译版/外文版按站内格式；作者/译者用 `&` 连接；出版社、出版年、ISBN/DOI 必填或写“暂无”；封面、目录、正文截图要有；**封面必须转到杏坛官方图床 `img.xingtan.one`**；书籍格式多选一；专业资源勾 HR；标签“确认”是提交审核标志。官方图床登录页是 `https://img.xingtan.one/login`，注册页是 `https://img.xingtan.one/register`；`/upload` 本身要登录。2026-11-28 已把 456304 的封面转到官方图床：编辑页没有独立的封面字段，封面是 `descr` 第一张 `[img]`；编辑后站点会问“是否需要添加确认标签?”，要选“是”，否则只留「修正」、没有「确认」。当前详情页仍是 `[免费] 剩余 1 天 15 时`、标题旁 `title="未审"`，不是审核通过；封面已合规，审核状态另算。**2026-11-28 起封面转存不再手工**：程序在正式提交前自动上传简介首图到 `img.xingtan.one` 并替换；登录态失效会明确中止，dry-run 不触发上传。杏坛仍只支持书籍/PDF 等类目，影视类目不在自动化范围。
+- **haoxue**：`rules.php` 6 次直连均 `ReadTimeout`，没有读到；站点是单页应用，静态上传表单走不了，已移出自动名单。
+- **凤凰**（`rules.php`）：副标题不含广告/求种；影视必须有 IMDb 外链；必须有海报/横幅/封面；不要改管理员修改（上传者可以修正错误）。39168 被 admin 编辑后留下的跨站免责声明和死图，按这条清理，没有回滚管理员改动。
+
+规则表下一版建议每站固定记录：上传入口、权限、可发布时间窗；标题/副标题语言和禁止词；外链要求；海报是否第一位、最低图数、允许/禁止图床；简介分段、MediaInfo 位置；标签推导条件；书籍元数据（出版社/年份/ISBN/DOI/封面）；审核标记和是否有用户侧复审入口；发后核验方式（同伴表/tracker/progress）。
 
 ## 3. 全部站点（147 个）
 
@@ -447,22 +513,22 @@ qB 仍有 42,473 条种子，重启后的 announce 队列会拖慢新种。city1
 | musopia | 音乐乌托邦 | musopia.vip | NexusPHP | 是 | — | — | gap | medium_sel 未选 | 未测 | 1 |  |
 | muxuege | 慕雪阁 | pt.muxuege.org | NexusPHP | 是 | — | — | gap | audiocodec_sel 未选 | ok | 1 | 2026-11-27 实发 59990（《知否》4K WEB-DL H265 60fps，源 soulvoice 54682，128,401,739,986 字节 / 73 文件），源简介只剩 1 张豆瓣海报，抽帧补 3 张 pixhost 截图后过门禁；qB hash `76692871e8c0ed233f0d7828e1f6d56a7566ae54`，progress 1、单 tracker `pt.muxuege.org`，校验 100%，`pending_review`，见 2.8 |
 | ptfans | PTFans | ptfans.cc | NexusPHP | 是 | — | — | gap | medium_sel 未选 | ok | 1 | 2026-11-23 已实发 `11111`，`fdf27b29…`，补挂 qB 校验 100%；站上改写 hash，已入白名单；站上已有 720p 其他版本，按策略继续发；表单无“完结”标签，人工补。2026-11-26：Coraline 被归到 H 漫/动漫区、源详情页超时；配置 note 仍写 `publishEnabled false`，“可发 11111”只是 11-23 单次实测 |
-| agsvpt | 末日 | agsvpt.com | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | 未测 | 1 | 2026-11-26 启用：`sourceSites` 里 `enabled:true` 且已加进 `autoReseedSites`（只改 JSON 开关不会进队列，两件事要一起做）。浏览器带本机会话实测上传页 200、登录身份 Schalkiii、表单完整无权限拒绝字样；`gatecheck` 全绿（17 字段 / 9 下拉 / 7 项检查全过）。passkey 不用手填：qB 里 806 条该站 tracker 种子全部 100%，可抄 announce（tracker 主机是 `tracker.agsvpt.cn`，浏览是 `www.agsvpt.com`）。`team_sel[4]` 值表：BeiTai=30、AGSVPT=6、AGSVWEB=21、AGSVMUS=20、GodDramas=23、RL=31、DYZ=28、Hares=29、CatEDU=24、Pack=16、Other=22；配不上驻站组时落 Other=22（`selectPicks` 只在字段为空时兜底，不会覆盖已匹配的组）。[546963](https://www.agsvpt.com/details.php?id=546963) 仍等复审，见 2.6。「方舟计划」不是每条都该勾 52，入选条件还没摸清，没写进必勾标签 |
+| agsvpt | 末日 | agsvpt.com | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | 未测 | 1 | 2026-11-26 启用：`sourceSites` 里 `enabled:true` 且已加进 `autoReseedSites`（只改 JSON 开关不会进队列，两件事要一起做）。浏览器带本机会话实测上传页 200、登录身份 Schalkiii、表单完整无权限拒绝字样；`gatecheck` 全绿（17 字段 / 9 下拉 / 7 项检查全过）。passkey 不用手填：qB 里 806 条该站 tracker 种子全部 100%，可抄 announce（tracker 主机是 `tracker.agsvpt.cn`，浏览是 `www.agsvpt.com`）。`team_sel[4]` 值表：BeiTai=30、AGSVPT=6、AGSVWEB=21、AGSVMUS=20、GodDramas=23、RL=31、DYZ=28、Hares=29、CatEDU=24、Pack=16、Other=22；配不上驻站组时落 Other=22（`selectPicks` 只在字段为空时兜底，不会覆盖已匹配的组）。[546963](https://www.agsvpt.com/details.php?id=546963) 2026-11-28 仍显示 `( 禁止 )`、旧拒绝横幅：简介顺序不对、海报必须在文字之前；`kdescr` 首项现在已是海报、其后才是文字，站内信 647086/647085 都是 14 时前，没有用户侧复审入口，等管理重审。「方舟计划」不是每条都该勾 52，入选条件还没摸清，没写进必勾标签；`posterFirst` 已加到程序，下一轮发种会自动把海报提到最前 |
 | aling | 爱玲 | pt.aling.de | NexusPHP | 是 | — | — | fail | 抓目标站上传表单失败: HTTP 500 抓页面 https://pt.aling.de/upload.php： | 未测 | 1 | 2026-11-27 两次真实浏览器复核：首页/登录页/上传页全 HTTP ERROR 500；`cfOrigin;dur` 241/238/234 ms、`cfEdge;dur` 3–8 ms，源站两百多毫秒就报错，不是边缘排队超时也不是 WAF；已移出白名单，待站点恢复后复测，见 2.9 |
 | audiences | 观众 | audiences.me | NexusPHP | 是 | — | — | ok |  | unsupported | 6 | 2026-11-23 判重检索被人机验证拦住，按“未确认重复不上传”中止，未发布；无头 HTTP 复用不了浏览器会话。2026-11-24 晚 Kimi WebBridge 可行性实验通过：真实 Chrome 已登录 `Schalkiii`，页面内 `fetch('/torrents.php?search=…')` 返回 200、命中 2 个详情页、无验证码；只做只读检索，尚未接进程序，暂仍按只人工发处理（见 2.3 末尾）。**2026-11-26 复核：除 Turnstile 和后台标签页问题外，上传表单结构本身也是缺口——自定义 JS 表单、`type` 为隐藏值 0，当前静态解析交不出可提交字段，此前文档没记这条** |
 | baozi | 包子 | p.t-baozi.cc | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 1 |  |
-| cangbao | 藏宝阁 | cangbao.ge | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 3 | 43994 图片死链已修。两次核对说法不一致，分别记录：2026-11-24 回访时详情页审核图标标 `title="通过"`；2026-11-26 复核页面仍标“未审”，qB 已 100% 做种。当前以 11-26 页面标记为准，11-24 的“通过”不作定论，待下次回访再确认。另：[44189](https://cangbao.ge/details.php?id=44189) 是另一条，11-26 回访判定干净、`reseeded` 已做种，见 2.6 |
+| cangbao | 藏宝阁 | cangbao.ge | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 3 | 43994 图片死链已修。两次核对说法不一致，分别记录：2026-11-24 回访时详情页审核图标标 `title="通过"`；2026-11-26 复核页面仍标“未审”，qB 已 100% 做种。当前以 11-26 页面标记为准，11-24 的“通过”不作定论，待下次回访再确认。另：[44189](https://cangbao.ge/details.php?id=44189) 是《知否》本条，11-26 回访判定干净、`reseeded` 已做种，见 2.6；[43994](https://cangbao.ge/details.php?id=43994) 是《Quick Change》本条。**2026-11-28 收件箱**：58106《知否》因“简介图片 1/3 无法访问”拒绝，58117 同标题 1 天 12 时前通过；58042/58048《Quick Change》因缺媒介/分辨率/图片和图片全失效拒绝，58072 同标题 3 天 11 时前通过。两条都是先拒后过，当前无遗留；审核会再查一次图。对应详情：[44189](https://cangbao.ge/details.php?id=44189) 是《知否》本条，[43994](https://cangbao.ge/details.php?id=43994) 是《Quick Change》本条。
 | city13 | 13City | 13city.org | NexusPHP | 是 | — | — | ok | processing_sel[4] 未选 | ok | 1 | 2026-11-27 实发 88464（《波洛合集》，源 carpt 532），已发布并挂回 qB 校验 100%；`tracker.13city.org` 先 `status=1`，恢复 qB 诊断配置后变 `status=4`（stream truncated）；17:50 站点页出现自己 1 个做种者、上传 70.08 MB、45 KB/s、连接 30:24，按人工证据判已做种，见 2.10。晚场再发 88467（《伪装者》，源 hdsky 27637），已挂回 100%；19:52 tracker 转为 `status=2`、上传 71.1 MB、2 个下载者，实际做种已确认；站点页 20:00 仍标“未审”，见 2.11 |
 | crabpt | 蟹黄堡 | crabpt.vip | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 1 | 2026-11-23 已实发 240242，`732e…`；此前候选源站 hdfans 502，被失败冷却挡住，改选 hdsky 源后成功；站点改写 hash，已加入白名单，挂回校验 100%；2026-11-24 晚《伪装者》简介 9 张 `i13.tietuku.com` 死图已换 imgbox（复查 0 旧图 / 9 新图） |
-| cspt | 财神 | cspt.top | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 5 | 2026-11-23 已实发 259870，`cf56…`；tracker 在 `tracker.cspt.cc`，已补别名；站点改写 hash，挂回校验 100%。**2026-11-26 复核：当天 4 条审计都是“该账号无发布权限”，发布权限疑似已被收回**；259870 的“可发”是 11-23 旧结论，能否再发待权限确认 |
+| cspt | 财神 | cspt.top | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 5 | 2026-11-23 已实发 259870，`cf56…`；tracker 在 `tracker.cspt.cc`，已补别名；站点改写 hash，挂回校验 100%。**2026-11-26 复核：当天 4 条审计都是“该账号无发布权限”，发布权限疑似被收回**；**2026-11-28 复核：收件箱 211299/211298 明确《The Disguiser 1080p HDTV》和《知否》审核通过，发布权限已恢复**。259870 仍是旧重复草稿、页面 `(禁止)`，正确合集 `Mad Men S01-S07` 已另发，不编辑成第二条重复。
 | cyanbug | 大青虫 | cyanbug.net | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 5 |  |
 | dicmusic | 海豚 | dicmusic.com | NexusPHP | 是 | — | — | ok | type 未选 | 未测 | 3 |  |
 | dragonhd | 龙之家 | dragonhd.xyz | NexusPHP | 是 | — | — | ok | team_sel 未选 | unsupported | 5 |  |
 | dubhe | 天枢 | dubhe.site | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 1 | 2026-11-23 已实发 55492，`b5eb…`；判重搜索偶发超时；站点改写 hash，挂回校验 100% |
-| fenghuang | 凤凰 | pt.521.best | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 1 | 2026-11-27 实发 39168（《广告狂人 Mad Men S01-S07》，源 ptba 5565，95.10GB / 107 文件），简介 10 张图；qB hash 前缀 `f8a8abe66511`，校验 100%；详情页编号从站点下载种子的评论字段取到，见 2.8 |
+| fenghuang | 凤凰 | pt.521.best | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 1 | 2026-11-27 实发 39168（《广告狂人 Mad Men S01-S07》，源 ptba 5565，95.10GB / 107 文件）；2026-11-28 收件箱 1557“种子被编辑”指向该条：简介开头是 1PTBA 免责声明/保种提示，11 张图全失效（9 张 `t1.picb.cc`、1 张 `i.loli.net`、1 张 `pt.keepfrds.com` 表情图），正文整体复制自 1PTBA 5565。已用 `seed-images.py` 从本地海报和 S01E01 抽帧，上传 4 张 pixhost 图，删掉两段含 1PTBA 的 `[quote]` 和全部死图后 `edit-seed.py --apply`；复查 `1PTBA` 计数 0、新图各出现 2 次、标签仍“中字”、标题/大小未变。qB hash 前缀 `f8a8abe66511`，校验 100%；见 2.12 |
 | haitang | 海棠 | htpt.cc | NexusPHP | 是 | — | — | ok | type 未选 | 未测 | 7 |  |
 | haoxue | 好学 | hxpt.org | NexusPHP | 是 | — | — | ok | category_id 未选 | unsupported | 4 | 单页应用，引擎静态表单走不了，不进 `autoReseedSites`。2026-11-27 走站点接口真发 23943（《知否》），pieces 指纹与本地一致；上午两次复查仍 `approval_status=0`、页面「审核中」，收件箱无驳回留言，5 张图（海报 1、九宫格 1、截图 3）HEAD/Range 全 206 存活；待审期下载接口回 404 不给下载，当次没挂回 qB，审核通过后由回访挂回；站规禁 FRDS，两条 MNHD-FRDS 候选已排除，见 2.8 |
-| hdbao | 海德堡 | hdbao.cc | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 2 | 2026-11-23 已实发 54402/54403，`95ea…`/`51ed…`；站上改写 hash，已加入白名单，两条均补挂校验 100%；`autopost --limit 1` 曾连发两条，已修 limit 计数 |
+| hdbao | 海德堡 | hdbao.cc | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 2 | 2026-11-23 已实发 54402/54403，`95ea…`/`51ed…`；站上改写 hash，已加入白名单，两条均补挂校验 100%；`autopost --limit 1` 曾连发两条，已修 limit 计数。2026-11-28 收件箱仍打不开：浏览器 `ERR_CONNECTION_TIMED_OUT`、直连 500、代理连接重置，不能当成“没有消息” |
 | hdfans | 红豆饭 | hdfans.org | NexusPHP | 是 | — | — | ok | processing_sel[4] 未选 | ok | 5 | 2026-11-23 发《伪装者》时回包带 `existed=1`（指向 287791）；2026-11-24 核对 287791 就是同一条，qB 里 `b1e600a6…` 校验 100%，覆盖记录 `reseeded`，未重发；2026-11-24 晚该条简介 9 张 `i13.tietuku.com` 死图已换 imgbox（复查 0 旧图 / 9 新图）；2026-11-25 核对 Liar Game `287874`：站点种同 `info hash`，qB progress=1、只挂 `hdfans.org`，记 `seeding`；当源站时常见 502 / 超时。2026-11-26：A Touch 被 `medium_sel` 未选拦下。2026-11-27：真实下拉 `medium_sel[4]=23` 是 BD Remux，草稿 78 已落 23 |
 | hdtime | 时光 | hdtime.org | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 6 |  |
 | hdu | 好多油 | pt.upxin.net | NexusPHP | 是 | — | — | fail | 目标站没有可解析的静态上传表单（JS/自定义上传界面，或 cookie 失效），v1 暂不支持：https://pt.upxin.net/upload.php | unsupported | 5 | 2026-11-27 两次真实浏览器复核：`/`、`/torrents.php`、`/upload.php`、`/login.php` 都回 200，但都是 253–264 字节自动刷新壳，原文「服务器负载过高，正在重试，请稍后...」，壳里没有真实表单；页面上 `[EASY-UPLOAD]` 按钮是本机 PT 助手浏览器扩展注入，不是站点组件。已移出白名单，站点恢复后复测，见 2.9 |
@@ -473,21 +539,21 @@ qB 仍有 42,473 条种子，重启后的 announce 队列会拖慢新种。city1
 | kufei | 库非 | kufei.org | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 1 | 2026-11-25 核对《人民的名义》`142202`：站点种同 `info hash`，qB progress=1、只挂 kufei tracker，按 `bsend pull` 复核记 `seeding`；2026-11-27 真实下拉 `medium_sel[4]=6` 是 BD Remux，草稿 79 已落 6 |
 | lajidui | 垃圾堆 | pt.lajidui.top | NexusPHP | 是 | — | — | ok | processing_sel[4] 未选 | ok | 1 | 2026-11-26 程序已自动填 MP4/MKV、大陆/日韩/欧美、制作组或 Other；表单检查显示“未选”是检查工具只读原表单，不是发种时留空。**候选范围失守：85084、85085 是安全集（允许转载内容范围）之外误发**，这条此前没记；后续选种要先核对内容是否在安全集内，再谈下拉和图片 |
 | lemonhd | 柠檬不甜 | lemonhd.net | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 1 | 2026-11-23 首次实发 48970（`3c00cbb2…`）并补挂校验 100%；站上改写 hash，已加入白名单；savept.icu 同名 LemonHD（lemonhd.club）标注已关站 2026-03-13，本配置域名 lemonhd.net 实测存活 |
-| longpt | 龙 | longpt.org | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 3 | 2026-11-26：4 条上传表单 action 仍落 `bonusrain.php` 后中止。2026-11-27 复核：`upload.php` 只有 `bonusrain.php` 捐款表单（hidden + number，0 个 file input），`takeupload.php` GET 只回“上传失败！”页；程序按 `no-form` 中止，不提交到捐款接口，真实入口仍未定位，51065 的“可发”是 11-22 旧结论 |
-| luckpt | 幸运 | pt.luckpt.de | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 4 | 2026-11-24 晚《伪装者》`61102` 简介 9 张 `i13.tietuku.com` 死图已换 imgbox（复查 0 旧图 / 9 新图），回包 `edited=1&audit_pending=1`；2026-11-25 新发 A Touch of Zen `61704`、绿里奇迹 `61705`、The Intern `61706`、Black `61707`，均已审核结束、qB progress=1、只挂 luckpt tracker |
+| longpt | 龙 | longpt.org | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 3 | 2026-11-28 复核：51248 补「高帧」，51065 补「HDR」「英字」「高分」并修正 33 位错误 passkey，站点页已出现本账号做种、断种警告消失。`upload.php` 仍只有 `bonusrain.php` 捐款表单，程序按 `no-form` 中止；FAQ 写明只有授权用户能发布、`User` 等级仅周六 12:00–周日 23:59 可发，真实入口仍未定位，v1 不硬发 |
+| luckpt | 幸运 | pt.luckpt.de | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 4 | 2026-11-24 晚《伪装者》`61102` 简介 9 张 `i13.tietuku.com` 死图已换 imgbox（复查 0 旧图 / 9 新图），回包 `edited=1&audit_pending=1`；2026-11-25 新发 A Touch of Zen `61704`、绿里奇迹 `61705`、The Intern `61706`、Black `61707`，均已审核结束、qB progress=1、只挂 luckpt tracker。**2026-11-28 收件箱 85608（10 天 1 时前）**：61102 被 LuckAudit 拒绝，原因写“未勾中字标签、简介缺 IMDb/豆瓣/TMDB 链接、MediaInfo 为空”；当前详情页已有 IMDb 链接和 MediaInfo，编辑页也已勾「中字」（值 6，23 是原创），页面无禁止/未审标记、1 个做种者。旧拒绝里的“中字未选”与实际不符，不再记为待修；后续预审仍要查中字、链接和 MediaInfo。
 | nanyang | 南洋 | nanyangpt.com | NexusPHP | 是 | — | — | ok | [nanyang] 表单里没找到「中字/完结/国语」类标签复选框，请发布后手动补 | unsupported | 6 | 2026-11-24 首次实发 `226159`（《知否》，源 soulvoice）；站上 hash 与构造不同（构造 `187d1487…`，站上 `8a9b9ab2…`），已加入 hash 改写白名单，把站点种子下回来挂进 qB，校验 100%、单站 tracker（见 2.3） |
 | nicept | 老师 | nicept.net | NexusPHP | 是 | — | — | ok | type 未选 | ok | 1 |  |
 | novahd | nova | pt.novahd.top | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 2 |  |
 | oshen | 奥申 | oshen.win | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 1 | 2026-11-23 已实发 `57082`，`22e3dd63…`，补挂 qB 校验 100%；站上改写 hash，已入白名单；表单没有“完结”标签，人工补 |
-| panda | 熊猫 | pandapt.net | NexusPHP | 是 | — | — | ok | source_sel[4] 未选 | ok | 5 | 2026-11-27 闭环跑通：141840《Liar Game S01 2007 2160p WEB-DL》上传后立刻挂回 qB 校验 100%、只挂熊猫一个 tracker，7 图逐张 200、简介六段齐全，`pending_review` 等审核（见 2.8、2.7⑤）。已撤销发种暂停，留在 `autoReseedSites`。历史 141276 是候选种子 24 小时没做种被系统删的；qB 里残留 `3f8ed774…` 挂失效 tracker，待人工清理 |
+| panda | 熊猫 | pandapt.net | NexusPHP | 是 | — | — | ok | source_sel[4] 未选 | ok | 5 | 2026-11-27 闭环跑通：141840《Liar Game S01 2007 2160p WEB-DL》上传后立刻挂回 qB 校验 100%、只挂熊猫一个 tracker，7 图逐张 200、简介六段齐全。2026-11-28 复核：详情页标题旁绿色 `title="通过"`、1 做种者、18 下载者；收件箱 492589 通过、492590 拒绝但原因为空、492591 又标未审核，消息与页面矛盾，按页面通过记录并等下一轮消息。已撤销发种暂停，留在 `autoReseedSites`。历史 141276 是候选种子 24 小时没做种被系统删的；qB 里残留 `3f8ed774…` 挂失效 tracker，由外部清理工具处理，不手删、不列本项目人工待办 |
 | ptba | 1PT | 1ptba.com | NexusPHP | 是 | — | — | ok | processing_sel[4] 未选 | ok | 2 | 2026-11-23 已实发 106718，`abf4…`；站点改写 `info.source`，已加入 hash 改写白名单，挂回校验 100% |
 | ptcafe | 咖啡 | ptcafe.club | NexusPHP | 是 | — | — | ok | source_sel[4] 未选 | ok | 1 | 2026-11-25 核对《人民的名义》`137241`：站点种 `info hash` 与 qB 原种相同，qB progress=1、只挂 `tracker.ptcafe.club`，按 `bsend pull` 复核记 `seeding`；不是没挂上 |
 | pthome | 铂金家 | pthome.net | NexusPHP | 是 | — | — | ok | team_sel 未选 | unsupported | 6 | 2026-11-24 首次实发 `284701`（《人民的名义》，源 hdfans）；2026-11-27 实发 `285040`（《A Touch of Zen》，源 1ptba 9321），已挂回 qB 校验 100%，tracker 16:32 变 `status=2`；17:19 真实浏览器详情页确认 `1 做种者`（自己，100%，qBittorrent/5.3.0）、`0 下载者`，见 2.10；晚场《Black》上传回包“该种子已存在！”，重复分支走通，没有重复挂种，见 2.11 |
 | ptlgs | 劳改所 | ptlgs.org | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | 未测 | 6 |  |
 | ptsbao | 烧包 | ptsbao.club | NexusPHP | 是 | — | — | ok | processing_sel[1] 未选 | ok | 1 | 2026-11-23 已实发 135787，`0b0087…`；`source_sel[1]` 二级分类已自动填 `剧集-大陆`；站点改写 hash，已加入白名单，挂回校验 100%；表单无“完结”标签需人工补；2026-11-27 草稿 82 已落 `medium_sel[1]=1`（BluRay）+ processing=Remux + source=电影-Remux |
 | ptzone | 葡萄汁 | ptzone.xyz | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 1 | 2026-11-26：详情页访问超时、`audiocodec_sel` 未选被门禁拦下；2026-11-27 已加检索/详情页超时重试，单测过，真站复测未做；真实下拉 `medium_sel[4]=3` 是 Remux，选档已覆盖；早期 190916 的“五项检查全过”是 11-22 实测，选档缺口此前没记 |
-| qilin | 麒麟 | hdkyl.in | NexusPHP | 是 | — | — | ok | processing_sel[4] 未选 | ok | 8 | 479362 已补挂 qB；站点审核不通过（缺图），不影响做种；2026-11-24 横幅仍写“审核不通过，原因：缺少海报或截图（图片少于 2 张）”，覆盖记录落 `review_rejected`。旧简介 7 张图全不可达（豆瓣海报防盗链 418、`img.pterclub.com` TLS 失败），已全部换成 imgbox 图（1 海报 + 6 截图）并提交，等复审；门禁 `剪死图+至少3张`。2026-11-26：480763 首次挂回被“非目标站 tracker”拒绝、落“已发但未挂回”，原因是 tracker 别名识别缺口——页面域 `www.hdkyl.in`，站点种子 tracker 在 `www.hdkylin.top`；补别名后才挂回（详见 `SITE-DEBUG.md` 6.16） |
-| qingwa | 青蛙 | qingwapt.com | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 2 | announce 别名 `tracker.qingwapt.org` 已补；2026-11-24 Poirot 合集被站点判 `torrent_too_large`（要求改走 `offers.php` 候选），程序记 `pending_offers`（待走候选入口），不算失败、不自动重试，`status` 单列待跟进；同站《伪装者》发 `208575` 并挂回，校验 100%（构造 `c78e9cb2…`，站上 `d1eeec5c…`），当晚 9 张 `i13.tietuku.com` 死图已换 imgbox（复查 0 旧图 / 9 新图）；《知否》回包“已存在！”且 qB 已在做种（见 2.3）。2026-11-26：[208804](https://qingwapt.com/details.php?id=208804) 复核标题已是 `BluRay`、Remux 标签已勾、页面无审核标记，回访干净、`reseeded`，没有重复提交；[208692](https://qingwapt.com/details.php?id=208692)、[208575](https://qingwapt.com/details.php?id=208575) 仍审核没过、等站点重审，是历史待跟进；2026-11-27 已补“已存在！”精确识别，真实回包未复测 |
+| qilin | 麒麟 | hdkyl.in | NexusPHP | 是 | — | — | ok | processing_sel[4] 未选 | ok | 8 | 479362 已补挂 qB；2026-11-28 复核站内信：354775 管理员 `白小纯` 审核通过，354776 同时间编辑，354778 同时间“因断种过久，被系统自动删除”，魔力值未扣。qB 同内容 `bd348dfc…` 的 tracker 现在回 `Torrent not exists`，是死条目，由外部清理工具处理，不能再记做种；覆盖记录保持 `gone_from_site`。重发前必须重新构造该站专属种子并确保挂回后 tracker 回包。2026-11-26：480763 首次挂回被“非目标站 tracker”拒绝、落“已发但未挂回”，原因是 tracker 别名识别缺口——页面域 `www.hdkyl.in`，站点种子 tracker 在 `www.hdkylin.top`；补别名后才挂回（详见 `SITE-DEBUG.md` 6.16） |
+| qingwa | 青蛙 | qingwapt.com | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 2 | announce 别名 `tracker.qingwapt.org` 已补；2026-11-24 Poirot 合集被站点判 `torrent_too_large`（要求改走 `offers.php` 候选），程序记 `pending_offers`（待走候选入口），不算失败、不自动重试，`status` 单列待跟进；同站《伪装者》发 `208575` 并挂回，校验 100%（构造 `c78e9cb2…`，站上 `d1eeec5c…`），当晚 9 张 `i13.tietuku.com` 死图已换 imgbox（复查 0 旧图 / 9 新图）；《知否》回包“已存在！”且 qB 已在做种（见 2.3）。2026-11-26：[208804](https://qingwapt.com/details.php?id=208804) 复核标题已是 `BluRay`、Remux 标签已勾、页面无审核标记，回访干净、`reseeded`，没有重复提交；[208692](https://qingwapt.com/details.php?id=208692)、[208575](https://qingwapt.com/details.php?id=208575) 仍审核没过、等站点重审，是历史待跟进；2026-11-27 已补“已存在！”精确识别，真实回包未复测。2026-11-28 复核：两条编辑后约 30 小时仍 `( 禁止 )`，没有新审核消息，按站点“修改后自动进复审”继续等；`posterFirst` 已加到程序，下一轮发种会自动把海报提到最前 |
 | railgun | Railgun | bilibili.download | NexusPHP | 是 | — | — | ok |  | ok | 2 | 2026-11-23 首次实发 60632（`72889498…`）并补挂校验 100%；站上改写 hash，已加入白名单 |
 | sbpt | SBPT | sbpt.link | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 5 | 2026-11-25 核对：广告狂人 `21767`、A Touch of Zen `21768`、知否 `21764` 已做种；绿里奇迹 `21780`、Aquarela `21782`、我们的父辈 `21783`、The Intern `21784` 已校验 100%；详情页作者均为本站账号，不是别人发的可辅种（见 2.5.1）；Aquarela、The Intern 缺“中字”标签需手动补 |
 | shuioudao | 下水道 | sewerpt.com | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 5 |  |
@@ -495,10 +561,10 @@ qB 仍有 42,473 条种子，重启后的 announce 队列会拖慢新种。city1
 | tangpt | 躺平 | tangpt.top | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 1 |  |
 | tey | 太乙 | pt.tey.cc | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 1 | 2026-11-23 已实发 `623`，`c9570904…`，补挂 qB 校验 100%；`medium_sel` 仅 WEB-DL/HDTV/DVDR/CD/Track，蓝光源会被门禁拦；qB 老种走 `tracker.tey.cc`，已补别名；站上改写 hash，已入白名单；新种状态“未审”（2026-11-24 回访仍未审，覆盖记录落 `pending_review`）。同一条简介曾带 9 张失效的 `i13.tietuku.com` 图，已换 imgbox 图并提交；门禁 `剪死图+至少3张` |
 | tjupt | 北洋园 | tjupt.org | NexusPHP | 是 | — | — | ok | [tjupt] 表单里没找到「中字/完结/国语」类标签复选框，请发布后手动补 | unsupported | 1 | 剧集分类的中文名 `cname`、英文名 `ename`、剧集类型 `specificcat`，还有地区复选框，来自 `showcategorydetail.php?catid=402`，静态 HTML 里不存在。历史上由写死的 tjupt 特判填这三个字段；本轮改成规则驱动（`CategoryRule`，配置 `categoryRules` 可覆盖、缺省走内置兜底表），提交前拉分类片段按真实控件名核对，控件不在记缺口、不臆造字段；派生不出中/英文名时记本地缺口、真提交前硬拦点名缺哪个；旧特判和旧单测已删除，没有两份重复实现。2026-11-26 只读演练（`gatecheck --sites tjupt`，只 GET 上传页和分类片段、未 POST）载荷带 `cname=无台标完整版 全41集1080P`、`ename=The.Disguiser.Complete.1080p.HDTV.x264.AAC-JING`、`specificcat=其他`，必填缺失清单为空；当时唯二阻断项都是图片底线（简介 0 张可用图、站点要求 1 张），与分类字段无关。announce 以站点下载的种子定案为 `tracker-public.tjupt.org`（已写进 `overrides.announceURL`）。652794 已于 11-26 补 1 海报 + 1 截图和 `[mediainfo]` 段，重新进待审，见 2.6；同日 274GB《波洛全季》合集上传 5 分钟仍回 HTTP 200 空正文、站上无条目，重试仍会空回包，要发得先拆小或换内容 |
-| ubits | 优堡 | ubits.club | NexusPHP | 是 | — | — | ok | source_sel[4] 未选 | ok | 8 | `source_sel[4]`（地区）和 `team_sel[4]`（`Other`）已能自动填，上面的检查结论是旧结果；2026-11-24 首次实发 `379266`（《伪装者》，源 hdsky），站上 hash 与构造不同（构造 `d9970bce…`，站上 `2a57b787…`），已加入白名单，把站点种子下回来挂进 qB，校验 100%、单站 tracker；该条简介 9 张 `i13.tietuku.com` 死图已换 imgbox，页面仍标不通过，等复审（见 2.3）。2026-11-26：[379934](https://ubits.club/details.php?id=379934) 候选被允许并审核通过，页面无审核标记，回访判定干净，覆盖记录 `reseeded`，见 2.6 |
+| ubits | 优堡 | ubits.club | NexusPHP | 是 | — | — | ok | source_sel[4] 未选 | ok | 8 | `source_sel[4]`（地区）和 `team_sel[4]`（`Other`）已能自动填，上面的检查结论是旧结果；2026-11-24 首次实发 `379266`（《伪装者》，源 hdsky），站上 hash 与构造不同（构造 `d9970bce…`，站上 `2a57b787…`），已加入白名单，把站点种子下回来挂进 qB，校验 100%、单站 tracker；该条简介 9 张 `i13.tietuku.com` 死图已换 imgbox。2026-11-28 复核：详情页 H1 已显示 `(通过)`，站内信 1604294 明确“被站点管理员审核通过”，同伴表有 `d492602647` 上传 98.80 GB；旧“页面仍标不通过”结论作废。2026-11-26：[379934](https://ubits.club/details.php?id=379934) 候选被允许并审核通过，页面无审核标记，回访判定干净，覆盖记录 `reseeded` |
 | vclib | VC-Lib | pt.vclib.online | NexusPHP | 是 | — | — | ok | type 未选 | ok | 2 |  |
 | xdy | 修道院 | xdypt.vip | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 1 | 2026-11-25 核对知否 `8043`：站点种与 qB 原种同 `info hash`，qB progress=1、只挂 xdy tracker，按 `bsend pull` 复核记 `seeding` |
-| xingtan | 杏坛 | xingtan.one | NexusPHP | 是 | — | — | ok | source_sel[16] 未选 | 未测 | 5 | 2026-11-27 浏览器复核：学术特色站，站内列表前 30 条全是教材/专著/文档，无电影/剧集/纪录片；最接近的「戏剧影视」94/192 是教材方向，实点开只有类型和格式两个下拉，影视无处归档，已移出白名单。书籍/PDF 类目手动发成一条 456304（候选区待审核），见 2.8、2.9 |
+| xingtan | 杏坛 | xingtan.one | NexusPHP | 是 | — | — | ok | source_sel[16] 未选 | 未测 | 5 | 2026-11-27 浏览器复核：学术特色站，站内列表前 30 条全是教材/专著/文档，无电影/剧集/纪录片；最接近的「戏剧影视」94/192 是教材方向，实点开只有类型和格式两个下拉，影视无处归档，已移出白名单。书籍/PDF 类目手动发成一条 456304（候选区待审核）。2026-11-28 复核并修正 456304：标题改为“义务教育教科书英语八年级上册”，专业按同系列七年级教材改为“高等教育”（`type=947`），补 2025 年 7 月版、ISBN `978-7-5720-3516-6`、157 页、22.00 元、内容简介、目录、文件清单和封面。封面已从 `images4.imgbox.com` 转到官方图床 `https://img.xingtan.one/i/2026/11/28/6b0a2f2e597b3.png`（上传 id 91772，1080×1503），详情页旧封面 0 处、官方图 1 处；编辑成功，标签「确认 修正」。页面仍是 `[免费]` 剩余 1 天 15 时、标题旁 `title="未审"`，不是审核通过。ISBN 未在 PDF 内直接确认 |
 | xingyunge | 星陨阁 | pt.xingyungept.org | NexusPHP | 是 | — | — | ok | team_sel[4] 未选 | ok | 1 |  |
 | ziran | 自然 | naturept.top | NexusPHP | 是 | — | — | ok | type 未选 | ok | 2 |  |
 | aither | Aither | aither.cc | custom | — | — | — | 未测 |  | 未测 | 0 |  |

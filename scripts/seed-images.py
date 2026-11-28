@@ -42,6 +42,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 import requests
@@ -101,22 +102,30 @@ def extract_frame(ffmpeg: Path, video: Path, at: float, out: Path) -> None:
 
 
 def upload_pixhost(path: Path) -> str:
-    with path.open("rb") as fh:
-        r = requests.post(
-            "https://api.pixhost.to/images",
-            data={"content_type": "0", "max_th_size": "420"},
-            files={"img": (path.name, fh, "image/jpeg")},
-            headers={"User-Agent": UA, "Accept": "application/json"},
-            timeout=120,
-        )
-    r.raise_for_status()
-    data = r.json()
-    show = data.get("show_url") or ""
-    if not show:
-        raise RuntimeError(f"pixhost 返回没有 show_url：{data}")
-    # show 页 https://pixhost.to/show/7443/815...jpg
-    # 原图直链 https://img3.pixhost.to/images/7443/815...jpg
-    return re.sub(r"https://pixhost\.to/show/", "https://img3.pixhost.to/images/", show)
+    last: Exception | None = None
+    for attempt in range(6):
+        try:
+            with path.open("rb") as fh:
+                r = requests.post(
+                    "https://api.pixhost.to/images",
+                    data={"content_type": "0", "max_th_size": "420"},
+                    files={"img": (path.name, fh, "image/jpeg")},
+                    headers={"User-Agent": UA, "Accept": "application/json"},
+                    timeout=20,
+                )
+            r.raise_for_status()
+            data = r.json()
+            show = data.get("show_url") or ""
+            if not show:
+                raise RuntimeError(f"pixhost 返回没有 show_url：{data}")
+            # show 页 https://pixhost.to/show/7443/815...jpg
+            # 原图直链 https://img3.pixhost.to/images/7443/815...jpg
+            return re.sub(r"https://pixhost\.to/show/", "https://img3.pixhost.to/images/", show)
+        except Exception as e:  # 实测 api.pixhost.to 偶发读超时，重试可恢复
+            last = e
+            if attempt < 5:
+                time.sleep(4)
+    raise last or RuntimeError("pixhost 上传失败")
 
 
 def upload_imgbox(path: Path) -> str:
@@ -230,6 +239,7 @@ def main() -> int:
     ap.add_argument("--count", type=int, default=3, help="单条视频抽几帧（默认 3）")
     ap.add_argument("--fractions", default="0.15,0.5,0.85", help="单条视频抽帧时间比例")
     ap.add_argument("--poster-url", help="海报原图 URL（豆瓣图会带 Referer 下载）")
+    ap.add_argument("--poster-file", help="本机已有海报文件，直接上传，不再下载")
     ap.add_argument("--douban", help="豆瓣条目 id 或 subject URL；自动取条目海报")
     ap.add_argument("--uploader", choices=["pixhost", "imgbox"], default="pixhost")
     ap.add_argument("--out", default=str(BASE / "screenshot-overrides.json"))
@@ -262,7 +272,16 @@ def main() -> int:
     safe = content.replace(":", "_")
 
     poster_url = args.poster_url or (douban_poster(args.douban) if args.douban else "")
-    if poster_url:
+    if args.poster_file and poster_url:
+        raise SystemExit("--poster-file 和 --poster-url/--douban 只能选一个")
+    if args.poster_file:
+        src = Path(args.poster_file)
+        if not src.is_file() or src.stat().st_size == 0:
+            raise SystemExit(f"海报文件不存在或为空：{src}")
+        poster = OUT / f"{safe}-poster{src.suffix.lower() or '.jpg'}"
+        shutil.copyfile(src, poster)
+        shots.append(poster)
+    elif poster_url:
         poster = OUT / f"{safe}-poster.jpg"
         r = requests.get(
             poster_url,

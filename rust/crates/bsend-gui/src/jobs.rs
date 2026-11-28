@@ -53,10 +53,16 @@ pub(crate) fn snapshot(cfg: &Config) -> Result<Snapshot> {
                 .collect(),
         })
         .collect();
+    let post_stats = bsend::poststats::site_post_stats(
+        cfg.coverage_state_path()
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new(".")),
+    );
     Ok(Snapshot {
         stats,
         sites,
         drafts: report.drafts,
+        post_stats,
     })
 }
 

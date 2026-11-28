@@ -6,6 +6,7 @@ use bsend::report::DraftRow;
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Tab {
     Overview,
+    PostStats,
     Drafts,
     Autopost,
     Config,
@@ -54,6 +55,8 @@ pub(crate) struct Snapshot {
     pub(crate) stats: String,
     pub(crate) sites: Vec<SiteRow>,
     pub(crate) drafts: Vec<DraftRow>,
+    /// 按站点汇总的已发种数量与最后发种时间（只读两份运行日志）
+    pub(crate) post_stats: Vec<bsend::poststats::SitePostStat>,
 }
 
 pub(crate) enum GuiEvent {

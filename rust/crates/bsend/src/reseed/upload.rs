@@ -15,7 +15,7 @@ pub fn prepare_upload(target: &NexusPhp, info: &ReleaseInfo) -> Result<PreparedU
         bail!("目标站限流（{notice}）：{form_url}");
     }
 
-    let tags_wanted = wanted_tags(info);
+    let tags_wanted = wanted_tags_for_site(&target.site_id, info);
     let (mut fields, picked_tags, select_notes) =
         build_upload_fields_for_site(info, &form_html, &tags_wanted, &target.site_id);
     fill_image_fields(
@@ -203,14 +203,21 @@ pub fn submit_upload(
         ) {
             Ok(resp) => resp,
             Err(e) => {
-                // 网络层超时/断连没有回包，不能像站点拒绝那样直接判死；
-                // 同一字节再投一次，第二次仍不通才报失败。
-                if attempt == 0 {
-                    last_err = format!("{e:#}");
-                    thread::sleep(Duration::from_secs(2));
-                    continue;
-                }
-                return Err(e.context(format!("提交上传失败（第 {} 次）", attempt + 1)));
+                // 网络层超时/断连没有回包，不能像站点拒绝那样直接判死；但也**不能原样重投**：
+                // 第一次 POST 可能已经被站点收下，只是回包在链路上断了；再投一次会命中
+                // `existed=1`，把刚发的新种误判成旧种（hdfans 288175/288180 实测）。
+                // 这里只交回“未确认”，由发后定位按名称+总大小站内核对：找到就挂回，
+                // 找不到才落 posted_unresolved 待人工，绝不靠重投去猜。
+                return Ok(UploadResult {
+                    detail_url: None,
+                    message: format!(
+                        "提交上传时连接中断（{e:#}）；不重投，先按名称+总大小站内核对是否已被站点收下"
+                    ),
+                    duplicate: false,
+                    uncertain: true,
+                    body: String::new(),
+                    final_url: String::new(),
+                });
             }
         };
         dump_upload_response(
@@ -504,7 +511,7 @@ pub(super) fn sole_detail_url(body: &str, final_url: &str, action: &str) -> Opti
     let mut found: Vec<(String, String)> = Vec::new();
     collect_id_links(body, &base, "details.php?id=", &mut found);
     if found.len() == 1 {
-        Some(found.pop().unwrap().1)
+        found.pop().map(|(_, url)| url)
     } else {
         None
     }

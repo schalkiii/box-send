@@ -54,6 +54,7 @@ pub use audit::{
     analyze_prepared, drill_release, drill_upload_form, drill_upload_form_with_rules,
     pre_audit_supported, run_pre_audit, AuditDetail, AuditVerdict, FormDrill,
 };
+pub(crate) use form::image_urls_from_descr;
 use form::*;
 pub use form::{
     apply_site_rules, build_upload_fields, build_upload_fields_for_site, drill_select_options,
@@ -368,6 +369,28 @@ fn wanted_tags(info: &ReleaseInfo) -> Vec<&'static str> {
     let is_uhd = ["2160p", "4k", "uhd"].iter().any(|x| hdr_hay.contains(x));
     if is_uhd && (hdr_hay.contains("hdr10") || hdr_hay.contains("hdr")) {
         out.push("HDR10");
+    }
+    out
+}
+
+/// 站点专属标签：通用推导后再补该站审核明确要求的标签。
+/// LongPT 的自动审核会点名“60FPS 要勾高帧”“HDR 要勾 HDR”；
+/// 1080p HDR 不在通用 `HDR10` 分支里，所以只在这里补，避免影响其他站。
+fn wanted_tags_for_site(site_id: &str, info: &ReleaseInfo) -> Vec<&'static str> {
+    let mut out = wanted_tags(info);
+    if site_id != "longpt" {
+        return out;
+    }
+    let hay = format!("{} {} {}", info.name, info.subtitle, info.mediainfo).to_lowercase();
+    let high_frame = hay.contains("60fps")
+        || hay.contains("59.94")
+        || hay.contains("frame rate : 60")
+        || hay.contains("帧率 : 60");
+    if high_frame && !out.contains(&"高帧") {
+        out.push("高帧");
+    }
+    if hay.contains("hdr") && !out.contains(&"HDR10") && !out.contains(&"HDR") {
+        out.push("HDR");
     }
     out
 }
@@ -2209,7 +2232,7 @@ fn prepare_released(
     }
 
     // ---- 2 LuckAudit 预检（三查）----
-    let tags: Vec<String> = wanted_tags(&info)
+    let tags: Vec<String> = wanted_tags_for_site(&req.target_site, &info)
         .into_iter()
         .map(|s| s.to_string())
         .collect();
@@ -2621,7 +2644,7 @@ fn run_reseed_inner(
     let Released { tgt, info, .. } = rel;
 
     // ---- 3 上传字段：审阅产物直传；否则现场构造 + 官方预审 ----
-    let prep = match prepared_from_review {
+    let mut prep = match prepared_from_review {
         Some(prep) => {
             log("复用审阅产物：提交字段与门禁判定为同一份（跳过上传页/官方预审二次抓取）");
             prep
@@ -2669,6 +2692,12 @@ fn run_reseed_inner(
     // 审阅页会显示，但 `--yes`/自动发种如果只看预检就会漏过去。
     if !prep.required_gaps.is_empty() {
         bail!("本地规则阻断，未上传：{}", prep.required_gaps.join("；"));
+    }
+
+    // 杏坛站规要求封面走官方图床：正式提交前把简介第一张图转存；
+    // 审阅（dry-run）不做外部写操作，只有真上传这一条路会走到这里。
+    if req.target_site == "xingtan" {
+        crate::imagebed::rehost_xingtan_cover(cfg, &req.target_site, &mut prep, log)?;
     }
 
     // ---- 4 从 qB 导出源种 → 单 tracker 改写 → 上传目标站 ----
@@ -2776,7 +2805,7 @@ fn run_reseed_inner(
     };
     log(&format!("上传结果：{}", up.message));
     if up.uncertain {
-        log("上传回包未识别：不直接判失败，先站内按名称+总大小核对是否已经收下");
+        log("上传结果未确认：不直接判失败、不重投，先按名称+总大小站内核对是否已经收下");
     }
 
     // 站点回包带 duplicate 标志时，回包链接可能只是 existed 跳转（不可信），

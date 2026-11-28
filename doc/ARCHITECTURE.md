@@ -160,6 +160,8 @@ qB 没有 tracker，也不等于站上一定没发过。可能是站上已经有
 
 图床选择：当前常规图床是 `pixhost.to`，`scripts/seed-images.py` 默认上传 pixhost；`imgbox.com` 只作历史兼容，UBits 会把 imgbox 当死图。图片清单写在 `screenshot-overrides.json`，按内容键区分；同一部剧有 HDTV/WEB-DL 等多个内容键时，用 `seed-images.py --also-content` 或 `--for-name` 一次写齐，不要只补一个键，也不要手写 JSON。发布时程序会把清单里的图追加到简介末尾；重要图仍应自建或另存。
 
+**杏坛官方图床自动转存（2026-11-28）**：`bsend::imagebed::rehost_xingtan_cover` 只在目标站是 `xingtan` 时触发，取最终简介（剪死图、转 BBCode 之后）的第一张图；如果已经是 `img.xingtan.one` 就跳过，否则用 `Config::cookie_header_for("img.xingtan.one")` 的登录态请求 `https://img.xingtan.one/upload`，从页面 `meta[name=csrf-token]` 取 CSRF，按页面里的 `strategy_id`（没有就默认 1）向同源 `POST /upload` 传 `file`、`_token`、`strategy_id`、`permission=1`。回包只接受 `status=true` 且 `data.links.url` / `data.url` / `data.pathname` 解析出的地址属于官方图床；解析不到就中止，不保留外链。上传成功后替换简介第一处旧地址，并把其他提交字段里相同的旧地址一并换掉。登录态来自 `cookies.json`，失效时程序会提示重新登录图床再跑 CookieCloud 刷新；审阅/dry-run 不触发这个外部写操作。图床请求默认直连；如果本机直连 `img.xingtan.one` 被网络挡下，可在 `sourceSites[]` 的 `xingtan` 配 `overrides.proxy`，只让这个站的图床请求走代理，不影响其他站。
+
 **独立海报/截图字段（2026-11-25 起）**：有些站的上传页把海报、截图放在独立字段（例如 ptlgs 的 `cover` / `screenshots`；其它站按上传页真实字段名配置）。配置写在 `sourceSites[].overrides.posterField` / `screenshotField`，`reseed::fill_image_fields` 从**最终简介**（剪死图、转 BBCode 之后）按出现顺序抽图：第一张填海报，其余一行一个填截图；页面没有这个字段就不硬塞，简介没图时把字段清掉，避免提交死链。独立字段不替代简介本身，简介仍要保留完整图文。ptlgs 站规是“海报 + 至少 3 张截图”，所以总图数按 4 张计入 `gates::image_floor`。
 
 `scripts/edit-seed.py` 默认只读演练，`--apply` 才 POST；除指定字段外其余表单原样回填，避免误改分类/媒介/标签。`--processing` 改文件容器下拉，`--team` 改制作组下拉，`--append-image` 在简介末尾追加图片并跳过已有链接。编辑已发布种子后，站点会重新进审核队列，是否通过以站点状态为准。
@@ -177,9 +179,9 @@ audiences 的 `torrents.php` 有 Cloudflare Turnstile，无头 HTTP 拿不到搜
 
 ### 5.6 上传与挂回
 
-上传请求本身有单独超时，缺省 120 秒，可用 `assist.reseedRules.<site>.uploadTimeoutSec` 逐站放宽；网络层超时或断连会同一字节重投一次，第二次仍不通才报失败。站点回 HTTP 200 但正文 0 字节时单独报“后端没有返回内容，通常是处理超时或崩溃；本次未确认发布”，不混成“未识别的返回”。tjupt 的 25GB 单条可完成，274GB 合集会在站点后端处理到超时后回空正文；这是站点侧上限，不是把超时值再放大就能解决。
+上传请求本身有单独超时，缺省 120 秒，可用 `assist.reseedRules.<site>.uploadTimeoutSec` 逐站放宽。**POST 网络层超时/断连时不再原样重投**（2026-11-28 起）：第一次请求可能已经被站点收下，只是回包在链路上断了；再投一次会命中 `existed=1`，把刚发的新种误判成旧种。此时返回 `UploadResult { uncertain: true }`，由发后定位按名称+总大小站内核对：找到就下载目标种、核对 pieces 并挂回；找不到才落 `posted_unresolved` 待人工，绝不靠重投去猜。站点回 HTTP 200 但正文 0 字节时单独报“后端没有返回内容，通常是处理超时或崩溃；本次未确认发布”，不混成“未识别的返回”。tjupt 的 25GB 单条可完成，274GB 合集会在站点后端处理到超时后回空正文；这是站点侧上限，不是把超时值再放大就能解决。
 
-**HTTP 200 未识别回包先核对再定性（2026-11-27 起）**：返回 `HTTP 200 未识别的返回`（包括 `augment_upload_error_with_dump` 追加的“回包已存 …”）时，`submit_upload` 返回 `UploadResult { uncertain: true }`，不直接抛失败。后续照常走发后定位：按发布名 + 本地总大小做站内检索，找到详情页/下载链接就继续下载目标种、核对 pieces 并挂回 qB；找不到落 `posted_unresolved` 待人工确认，不占失败冷却。403/404、空回包、明确的站点拒绝和重复文案仍按原分类处理；日志会明确写“上传回包未识别：不直接判失败，先站内按名称+总大小核对是否已经收下”。
+**HTTP 200 未识别 / POST 网络中断都先核对再定性（2026-11-27 起，2026-11-28 扩到网络中断）**：返回 `HTTP 200 未识别的返回`（包括 `augment_upload_error_with_dump` 追加的“回包已存 …”）或 POST 时连接中断时，`submit_upload` 返回 `UploadResult { uncertain: true }`，不直接抛失败、也不原样重投。后续照常走发后定位：按发布名 + 本地总大小做站内检索，找到详情页/下载链接就继续下载目标种、核对 pieces 并挂回 qB；找不到落 `posted_unresolved` 待人工确认，不占失败冷却。403/404、空回包、明确的站点拒绝和重复文案仍按原分类处理；日志会明确写“上传结果未确认：不直接判失败、不重投，先按名称+总大小站内核对是否已经收下”。hdfans 288175/288180 是现场：首次 POST 已建种，旧版因链路中断重投，第二次回 `existed=1`，被误记成补挂；两条详情页作者都是 `Schalkiii`、目标种内嵌源文件名，复核后按新发 `posted_verifying` 纠正。
 
 **Remux 的质量档下拉（2026-11-27 起）**：`fill_selects` 发现标题/副标题含 `REMUX`、且当前字段是 `medium_sel` 时，先走 `pick_remux_option`：4K 先找 `UHD Remux`，非 4K 先找 `BD Remux` / `Blu-ray Remux` / `Remux`，站点没有 Remux 档才回退 `BluRay` / `Blu-ray`。这样不会被 `Blu-ray` 泛匹配把 `BD原盘` / `BD DIY` / `BD Remux` 三个同名候选算成歧义而留空；hdfans、kufei、hdvideo、ptzone、city13、ptsbao 的真实下拉已逐站核对，前三个站的草稿审阅已落档。
 
@@ -337,12 +339,14 @@ Windows 计划任务只给命令示例，不自动创建。需要常驻时用任
 | `lock.rs` | 同一数据目录只允许一个长写任务 |
 | `piecesapi.rs` | 站点 pieces-hash 批量查询通道 |
 | `mediainfo.rs` | 本地 MediaInfo 提取（Windows DLL 接口） |
+| `imagebed.rs` | 杏坛官方图床封面自动转存（CSRF、策略 id、回包解析） |
+| `poststats.rs` | 按站点统计发种数量与最后发种时间（只读两份 JSONL） |
 | `bsend-cli/src/main.rs` | 入口、连接 qB、构建适配器（129 行） |
 | `bsend-cli/src/cli.rs` | clap 命令与参数定义 |
-| `bsend-cli/src/commands.rs` | `status`、`report`、`autopost`、`audit` 等命令处理与格式化辅助 |
+| `bsend-cli/src/commands.rs` | `status`、`report`、`stats`、`autopost`、`audit` 等命令处理与格式化辅助 |
 | `bsend-gui/src/*` | 桌面界面、后台任务、配置与诊断视图 |
 
-`reseed.rs` 2026-11-27 已从 11,889 行拆到 3,585 行：表单、预审、上传、发后写回、测试分别拆到 `reseed/{form,audit,upload,post,tests}.rs`，`reseed.rs` 只保留共享类型、标题/简介解析和主流程。CLI 的 `main.rs` 同步从 2,380 行降到 129 行，参数在 `cli.rs`、命令处理在 `commands.rs`。拆分只移动代码，不改行为；当前全量 536 条测试、fmt、clippy 都通过。剩下的主流程编排继续硬拆收益低于回归成本，暂不再拆。
+`reseed.rs` 2026-11-27 已从 11,889 行拆到 3,585 行：表单、预审、上传、发后写回、测试分别拆到 `reseed/{form,audit,upload,post,tests}.rs`，`reseed.rs` 只保留共享类型、标题/简介解析和主流程。CLI 的 `main.rs` 同步从 2,380 行降到 129 行，参数在 `cli.rs`、命令处理在 `commands.rs`。拆分只移动代码，不改行为；当前全量 551 条测试、fmt、clippy 都通过。剩下的主流程编排继续硬拆收益低于回归成本，暂不再拆。
 
 ## 12. 已经踩过的坑
 

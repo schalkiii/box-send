@@ -493,7 +493,7 @@ pub(super) fn form_has(page: &str, name: &str) -> bool {
 
 /// 从简介里按出现顺序抽图片 URL：HTML `<img src>` 与 BBCode `[img]…[/img]` 都认。
 /// 只接受绝对 http(s) 地址；重复图只留第一处，避免海报和截图字段重复提交。
-pub(super) fn image_urls_from_descr(descr: &str) -> Vec<String> {
+pub(crate) fn image_urls_from_descr(descr: &str) -> Vec<String> {
     let mut urls: Vec<String> = Vec::new();
     let mut push = |u: &str| {
         let u = u.trim();
@@ -921,6 +921,44 @@ pub(super) fn match_option(options: &[(String, String)], token: &str) -> Option<
         Pairing::Hit(v) => Some(v),
         _ => None,
     }
+}
+
+/// 重编码片的媒介档：优先英文「Encode」，没有就认中文「压制 / 重编码」。
+/// hdfans 的选项是「1080P/i压制」「720P压制」，还同时有两档；必须按标题分辨率
+/// 选对应档，不能看到「压制」就随便挑一个。
+pub(super) fn pick_encode_option(options: &[(String, String)], hay: &str) -> Option<String> {
+    if let Some(v) = match_option(options, "Encode") {
+        return Some(v);
+    }
+    let lower = hay.to_ascii_lowercase();
+    let resolution = if ["2160", "4k", "uhd"].iter().any(|t| lower.contains(t)) {
+        Some("2160")
+    } else if ["1080"].iter().any(|t| lower.contains(t)) {
+        Some("1080")
+    } else if ["720"].iter().any(|t| lower.contains(t)) {
+        Some("720")
+    } else {
+        None
+    };
+    let candidates: Vec<&(String, String)> = options
+        .iter()
+        .filter(|(_, label)| {
+            let l = label.to_ascii_lowercase();
+            l.contains("压制") || l.contains("重编码") || l.contains("重編碼")
+        })
+        .collect();
+    if let Some(res) = resolution {
+        if let Some((v, _)) = candidates
+            .iter()
+            .find(|(_, label)| label.to_ascii_lowercase().contains(res))
+        {
+            return Some(v.clone());
+        }
+    }
+    if candidates.len() == 1 {
+        return Some(candidates[0].0.clone());
+    }
+    None
 }
 
 /// Remux 的介质档要优先命中「Remux」本身，不能先按 Blu-ray/BD 泛匹配。
@@ -1655,7 +1693,7 @@ pub(super) fn fill_selects(fields: &mut Vec<Field>, page: &str, info: &ReleaseIn
                 picked = pick_remux_option(&options, &hay);
             }
             if reencoded && disc_source && !is_remux {
-                picked = match_option(&options, "Encode");
+                picked = pick_encode_option(&options, &hay);
             }
             // HDTV.x264/x265 属重编码发布：站点若没有 HDTV/TV 类媒介但有 Encode，
             // 归 Encode 是正确的（ptfans 实测：选项 Other/Encode/Blu-ray/Web-DL/…）。
@@ -1672,7 +1710,7 @@ pub(super) fn fill_selects(fields: &mut Vec<Field>, page: &str, info: &ReleaseIn
                     || l.contains("電視")
             });
             if picked.is_none() && reencoded && hdtv_source && !is_remux && !has_hdtv_option {
-                picked = match_option(&options, "Encode");
+                picked = pick_encode_option(&options, &hay);
             }
             // WEB-DL/WEBRip 重编码：站点没有 WEB-DL 选项但有 Encode 时归 Encode
             // （oshen 实测：媒介只有 Track/CD/DVDR/HDTV/MiniBD/Encode/Remux/HD DVD/Blu-ray，
@@ -1685,7 +1723,7 @@ pub(super) fn fill_selects(fields: &mut Vec<Field>, page: &str, info: &ReleaseIn
                     .iter()
                     .any(|(_, l)| l.to_ascii_lowercase().contains("web"));
                 if web_source && !has_web_option {
-                    picked = match_option(&options, "Encode");
+                    picked = pick_encode_option(&options, &hay);
                 }
             }
             'tok: for t in &tokens {
@@ -2049,8 +2087,9 @@ pub struct UploadResult {
     pub message: String,
     /// 站点回「种子已存在」：视为已覆盖，不算本次转种
     pub duplicate: bool,
-    /// HTTP 200 但回包认不出来：站点可能已经收下，也可能只是拒绝页。
-    /// 不直接记失败，交给发后定位按名称+总大小站内核对；核对不到落 `posted_unresolved`。
+    /// 回包认不出来或 POST 网络中断：站点可能已经收下，也可能只是拒绝页。
+    /// 不直接记失败、也不原样重投；交给发后定位按名称+总大小站内核对，
+    /// 核对不到落 `posted_unresolved`。
     pub uncertain: bool,
     /// 回包正文原文（发后定位只从中提取自带链接，不做检索）
     pub body: String,
@@ -2399,6 +2438,10 @@ pub fn apply_site_rules(
         .find(|f| field_lookup(&prep.fields, f).is_some())
         .copied()
     {
+        // 跨站复制简介会把源站的免责声明、保种提示一起带过来；这些是源站广告，
+        // 目标站规则通常明确禁止。先洗一遍 BBCode；HTML 源站等 `apply_site_rules_tail`
+        // 转成 BBCode 后会再洗一遍，避免 1PTBA 这类 HTML 简介漏掉。
+        strip_cross_site_boilerplate_field(prep);
         let cur = field_lookup(&prep.fields, field).unwrap_or("").to_string();
         let before_images = crate::gates::image_count(&cur);
         let (next, removed) = prune_dead_images(&cur, &prep.form_url);
@@ -2451,6 +2494,11 @@ pub(super) fn apply_site_rules_tail(prep: &mut PreparedUpload, rules: &crate::ga
                 }
             }
         }
+    }
+    // HTML 简介转成 BBCode 之后，源站 `[quote]...[/quote]` 才现形；这里必须再洗一次。
+    strip_cross_site_boilerplate_field(prep);
+    if rules.poster_first.unwrap_or(false) {
+        apply_poster_first(prep);
     }
     for (prefix, want) in &rules.select_picks {
         for name in select_field_names(&prep.fields, prefix) {
@@ -2587,5 +2635,128 @@ pub(super) fn apply_site_rules_tail(prep: &mut PreparedUpload, rules: &crate::ga
             _ => format!("必填缺失：{name}"),
         };
         prep.required_gaps.push(gap);
+    }
+}
+
+/// 把简介里的第一张 BBCode 图片移到最前面，其余内容原样接在后面。
+/// 只处理 `[img]...[/img]` / `[img=...]...[/img]`；第一张图已经在开头时返回 None，
+/// 保证合规简介不被无意义改写。青蛙、AGSVPT 的审核明确要求海报在文字之前。
+fn promote_first_image(descr: &str) -> Option<String> {
+    let lower = descr.to_ascii_lowercase();
+    let start = lower.find("[img]").or_else(|| lower.find("[img="))?;
+    let end_rel = lower[start..].find("[/img]")?;
+    let end = start + end_rel + "[/img]".len();
+    let image = &descr[start..end];
+    let before = descr[..start].trim();
+    if before.is_empty() {
+        return None;
+    }
+    let after = descr[end..].trim();
+    let rest = if after.is_empty() {
+        before.to_string()
+    } else {
+        format!("{before}\n\n{after}")
+    };
+    Some(format!("{image}\n\n{rest}"))
+}
+
+/// 从当前简介字段里洗掉跨站复制过来的源站免责声明/保种提示。
+/// 单独抽出来是因为 HTML 简介要先转 BBCode，源站引用块才会现形；调用点要能洗两次。
+fn strip_cross_site_boilerplate_field(prep: &mut PreparedUpload) {
+    let Some(field) = ["descr", "release_desc", "description", "content"]
+        .iter()
+        .find(|f| field_lookup(&prep.fields, f).is_some())
+        .copied()
+    else {
+        return;
+    };
+    let cur = field_lookup(&prep.fields, field).unwrap_or("").to_string();
+    let (next, removed) = strip_cross_site_boilerplate(&cur, &prep.form_url);
+    if removed == 0 {
+        return;
+    }
+    set_field(&mut prep.fields, field, next);
+    prep.select_notes.push(format!(
+        "简介删掉 {removed} 段源站免责声明/保种提示（跨站复制清洗）"
+    ));
+}
+
+/// 删掉从别的站点复制过来的免责声明/保种提示。只处理 `[quote]...[/quote]`
+/// 里同时出现“本站(/您的保种是(/免责声明/小提示”和另一个站点域名标签的块；
+/// 字幕说明、普通引用和本目标站自己的提示不删。
+pub(super) fn strip_cross_site_boilerplate(descr: &str, form_url: &str) -> (String, usize) {
+    let Some(target_host) = crate::sites::url_host(form_url) else {
+        return (descr.to_string(), 0);
+    };
+    let target_label = target_host
+        .trim_start_matches("www.")
+        .split('.')
+        .next()
+        .unwrap_or("");
+    let mut out = String::with_capacity(descr.len());
+    let mut rest = descr;
+    let mut removed = 0usize;
+    while let Some(start) = rest.find("[quote]") {
+        let Some(end_rel) = rest[start..].find("[/quote]") else {
+            break;
+        };
+        let end = start + end_rel + "[/quote]".len();
+        let block = &rest[start..end];
+        let lower = block.to_lowercase();
+        let has_promo = ["本站(", "您的保种是(", "免责声明", "小提示"]
+            .iter()
+            .any(|p| lower.contains(p));
+        let mut foreign = false;
+        if has_promo {
+            for site in crate::sites::builtin_sites() {
+                let Some(host) = crate::sites::url_host(site.url) else {
+                    continue;
+                };
+                if host == target_host {
+                    continue;
+                }
+                let label = host
+                    .trim_start_matches("www.")
+                    .split('.')
+                    .next()
+                    .unwrap_or("");
+                if label.len() >= 4 && label != target_label && lower.contains(label) {
+                    foreign = true;
+                    break;
+                }
+            }
+        }
+        if foreign {
+            out.push_str(&rest[..start]);
+            removed += 1;
+        } else {
+            out.push_str(&rest[..end]);
+        }
+        rest = &rest[end..];
+    }
+    out.push_str(rest);
+    if removed > 0 {
+        while out.contains("\n\n\n") {
+            out = out.replace("\n\n\n", "\n\n");
+        }
+        out = out.trim().to_string();
+    }
+    (out, removed)
+}
+
+/// 按 `posterFirst` 规则把第一张图提到简介最前；找不到简介字段或图已在最前就不动。
+fn apply_poster_first(prep: &mut PreparedUpload) {
+    let Some(field) = ["descr", "release_desc", "description", "content"]
+        .iter()
+        .find(|f| field_lookup(&prep.fields, f).is_some())
+        .copied()
+    else {
+        return;
+    };
+    let cur = field_lookup(&prep.fields, field).unwrap_or("").to_string();
+    if let Some(next) = promote_first_image(&cur) {
+        set_field(&mut prep.fields, field, next);
+        prep.select_notes
+            .push("简介：第一张图已提到正文最前（posterFirst）".into());
     }
 }

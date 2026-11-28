@@ -22,7 +22,7 @@ import re
 import sys
 import time
 from pathlib import Path
-from urllib.parse import urljoin, urlparse
+from urllib.parse import unquote, urljoin, urlparse
 
 import requests
 
@@ -69,7 +69,7 @@ def session_for(host: str) -> requests.Session:
             continue
         if not c.get("value") and exp is None:
             continue
-        s.cookies.set(c["name"], c.get("value", ""), domain=host)
+        s.cookies.set(c["name"], unquote(c.get("value", "")), domain=host)
     return s
 
 
@@ -139,9 +139,17 @@ def main() -> int:
     edit_url = f"{base_url}/edit.php?id={args.id}"
     host = urlparse(base_url).hostname or ""
     s = session_for(host)
-    r = s.get(edit_url, headers={"Referer": detail_url}, timeout=30)
-    print(f"编辑页 HTTP {r.status_code} len={len(r.text)}")
-    if r.status_code != 200:
+    r = None
+    for attempt in range(6):
+        try:
+            r = s.get(edit_url, headers={"Referer": detail_url}, timeout=25)
+            print(f"编辑页 HTTP {r.status_code} len={len(r.text)}")
+            if r.status_code == 200:
+                break
+        except Exception as e:
+            print(f"编辑页读取失败（第 {attempt + 1} 次）：{type(e).__name__}: {str(e)[:100]}")
+            time.sleep(4)
+    if r is None or r.status_code != 200:
         return 1
 
     mod = load_form_parser()

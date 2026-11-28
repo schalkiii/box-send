@@ -48,6 +48,39 @@ pub(crate) fn render_help() -> AnyElement {
         "上传后 MediaInfo 自动提交到独立表单字段（technical_info 等）；没有独立字段就内嵌简介，避免「MediaInfo 为空」被打回。",
     ));
 
+    body = body.child(step_block(
+        "5. 发种统计",
+        "「发种统计」页只读本地 auto-audit.jsonl 和 reseed-log.jsonl，按站点 + 内容键去重，只算站点收下新种的结果；站点回包 existed=1 的历史记录不算新发种。页面显示每站已发种数量、最后发种时间和最后一条种子详情页，时间固定按北京时间。",
+    ));
+    body = body.child(
+        div()
+            .flex_none()
+            .text_xs()
+            .text_color(rgb(theme::TEXT_FAINT))
+            .child("posted：站点收下、详情页已拿到、种子已挂回 qB，页面没有未审/不通过标记；算新发种，但不等于一定有人下载。"),
+    );
+    body = body.child(
+        div()
+            .flex_none()
+            .text_xs()
+            .text_color(rgb(theme::TEXT_FAINT))
+            .child("posted_verifying：站点收下、种子也进了 qB，但校验、tracker 或审核状态还没确认；算新发种，不能写成已做种。"),
+    );
+    body = body.child(
+        div()
+            .flex_none()
+            .text_xs()
+            .text_color(rgb(theme::TEXT_FAINT))
+            .child("pending_review：站点收下但还要审核，审核通过前拿不到站点种子，没挂回 qB；算新发种，审核通过后由回访自动补挂。"),
+    );
+    body = body.child(
+        div()
+            .flex_none()
+            .text_xs()
+            .text_color(rgb(theme::TEXT_FAINT))
+            .child("posted_unresolved：已经上传，但回包没给可用详情页、站内也没定位到，种子没挂回 qB；算一次上传尝试，不重发，等人工核对/补挂。"),
+    );
+
     body = body.child(
         div()
             .flex_none()

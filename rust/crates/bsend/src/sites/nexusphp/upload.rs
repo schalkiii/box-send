@@ -37,7 +37,7 @@ pub(super) fn retry_fetch<T>(url: &str, mut fetch: impl FnMut(&str) -> Result<T>
             }
         }
     }
-    Err(last.expect("retry loop must record an error"))
+    Err(last.ok_or_else(|| anyhow::anyhow!("重试循环结束仍没有记录错误"))?)
 }
 
 /// 详情页明说“没有这条种子”（NexusPHP 的报错页）或 HTTP 404。
