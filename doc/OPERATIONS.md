@@ -322,6 +322,21 @@ cargo build --release -p bsend-cli
 
 `bsend stats` 只读数据目录里的 `auto-audit.jsonl` 和 `reseed-log.jsonl`，不连站点、不改覆盖记录。口径是“按站点 + 内容键去重”：只算 `posted` / `posted_verifying` / `pending_review` / `posted_unresolved`；`existed_pending`（站上本来就有）、`skipped_duplicate`、`same_hash_skipped`、`other_version`、`blocked`、`failed`、`review_rejected` 都不算新发种，URL 带 `existed=1` 的历史记录也不算。最后时间取该站成功记录里最大的 `at`，按北京时间显示；最后一条种是该条记录的详情页。GUI 的「发种统计」Tab 用同一份数据，不改统计口径。
 
+收件箱巡检用 `bsend inbox`：
+
+```powershell
+# 默认扫发种统计里有记录的站，每站最多 20 条
+.\target\release\bsend.exe --config "$env:LOCALAPPDATA\BoxSend\boxsend.json" inbox
+
+# 只看指定站，每站最多 5 条；--concurrency 控制同时打开几个站（1–12）
+.\target\release\bsend.exe --config "$env:LOCALAPPDATA\BoxSend\boxsend.json" inbox --sites kufei,ptba,hdvideo --limit 5 --concurrency 4
+
+# 脚本用：完整 JSON（camelCase）
+.\target\release\bsend.exe --config "$env:LOCALAPPDATA\BoxSend\boxsend.json" inbox --json
+```
+
+它只 GET 各站 `messages.php` 列表页：不点开消息正文、不发站内信、不回信、不改 `coverage.json`。默认站点来自 `bsend stats` 的同一份日志（当前 44 个有发种记录的站），手动发过但日志里没有的站用 `--sites` 补。列表里的“审核不通过 / 删种断种 / 警告违规”只是按标题和行文字做的粗分类，**历史消息也会被列出来，不能当成当前覆盖状态**；真要改覆盖记录仍以详情页审核标记为准（`bsend followup`）。打不开的站会把错误原文留在报告里，不能当成“没有消息”；已知 hdbao 的 `messages.php` 仍回 HTTP 500。
+
 GUI 的 exe 用 `cargo build --profile gui-release -p bsend-gui` 出，路径是 `rust/target/gui-release/bsend-gui.exe`。这个 profile 打开 debug-assertions，走 GPUI 的运行时着色器编译，不依赖 Windows SDK 的 `fxc.exe`；普通 `cargo build --release -p bsend-gui` 仍需要 `fxc.exe`，本机没装 Windows SDK 时不要用那个 profile。GUI 工具栏第 2 个 Tab「发种统计」和 `bsend stats` 用同一份本地日志、同一口径；表格和 `bsend stats` 文本输出应当一致。
 
 `--dry-run` 是试运行：会连站点做审阅和发布检查，但不上传、不写覆盖记录。

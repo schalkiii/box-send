@@ -7,7 +7,7 @@ PT 站自动发种/跨站辅种工具：读 qB 里的内容组和 tracker，找�
 ```powershell
 Set-Location rust
 cargo fmt --all -- --check                           # 提交前必跑；CI 第一条就是它，格式不对直接红
-cargo test --workspace                              # 全量门禁：当前 560 条；提交前必跑
+cargo test --workspace                              # 全量门禁：当前 565 条；提交前必跑
 cargo clippy --workspace --all-targets -- -D warnings  # 全量门禁：提交前必跑
 cargo test -p bsend                                  # 单测 + e2e（快速回路）
 cargo test -p bsend --lib reseed::tests::exist_marker # 跑单条用例
@@ -71,7 +71,7 @@ Rust 2021；crate：`bsend`（引擎）、`bsend-cli`、`bsend-gui`。错误用 
 - **上传成功就立刻把站点种子挂回 qB 做种**（2026-11-24 起是硬步骤，没有开关）：上传后立即从站点下载 `.torrent`、按分片核对、作为独立种子加入 qB；站点刚建种时常先回 `torrent not registered`，程序固定重试 4 轮（每轮 15 秒），仍拿不到才落“待人工确认”，回访用 `bsend pull` 补。站点要先审才给下载的，落 `pending_review`，审完由 `bsend followup` 自动挂回。
 - **发布成功不等于做种成功**：上传成功只代表站点收下种子，审核通过只代表站点放行；站点会把 0 做种者的种子按“候选超时”或“断种过久”清掉。状态至少分 `uploaded`（站点已收）、`pending_seed`（已挂回、tracker 未确认或站点未看到）、`seeded_confirmed`（只挂目标站 tracker + `progress=1` + tracker `status=2` + 站点同伴表看到自己）；前两段不能写成“已做种”。qilin 479362 审核通过后被“断种过久”删除、熊猫 141276 候选 24 小时没做种被删是现场。被删后不盲目重发；qB 里的失效残留交给外部清理工具，不手删。**tracker 一直 `status=1` 时，先直接请求 announce URL 看回包**：回 `Banned Client` 或 `Anti-Cheater` 说明当前客户端被站点禁用（2026-11-28 实测 qBittorrent 5.3.0 被 hdvideo、ptzone、sbpt、pthome 拒），不是漏挂，不能写成已做种，也不要反复重投；换站点允许的客户端后再确认。
 - 发种前门禁按站点配置执行：`titleNoCjk` 拦主标题汉字，`descrOrder` 校验简介标题顺序，`requireLinks` / `requireMediainfo` 校验必填。**剪死图是所有站点无条件执行的硬规则**（不再读 `assist.pruneDeadImages`）：提交前逐图探测，打不开的图直接剪掉；`hdsky.me` / `img.hdsky.me` / `imgur.com` 热链即使本机 200 也按死图处理，UBits 另把 `imgbox.com` 按死图处理。**要图的站有硬性最低图数**也是硬规则（藏宝阁/优堡/太乙/麒麟 3 张，熊猫 4 张 + 段序，ptlgs 4 张 = 1 张海报 + 3 张截图；写在 `gates::image_floor`，配置里写多少都不算）。图床统一用 pixhost：先跑 `scripts/rehost-descr-images.py` 把简介里所有非 pixhost 图片转存，再用 `scripts/swap-descr-images.py` 按顺序换链接，最后改简介；不能靠关掉门禁绕过。源站简介本来就没有图时，用 `scripts/seed-images.py` 从本地视频抽帧，或按豆瓣条目自动取海报，上传 pixhost 后写入 `screenshot-overrides.json`。同一部剧有 HDTV/WEB-DL 等多个内容键时，用 `seed-images.py --for-name` 或 `--also-content` 一次写齐，不能只补一个键；`screenshot-overrides.json` 不手改。发布时程序会自动追加，不许手工在简介里编图。
-- **每轮批量发种前先扫各站收件箱**：审核拒绝、删种、管理员留言都要在 `messages.php` 里看一遍，不能只看 `followup` 已经记录的种子状态；漏看的拒绝消息按站点逐条落 `review_rejected` 并修种子。批量只读扫描用 `scripts/scan-site-messages.py`（输出 `artifacts/site-message-scan3-<日期>.json`），它不点消息、不回信；打不开的站要保留错误证据，不能写成“没有消息”。
+- **每轮批量发种前先扫各站收件箱**：审核拒绝、删种、管理员留言都要在 `messages.php` 里看一遍，不能只看 `followup` 已经记录的种子状态；漏看的拒绝消息按站点逐条落 `review_rejected` 并修种子。批量只读扫描首选 `bsend inbox`（默认扫发种统计里的站，只 GET 列表页，不点消息、不回信、不改覆盖记录；`--json` 给脚本），需要旧脚本的固定 48 站清单时再用 `scripts/scan-site-messages.py`（输出 `artifacts/site-message-scan3-<日期>.json`）；两者都不点消息、不回信。打不开的站要保留错误证据，不能写成“没有消息”。
 - **熊猫发种暂停已撤销（2026-11-27）**：`panda` 已从 `assist.reseedPausedSites` 移出并留在 `autoReseedSites`；141840 已真发并挂回 qB 校验 100%、等审核。历史 141276 是候选种子 24 小时没做种被系统删的，旧账残留 `3f8ed774…` 挂失效 tracker，由外部清理工具处理，不手删、不列本项目人工待办；重发仍必须先“上传→立刻挂回 qB 做种”。
 - 详细规则见 `doc/ARCHITECTURE.md`；运行数据与巡检见 `doc/OPERATIONS.md`；站点清单见 `doc/SITES.md`；未完成项见 `doc/ROADMAP.md`。按日期的审计和测试报告保留作证据，结论以最新一份为准；日常说明已经并进常驻文档，不再单独维护零散手册。
 

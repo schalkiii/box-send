@@ -341,12 +341,13 @@ Windows 计划任务只给命令示例，不自动创建。需要常驻时用任
 | `mediainfo.rs` | 本地 MediaInfo 提取（Windows DLL 接口） |
 | `imagebed.rs` | 杏坛官方图床封面自动转存（CSRF、策略 id、回包解析） |
 | `poststats.rs` | 按站点统计发种数量与最后发种时间（只读两份 JSONL） |
+| `inbox.rs` | 只读收件箱巡检：解析 `messages.php` 列表行、未读标记和粗分类 |
 | `bsend-cli/src/main.rs` | 入口、连接 qB、构建适配器（129 行） |
 | `bsend-cli/src/cli.rs` | clap 命令与参数定义 |
-| `bsend-cli/src/commands.rs` | `status`、`report`、`stats`、`autopost`、`audit` 等命令处理与格式化辅助 |
+| `bsend-cli/src/commands.rs` | `status`、`report`、`stats`、`inbox`、`autopost`、`audit` 等命令处理与格式化辅助 |
 | `bsend-gui/src/*` | 桌面界面、后台任务、配置与诊断视图 |
 
-`reseed.rs` 2026-11-27 已从 11,889 行拆到 3,585 行：表单、预审、上传、发后写回、测试分别拆到 `reseed/{form,audit,upload,post,tests}.rs`，`reseed.rs` 只保留共享类型、标题/简介解析和主流程。CLI 的 `main.rs` 同步从 2,380 行降到 129 行，参数在 `cli.rs`、命令处理在 `commands.rs`。拆分只移动代码，不改行为；当前全量 560 条测试、fmt、clippy 都通过。剩下的主流程编排继续硬拆收益低于回归成本，暂不再拆。
+`reseed.rs` 2026-11-27 已从 11,889 行拆到 3,585 行：表单、预审、上传、发后写回、测试分别拆到 `reseed/{form,audit,upload,post,tests}.rs`，`reseed.rs` 只保留共享类型、标题/简介解析和主流程。CLI 的 `main.rs` 同步从 2,380 行降到 129 行，参数在 `cli.rs`、命令处理在 `commands.rs`。拆分只移动代码，不改行为；当前全量 565 条测试、fmt、clippy 都通过。剩下的主流程编排继续硬拆收益低于回归成本，暂不再拆。
 
 ## 12. 已经踩过的坑
 

@@ -74,6 +74,12 @@ fn main() -> Result<()> {
             key,
             file,
         } => cmd_pull(&cfg, &site, &url, key.as_deref(), file.as_deref()),
+        Cmd::Inbox {
+            sites,
+            limit,
+            concurrency,
+            json,
+        } => cmd_inbox(&cfg, sites, limit, concurrency, json),
         Cmd::Followup {
             dry_run,
             all,

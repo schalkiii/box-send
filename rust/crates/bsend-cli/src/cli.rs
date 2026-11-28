@@ -168,6 +168,22 @@ pub(crate) enum Cmd {
         file: Option<std::path::PathBuf>,
     },
 
+    /// 只读巡检各站收件箱：列最近消息的标题、发件人、时间、已读/未读和粗分类；不点消息、不回信
+    Inbox {
+        /// 只扫这些站（逗号分隔的站点 id）；省略则扫发种统计里有记录的站
+        #[arg(long, value_delimiter = ',')]
+        sites: Option<Vec<String>>,
+        /// 每个站最多列多少条消息
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+        /// 同时开几个站（1–12）
+        #[arg(long, default_value_t = 6)]
+        concurrency: usize,
+        /// 输出 camelCase JSON（给脚本/GUI 吃）
+        #[arg(long)]
+        json: bool,
+    },
+
     /// 回访待跟进的种子：再看一眼“等站点审核 / 审核没过 / 站上已找不到”的详情页，审完了就把站点种子挂回 qB（不上传、不发帖）
     #[command(alias = "reviewcheck")]
     Followup {
@@ -219,6 +235,36 @@ mod tests {
         assert_eq!(cli.config, PathBuf::from("boxsend.json"));
         assert!(!cli.cookiecloud);
         assert!(matches!(cli.cmd, Cmd::Status));
+    }
+
+    #[test]
+    fn inbox_accepts_sites_limit_and_json() {
+        let cli = Cli::try_parse_from([
+            "bsend",
+            "inbox",
+            "--sites",
+            "kufei,ptba",
+            "--limit",
+            "5",
+            "--concurrency",
+            "3",
+            "--json",
+        ])
+        .unwrap();
+        match cli.cmd {
+            Cmd::Inbox {
+                sites,
+                limit,
+                concurrency,
+                json,
+            } => {
+                assert_eq!(sites, Some(vec!["kufei".into(), "ptba".into()]));
+                assert_eq!(limit, 5);
+                assert_eq!(concurrency, 3);
+                assert!(json);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
     }
 
     #[test]

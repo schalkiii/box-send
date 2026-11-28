@@ -612,6 +612,154 @@ pub(super) fn cmd_pull(
     Ok(())
 }
 
+/// 只读巡检各站收件箱：GET `messages.php` 列表页，列标题、发件人、时间、已读/未读和粗分类；
+/// 不点消息、不回信、不改覆盖记录。
+pub(super) fn cmd_inbox(
+    cfg: &Config,
+    sites: Option<Vec<String>>,
+    limit: usize,
+    concurrency: usize,
+    as_json: bool,
+) -> Result<()> {
+    let wanted: Vec<String> = match sites {
+        Some(v) => v,
+        None => {
+            // 没指定站点时只扫“有发种记录”的站：数据源与 `bsend stats` 相同，
+            // 避免把 147 个配置站全打开一遍。手动发过、日志里没有的站用 --sites 补。
+            let data_dir = cfg
+                .coverage_state_path()
+                .parent()
+                .map(std::path::Path::to_path_buf)
+                .unwrap_or_else(|| std::path::PathBuf::from("."));
+            bsend::poststats::site_post_stats(&data_dir)
+                .into_iter()
+                .map(|s| s.site)
+                .collect()
+        }
+    };
+    let mut ids: Vec<String> = wanted
+        .into_iter()
+        .map(|s| s.trim().to_ascii_lowercase())
+        .filter(|s| !s.is_empty())
+        .collect();
+    ids.sort();
+    ids.dedup();
+    if ids.is_empty() {
+        anyhow::bail!("没有可巡检的站点：发种统计里没有记录；用 --sites 指定站点 id");
+    }
+    let adapters = build_adapters(cfg, &Some(ids.clone()))?;
+    let missing: Vec<String> = ids
+        .iter()
+        .filter(|id| !adapters.iter().any(|a| &a.site_id == *id))
+        .cloned()
+        .collect();
+    if !missing.is_empty() {
+        eprintln!(
+            "注意：这些站不在当前参与列表里，未巡检：{}",
+            missing.join("、")
+        );
+    }
+    if adapters.is_empty() {
+        anyhow::bail!(
+            "这些站点不在当前参与列表里，或不是可访问的 NexusPHP 站：{}",
+            ids.join("、")
+        );
+    }
+    if !as_json {
+        println!(
+            "只读巡检 {} 个站的收件箱（GET messages.php；不点消息、不回信）",
+            adapters.len()
+        );
+    }
+    let reports = bsend::inbox::scan_sites(&adapters, limit, concurrency);
+    if as_json {
+        println!("{}", serde_json::to_string_pretty(&reports)?);
+        return Ok(());
+    }
+
+    let ok = reports.iter().filter(|r| r.status == "ok").count();
+    let failed = reports.len().saturating_sub(ok);
+    let unread = reports
+        .iter()
+        .flat_map(|r| &r.messages)
+        .filter(|m| m.unread)
+        .count();
+    let rejected = reports
+        .iter()
+        .flat_map(|r| &r.messages)
+        .filter(|m| m.kind == bsend::inbox::InboxKind::ReviewRejected)
+        .count();
+    let removed = reports
+        .iter()
+        .flat_map(|r| &r.messages)
+        .filter(|m| m.kind == bsend::inbox::InboxKind::TorrentRemoved)
+        .count();
+    let warned = reports
+        .iter()
+        .flat_map(|r| &r.messages)
+        .filter(|m| m.kind == bsend::inbox::InboxKind::Warning)
+        .count();
+    println!(
+        "结果：成功 {ok} 站、打不开 {failed} 站；未读 {unread} 条，审核不通过 {rejected} 条（含历史）、删种 {removed} 条、警告 {warned} 条"
+    );
+    for report in &reports {
+        if report.status != "ok" {
+            let why = if report.login_expired {
+                "登录态可能失效"
+            } else {
+                "请求失败"
+            };
+            println!("  {}：{why} — {}", report.site, report.error);
+            continue;
+        }
+        let total = report.messages.len();
+        let unread_here = report.messages.iter().filter(|m| m.unread).count();
+        println!(
+            "  {}：最近 {} 条消息，未读 {}{}",
+            report.site,
+            total,
+            unread_here,
+            if report.title.is_empty() {
+                String::new()
+            } else {
+                format!("（{}）", report.title)
+            }
+        );
+        let mut other = 0;
+        for msg in &report.messages {
+            if msg.kind == bsend::inbox::InboxKind::Other {
+                other += 1;
+                continue;
+            }
+            println!(
+                "    [{}]{} {}（{} / {}）{}",
+                msg.kind.label(),
+                if msg.unread { " [未读]" } else { "" },
+                msg.title,
+                if msg.sender.is_empty() {
+                    "发件人未知"
+                } else {
+                    msg.sender.as_str()
+                },
+                if msg.at.is_empty() {
+                    "时间未知"
+                } else {
+                    msg.at.as_str()
+                },
+                if msg.url.is_empty() {
+                    String::new()
+                } else {
+                    format!(" {}", msg.url)
+                }
+            );
+        }
+        if other > 0 {
+            println!("    其他消息 {other} 条（用 --json 看全部）");
+        }
+    }
+    Ok(())
+}
+
 /// 回访站点审核：逐条打开“等站点审核 / 审核没过 / 站上已找不到”的详情页，按页面上的结论改格子；
 /// 审完了就把站点种子下回来挂进 qB。不上传、不发帖。自动发种每轮开头也会跑一遍同样的回访。
 pub(super) fn cmd_followup(

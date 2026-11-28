@@ -416,7 +416,7 @@ qB 仍有 42,473 条种子，重启后的 announce 队列会拖慢新种。city1
 | 收敛层 | 站点/规则 | 现状 | 下一步 |
 |---|---|---|---|
 | 已收敛，代码会拦 | 全站单 tracker、上传后立即挂回、pieces/文件清单核对、剪死图、图片底线、标题技术参数顺序、完结去 `Complete`、青蛙 `Blu-ray`→`BluRay`、青蛙蓝光/原盘要 BDInfo、熊猫六段简介、hdvideo 地区/剧情必填 | 已在 `gates.rs`、`reseed/`、配置里执行；发布前会阻断或自动修正 | 保持，不为个别站关掉硬规则 |
-| 半收敛，已补自动化 | 青蛙/AGSVPT 海报必须在简介文字之前；LongPT 60fps→「高帧」、HDR→「HDR」；跨站整体复制简介要删掉源站免责声明/保种提示 | 2026-11-28 已加 `posterFirst`、`strip_cross_site_boilerplate`（`gates.rs`/`config.rs`/`form.rs`）和 `wanted_tags_for_site`（`reseed.rs`），补了三条单测；全量 560 条测试、fmt/clippy 绿；凤凰 39168 已用真实种子回放并修好 | 真站回放确认字段落点；AGSVPT 复审结果出来后核对 |
+| 半收敛，已补自动化 | 青蛙/AGSVPT 海报必须在简介文字之前；LongPT 60fps→「高帧」、HDR→「HDR」；跨站整体复制简介要删掉源站免责声明/保种提示 | 2026-11-28 已加 `posterFirst`、`strip_cross_site_boilerplate`（`gates.rs`/`config.rs`/`form.rs`）和 `wanted_tags_for_site`（`reseed.rs`），补了三条单测；全量 565 条测试、fmt/clippy 绿；凤凰 39168 已用真实种子回放并修好 | 真站回放确认字段落点；AGSVPT 复审结果出来后核对 |
 | 未收敛，仍需人工或补代码 | AGSVPT「方舟计划」入选条件、LongPT 真实上传入口和 `User` 等级发布时段、杏坛书籍专业分类/ISBN、haoxue 单页应用、audiences 的 Turnstile 判重、站点临时改规则和人工主观审核 | 这些不是“配置漏填”，是站点侧条件或外部链路；杏坛、haoxue 已明确移出自动名单；杏坛封面转官方图床已改成程序自动（2026-11-28），不再算人工缺口；AGSVPT 546963 虽有「⛵方舟」标签，仍因海报顺序被拒，说明“有标签≠会通过” | 规则表继续逐站记；只有能确定性判定的才进门禁，主观条件不硬编码成“所有种子” |
 | 外部依赖 | 图床/WAF/TLS/Cloudflare、站点详情页超时、收件箱 `messages.php` 连接重置 | 只能用真实浏览器或重试兜底；`hdbao` 本轮仍 `ERR_CONNECTION_TIMED_OUT` | 收件箱巡检继续保留“打不开”的证据，不把失败写成干净 |
 

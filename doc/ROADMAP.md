@@ -162,7 +162,7 @@ sites/nexusphp/detail.rs  结果页/详情页解析、大小/上传者/审核标
 sites/nexusphp/upload.rs  页面请求重试、限流/拦截页识别、站点提示页（119 行）
 ```
 
-拆分只移动代码，不改行为；当前全量 560 条、`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings` 通过。
+拆分只移动代码，不改行为；当前全量 565 条、`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings` 通过。
 
 ### 4.8 后续优化（r3 审计给出；P1 已完成，其余待做）
 
@@ -387,11 +387,11 @@ sites/nexusphp/upload.rs  页面请求重试、限流/拦截页识别、站点�
 
 本轮读到 48 个曾发种站点中的 **47 个**收件箱；只有 `hdbao` 仍 `ERR_CONNECTION_TIMED_OUT`/HTTP 500，不能当成“没有消息”。详细证据见 `doc/SITE-REVIEW-2026-11-28.md`。本轮已完成：凤凰 [39168](https://pt.521.best/details.php?id=39168) 的 1PTBA 免责声明和 11 张死图已清理，换成 4 张 pixhost 图；代码新增 `strip_cross_site_boilerplate`，并把“跨站复制简介先洗源站残留”写进 `AGENTS.md`。杏坛 456304 的封面已从 imgbox 转到官方图床 `img.xingtan.one` 并替换简介首图（上传 id 91772，1080×1503），编辑返回“编辑成功”、标签「确认 修正」；页面仍是 `[免费]` 剩余 1 天 15 时、`title="未审"`，审核另算。
 
-同日收尾：杏坛封面已接进程序，正式提交前自动转存，登录态失效会中止而不是静默留外链；`bsend stats` 和 GUI「发种统计」Tab 已落地，按站点 + 内容键去重，URL 带 `existed=1` 的旧记录不计，当前 42 站 153 条。GUI exe 用 `gui-release` profile 构建，不依赖 Windows SDK；详细口径见 `doc/OPERATIONS.md` 第 6 节。
+同日收尾：杏坛封面已接进程序，正式提交前自动转存，登录态失效会中止而不是静默留外链；`bsend stats` 和 GUI「发种统计」Tab 已落地，按站点 + 内容键去重，URL 带 `existed=1` 的旧记录不计，当前 44 站 157 条。GUI exe 用 `gui-release` profile 构建，不依赖 Windows SDK；详细口径见 `doc/OPERATIONS.md` 第 6 节。
 
 新增待办：
 
-1. **收件箱巡检进程序**：`bsend followup` 目前只读详情页审核标记；先补只读 `messages.php` 巡检，至少能列出审核拒绝/删种/管理员警告，不自动回信。
+1. ~~**收件箱巡检进程序**：`bsend followup` 目前只读详情页审核标记；先补只读 `messages.php` 巡检，至少能列出审核拒绝/删种/管理员警告，不自动回信。~~ **2026-11-28 已完成**：新增 `bsend inbox`，只 GET 各站 `messages.php` 列表页，不点消息、不回信、不改覆盖记录；默认扫发种统计里的 44 个站，支持 `--sites` / `--limit` / `--concurrency` / `--json`。真站只读扫 44 站：41 站成功、hdbao 仍 HTTP 500、hdtime 和 ptcafe 连接被重置；列出 19 条审核不通过历史消息和 1 条断种提醒，分类只作线索、不替代详情页结论。全量测试 565 条、fmt、clippy 全绿；用法见 `doc/OPERATIONS.md` 第 6 节。
 2. **发布后持续做种核验**：qilin 479362 审核通过后因断种被系统删除，熊猫 141276 是候选 24 小时没做种被删；需要在每轮回访里核对站点同伴表、qB tracker 和 progress，不能只验发布当天。发布状态分 `uploaded`、`pending_seed`、`seeded_confirmed`；qB 里的失效残留交给外部清理工具，不手删。
 3. **财神结构门禁**：MediaInfo 放独立栏、简介不带 MediaInfo、图片外不包 `[url]`、海报 + 3 张有效截图；先把 259870 这类旧重复草稿和 211128 的拒绝原因做成回放用例。
 4. **幸运中字标签（已核对 2026-11-28）**：LuckAudit 会查「中字」；`wanted_tags` 已有中字推导。61102 编辑页实际已勾「中字」（值 6），23 是「原创」，旧拒绝里的“中字未选”不再成立；后续只在预审里保留“有中文字幕必须勾中字”的断言。
