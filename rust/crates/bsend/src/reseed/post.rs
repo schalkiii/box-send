@@ -134,6 +134,7 @@ pub fn review_reseed(
         info: rel.info.clone(),
     };
     apply_site_rules(&mut prepared, &rules, Some(&ctx));
+    enforce_chinese_sub_tag(&mut prepared, &rel.info, &req.target_site);
     // 必填缺口 / 图片全剪这类本地硬阻断要计入预检结论，不能只在字段列表下面提示。
     for gap in &prepared.required_gaps {
         rel.preflight.errors.push(gap.clone());
@@ -620,6 +621,26 @@ pub(super) fn locate_existing_target(
     }
 }
 
+/// 藏宝阁发后图片复探：只看新种页简介里的图，有打不开的就给一条警告。
+/// 抽成可注入探测函数，单测不用真联网；正式路径用 `ImageProbe` 带详情页 Referer。
+pub(super) fn cangbao_image_warnings_with(
+    html: &str,
+    probe: &mut dyn FnMut(&str) -> bool,
+) -> Vec<String> {
+    let posted = parse_release_page(html, "");
+    if posted.descr.trim().is_empty() {
+        return Vec::new();
+    }
+    let (_, dead) = form::prune_dead_images_with(&posted.descr, probe);
+    if dead == 0 {
+        Vec::new()
+    } else {
+        vec![format!(
+            "新种页简介有 {dead} 张图片复探打不开（藏宝阁审核会再查图）：先换可访问图床，别等审核退回"
+        )]
+    }
+}
+
 /// 发后自检：回读新种页核对标题/MediaInfo/链接。同一次请求顺带带回页面上明写的审核结论
 /// （未审 / 审核不通过），不额外打站点。抓不到页面时只返回一条警告，审核结论为 `None`。
 pub fn verify_posted(
@@ -628,10 +649,22 @@ pub fn verify_posted(
     info: &ReleaseInfo,
 ) -> (Vec<String>, Option<(ReviewMark, String)>) {
     match target.fetch_html(detail_url, target.base.as_str()) {
-        Ok(html) => (
-            verify_posted_html(&html, info, &target.site_id),
-            review_mark(&html, &form::title_for_site(info, &target.site_id)),
-        ),
+        Ok(html) => {
+            let mut warns = verify_posted_html(&html, info, &target.site_id);
+            // 藏宝阁审核会再查一次图：发后立刻按站点页面上的简介复探一遍，
+            // 图床在这一刻已经打不开的，先留警告，不等审核退回才知道。
+            if target.site_id == "cangbao" {
+                if let Some(probe) = form::ImageProbe::new(detail_url) {
+                    warns.extend(cangbao_image_warnings_with(&html, &mut |url| {
+                        probe.reachable(url)
+                    }));
+                }
+            }
+            (
+                warns,
+                review_mark(&html, &form::title_for_site(info, &target.site_id)),
+            )
+        }
         Err(e) => (
             vec![format!("抓新种详情页失败（{e:#}），请手动核对发布结果")],
             None,

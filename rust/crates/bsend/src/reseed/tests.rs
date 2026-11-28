@@ -2804,6 +2804,89 @@ fn prep_from_form(form: &str) -> PreparedUpload {
 }
 
 #[test]
+fn luckpt_chinese_subs_requires_picked_chinese_tag() {
+    // 有中文字幕但表单没勾上「中字」→ 预审硬拦；勾上了就放行。
+    let form = r#"<form action="takeupload.php" enctype="multipart/form-data"><input type="file" name="file"></form>"#;
+    let mut prep = prep_from_form(form);
+    let info = ReleaseInfo {
+        name: "Show.1080p.WEB-DL".into(),
+        mediainfo: "Text #1\nLanguage : Chinese\nTitle : 简体中文".into(),
+        ..Default::default()
+    };
+    enforce_chinese_sub_tag(&mut prep, &info, "luckpt");
+    assert!(
+        prep.required_gaps.iter().any(|g| g.contains("中字")),
+        "{:?}",
+        prep.required_gaps
+    );
+
+    let mut ok = prep_from_form(form);
+    ok.picked_tags.push("中字".into());
+    enforce_chinese_sub_tag(&mut ok, &info, "luckpt");
+    assert!(ok.required_gaps.is_empty(), "{:?}", ok.required_gaps);
+}
+
+#[test]
+fn cangbao_posted_page_reports_dead_images_after_post() {
+    // 藏宝阁发后复探：新种页简介两张图都打不开 → 一条警告点名 2 张；两张都能开 → 不警告。
+    let html = r#"<html><body><div id="kdescr">
+<img src="https://images.example.org/a.jpg"><img src="https://images.example.org/b.jpg">
+</div></body></html>"#;
+    let mut probed = 0usize;
+    let warns = cangbao_image_warnings_with(html, &mut |_| {
+        probed += 1;
+        false
+    });
+    assert_eq!(probed, 2);
+    assert_eq!(warns.len(), 1, "{warns:?}");
+    assert!(warns[0].contains("2 张"), "{warns:?}");
+
+    let mut probed_ok = 0usize;
+    let warns = cangbao_image_warnings_with(html, &mut |_| {
+        probed_ok += 1;
+        true
+    });
+    assert_eq!(probed_ok, 2);
+    assert!(warns.is_empty(), "{warns:?}");
+}
+
+#[test]
+fn cspt_structure_gaps_cover_mediainfo_and_linked_images() {
+    let form = r#"<form action="takeupload.php" enctype="multipart/form-data"><input type="file" name="file">
+<textarea name="descr"></textarea><textarea name="technical_info"></textarea></form>"#;
+    let rules = crate::gates::SiteRules {
+        separate_mediainfo: Some(true),
+        descr_no_mediainfo: Some(true),
+        descr_no_linked_images: Some(true),
+        ..Default::default()
+    };
+    let mut prep = prep_from_form(form);
+    // technical_info 空、简介里塞 MediaInfo、图片外层包 URL → 三条都记缺口
+    for (name, value) in prep.fields.iter_mut() {
+        match name.as_str() {
+            "technical_info" => value.clear(),
+            "descr" => {
+                *value = "[quote][b]MediaInfo[/b]\n[code]General\nUnique ID : 1\nFormat : AVC\nDuration : 1h\nWidth : 1920\nHeight : 1080[/code][/quote]\n[url=https://a/1.jpg][img]https://a/1.jpg[/img][/url]".into()
+            }
+            _ => {}
+        }
+    }
+    apply_site_rules_tail(&mut prep, &rules);
+    enforce_structural_rules(&mut prep, &rules);
+    for needle in [
+        "MediaInfo 必须填在独立栏",
+        "简介里仍带 MediaInfo",
+        "图片外层再包",
+    ] {
+        assert!(
+            prep.required_gaps.iter().any(|g| g.contains(needle)),
+            "缺 {needle}：{:?}",
+            prep.required_gaps
+        );
+    }
+}
+
+#[test]
 fn multi_picks_checkboxes_match_and_fill() {
     // 标签归一命中（含别名/子串）→ 按站点真实 value 勾上；必填缺口清空
     let form = r#"<form action="takeupload.php" enctype="multipart/form-data"><input type="file" name="file">

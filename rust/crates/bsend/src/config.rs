@@ -206,6 +206,14 @@ impl CoverageSettings {
             // 不依赖配置里有没有写，避免配置漏项时又把图放到文末被退回。
             rules.poster_first = Some(matches!(site, "qingwa" | "agsvpt"));
         }
+        if site == "cspt" {
+            // 财神站规：MediaInfo 必须放独立栏、简介里不能带 MediaInfo、
+            // 图片外面不能再包 URL。审核按这三条逐项退回，不能等站内信；
+            // 和图片底线一样按代码硬规则，配置里写 false 也不能关掉。
+            rules.separate_mediainfo = Some(true);
+            rules.descr_no_mediainfo = Some(true);
+            rules.descr_no_linked_images = Some(true);
+        }
         if rules.category_rules.is_empty() {
             rules.category_rules = crate::gates::category_rules_default(site);
         }
@@ -1183,8 +1191,39 @@ mod tests {
         assert_eq!(settings.rules_for("panda").require_images, Some(4));
         // ptlgs 要求 1 张海报 + 至少 3 张截图，总图数按 4 张
         assert_eq!(settings.rules_for("ptlgs").require_images, Some(4));
+        // 财神同样按 1 张海报 + 3 张截图，且结构门禁默认打开
+        let cspt = settings.rules_for("cspt");
+        assert_eq!(cspt.require_images, Some(4));
+        assert_eq!(cspt.require_poster, Some(1));
+        assert_eq!(cspt.require_screenshots, Some(3));
+        assert!(cspt.separate_mediainfo());
+        assert!(cspt.descr_no_mediainfo());
+        assert!(cspt.descr_no_linked_images());
         // 不要求图的站没有这道门禁
         assert_eq!(settings.rules_for("sbpt").require_images, None);
+
+        settings.reseed_rules.insert(
+            "cspt".into(),
+            crate::gates::SiteRules {
+                separate_mediainfo: Some(false),
+                descr_no_mediainfo: Some(false),
+                descr_no_linked_images: Some(false),
+                ..Default::default()
+            },
+        );
+        let cspt_after = settings.rules_for("cspt");
+        assert!(
+            cspt_after.separate_mediainfo(),
+            "配置写 false 也不能关财神结构门禁"
+        );
+        assert!(
+            cspt_after.descr_no_mediainfo(),
+            "配置写 false 也不能关财神结构门禁"
+        );
+        assert!(
+            cspt_after.descr_no_linked_images(),
+            "配置写 false 也不能关财神结构门禁"
+        );
 
         settings.reseed_rules.insert(
             "qilin".into(),

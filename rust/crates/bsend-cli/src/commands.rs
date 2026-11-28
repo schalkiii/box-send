@@ -1971,6 +1971,7 @@ pub(super) fn cmd_gatecheck(cfg: &Config, sites: Option<Vec<String>>, as_json: b
             subtitle: &info.subtitle,
             descr: descr_final,
             mediainfo: &info.mediainfo,
+            mediainfo_field: drill.mediainfo_field.as_deref(),
             has_links: info.has_media_links(),
             type_label: type_label.as_deref(),
             core_gaps: &core,

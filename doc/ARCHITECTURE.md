@@ -152,9 +152,15 @@ qB 没有 tracker，也不等于站上一定没发过。可能是站上已经有
 | 规则 | 作用 |
 | --- | --- |
 | 剪死图（无条件） | 每个站、每次提交前逐张 GET 简介图片，非 2xx/非图片类型就剪掉（带目标站上传页 Referer） |
-| 要图站最低图数 | `gates::image_floor` 按站点硬编码：藏宝阁/优堡/太乙/麒麟 3 张，熊猫 4 张，ptlgs 4 张（1 张海报 + 3 张截图）；死图被剪掉后数量不够就拦 |
+| 要图站最低图数 | `gates::image_floor` 按站点硬编码：藏宝阁/优堡/太乙/麒麟 3 张，熊猫 4 张，财神 4 张（1 张海报 + 3 张截图），ptlgs 4 张（1 张海报 + 3 张截图）；死图被剪掉后数量不够就拦 |
 
 站点规范里仍按站配 `titleNoCjk`（主标题出现汉字即拦）、`descrOrder`（按给定标题标记检查顺序）、`requireLinks` / `requireMediainfo`。熊猫高清配 `titleNoCjk=true`，图数由硬规则给 4 张，并要求 `【转载出处】→【制作说明】→【海报】→【简介】→【info】→【截图】`；配置文件里的 `requireImages` 一律被覆盖。图片全部失效时不要绕过门禁，先把原图/海报/截图重传到可用图床，再改简介。
+
+**财神结构门禁（2026-11-28）**：`SiteRules` 新增 `separateMediainfo`、`descrNoMediainfo`、`descrNoLinkedImages` 三项，只有财神默认打开。`GateInput.mediainfo_field` 记录 MediaInfo 落在哪个独立字段，空值或「内嵌简介」都算没有独立栏；`descr_has_mediainfo_block` 先扫最终简介里的 `[code]` / `[quote]` / `<pre>` / `<fieldset>` / `<code>` 块，再扫整段正文，命中 MediaInfo/BDInfo 特征就拦；`has_url_wrapped_image` 扫 `[url]…[img]` 和 `<a>…<img>`。`reseed::form::enforce_structural_rules` 在 `assemble_descr_by_order` 装配完最终简介后再查同样三条，写进 `required_gaps`；手动 `reseed` 在提交前中止，自动发种也走同一套 `GateInput`。对应用例 `gates::tests::cspt_structure_gates_block_mediainfo_in_descr_and_linked_images` 和 `reseed::tests::cspt_structure_gaps_cover_mediainfo_and_linked_images`。
+
+**幸运站中字硬断言（2026-11-28）**：`preflight` 对 `luckpt` 把「有中文字幕但没勾中字」从提示改成错误；`enforce_chinese_sub_tag` 再按最终 `picked_tags` 查一次，有中文字幕但表单实际没勾上「中字」就写 `required_gaps`，上传前硬拦。官方 LuckAudit 仍是最终证据：2026-11-28 用《人民的名义》草稿只读审阅，LuckAudit 报「中文字幕未选择中字标签」并让发布中止；这条标题/简介没有「中字」等标记、生成的 MediaInfo 也没有 Text 段，所以 `has_chinese_subs()` 没识别出来，靠的是官方预审这一层。不要把「预检通过」当成 LuckAudit 通过。
+
+**藏宝阁发后图片复探（2026-11-28）**：`verify_posted` 抓到新种详情页后，对 `cangbao` 额外用 `parse_release_page` 取页面简介，再调 `prune_dead_images` 逐图探测；有打不开的图就追加警告「新种页简介有 N 张图片复探打不开（藏宝阁审核会再查图）」。这是发后即时复探，不改覆盖状态、不自动换图，也没有 10 分钟定时器；定时复探等图床稳定性有更多记录再决定。
 
 **发种前按 `descrOrder` 装配简介（2026-11-27 起）**：只在站点规则配了 `descrOrder` 时触发，没配的站简介一字不动。装配在剪死图之后做，只复用留下的可用图。源简介已经六段齐全且顺序正确时原样保留，不重复包段、不重排；否则按规则顺序拼段：`【转载出处】` 放源站名 + 源详情页链接；`【制作说明】` 放标题里取到的制作组，取不到就写目标站名，不留空段；`【海报】` 放独立海报字段里的图，没有就用简介第一张可用图；`【简介】` 放去掉图片和已有段标题后的纯文本，空了用标题写一行；`【info】` 放现有 MediaInfo 正文；`【截图】` 放海报之外的其余可用图。图片格式跟随原简介（HTML `<img>` 或 BBCode `[img]`），复用现有渲染逻辑，不另起一套。装配后自查一遍：段标记齐全且顺序与规则一致、总图数达到站点下限、MediaInfo 不缺；任一项不满足就落阻断缺口，保留原简介，不带缺段的简介提交。
 
@@ -361,7 +367,7 @@ Windows 计划任务只给命令示例，不自动创建。需要常驻时用任
 | `bsend-cli/src/commands.rs` | `status`、`report`、`stats`、`inbox`、`autopost`、`audit` 等命令处理与格式化辅助 |
 | `bsend-gui/src/*` | 桌面界面、后台任务、配置与诊断视图 |
 
-`reseed.rs` 2026-11-27 已从 11,889 行拆到 3,585 行：表单、预审、上传、发后写回、测试分别拆到 `reseed/{form,audit,upload,post,tests}.rs`，`reseed.rs` 只保留共享类型、标题/简介解析和主流程。CLI 的 `main.rs` 同步从 2,380 行降到 129 行，参数在 `cli.rs`、命令处理在 `commands.rs`。拆分只移动代码，不改行为；当前全量 565 条测试、fmt、clippy 都通过。剩下的主流程编排继续硬拆收益低于回归成本，暂不再拆。
+`reseed.rs` 2026-11-27 已从 11,889 行拆到 3,585 行：表单、预审、上传、发后写回、测试分别拆到 `reseed/{form,audit,upload,post,tests}.rs`，`reseed.rs` 只保留共享类型、标题/简介解析和主流程。CLI 的 `main.rs` 同步从 2,380 行降到 129 行，参数在 `cli.rs`、命令处理在 `commands.rs`。拆分只移动代码，不改行为；拆分时全量 565 条测试、fmt、clippy 都通过，当前基线以 `doc/TESTING.md` 为准。剩下的主流程编排继续硬拆收益低于回归成本，暂不再拆。
 
 ## 12. 已经踩过的坑
 

@@ -500,6 +500,7 @@ pub fn run_autopost_with(
                 subtitle: &rep.info.subtitle,
                 descr: descr_final,
                 mediainfo: &rep.info.mediainfo,
+                mediainfo_field: drill.mediainfo_field.as_deref(),
                 has_links: rep.info.has_media_links(),
                 type_label: type_label.as_deref(),
                 core_gaps: &core,

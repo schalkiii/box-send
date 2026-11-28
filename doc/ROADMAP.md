@@ -162,7 +162,7 @@ sites/nexusphp/detail.rs  结果页/详情页解析、大小/上传者/审核标
 sites/nexusphp/upload.rs  页面请求重试、限流/拦截页识别、站点提示页（119 行）
 ```
 
-拆分只移动代码，不改行为；当前全量 565 条、`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings` 通过。
+拆分只移动代码，不改行为；拆分时全量 565 条、`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings` 通过。
 
 ### 4.8 后续优化（r3 审计给出；P1 已完成，其余待做）
 
@@ -391,11 +391,11 @@ sites/nexusphp/upload.rs  页面请求重试、限流/拦截页识别、站点�
 
 新增待办：
 
-1. ~~**收件箱巡检进程序**：`bsend followup` 目前只读详情页审核标记；先补只读 `messages.php` 巡检，至少能列出审核拒绝/删种/管理员警告，不自动回信。~~ **2026-11-28 已完成**：新增 `bsend inbox`，只 GET 各站 `messages.php` 列表页，不点消息、不回信、不改覆盖记录；默认扫发种统计里的 44 个站，支持 `--sites` / `--limit` / `--concurrency` / `--json`。真站只读扫 44 站：41 站成功、hdbao 仍 HTTP 500、hdtime 和 ptcafe 连接被重置；列出 19 条审核不通过历史消息和 1 条断种提醒，分类只作线索、不替代详情页结论。全量测试 565 条、fmt、clippy 全绿；用法见 `doc/OPERATIONS.md` 第 6 节。
+1. ~~**收件箱巡检进程序**：`bsend followup` 目前只读详情页审核标记；先补只读 `messages.php` 巡检，至少能列出审核拒绝/删种/管理员警告，不自动回信。~~ **2026-11-28 已完成**：新增 `bsend inbox`，只 GET 各站 `messages.php` 列表页，不点消息、不回信、不改覆盖记录；默认扫发种统计里的 44 个站，支持 `--sites` / `--limit` / `--concurrency` / `--json`。真站只读扫 44 站：41 站成功、hdbao 仍 HTTP 500、hdtime 和 ptcafe 连接被重置；列出 19 条审核不通过历史消息和 1 条断种提醒，分类只作线索、不替代详情页结论。全量测试 565 条（当时）、fmt、clippy 全绿；用法见 `doc/OPERATIONS.md` 第 6 节。
 2. ~~**发布后持续做种核验**：qilin 479362 审核通过后因断种被系统删除，熊猫 141276 是候选 24 小时没做种被删；需要在每轮回访里核对站点同伴表、qB tracker 和 progress，不能只验发布当天。发布状态分 `uploaded`、`pending_seed`、`seeded_confirmed`；qB 里的失效残留交给外部清理工具，不手删。~~ **2026-11-28 已完成**：`bsend followup` 新增发布后做种核验，自动发种每轮开头也跑 20 条。对“已转种 / 已辅种 / 校验中”的格子，先查 qB progress 和状态（只认 `uploading / stalledUP / forcedUP`，暂停、排队、重新校验都不算正在做种），再只看目标站 tracker 的 `status=2`；tracker 确认后打开详情页和 `viewpeerlist.php` 同伴表，认当前账号在不在做种者列表里。只有“progress 100% + 正在做种 + 目标站 tracker 回包 + 同伴表看到当前账号”才确认做种；同伴表打不开、认不出当前账号、只看到别人都留在“校验中”，不硬写已做种。现有状态沿用中文标签：`校验中` 对应待站点确认，`已转种` / `已辅种` 对应已确认；没有再加一套英文枚举，避免同一件事两套状态。新增 `coverage.lastSeedCheck` 记录核验时间，按最久没核过的顺序轮转，默认每轮 20 条，`--seeding-limit 0` 可关。真站验证：熊猫 141840 演练和正式各一次，qB tracker 回包、同伴表 8 个做种者并看到 `Schalkiii`，结论落 `reseeded`；AGSVPT 546963 演练通过，页眉图标链接认出当前 uid、同伴表 2 个做种者看到自己。hdvideo 6 条演练里 4 条详情页仍标“未审”，核验会改回“等站点审核”，不再把已转种当审核通过。2026-11-28 晚再核 141840 时，qB 状态 `stalledUP`、tracker 顶层 `status=2`，第一次打开同伴表只有 7 个做种者（其中 2 个匿名，客户端 qBittorrent/5.0.4，不是本机 5.3.0），实名列表没看到 `Schalkiii`，按规则本应留“校验中”；紧接着正式回访又显示 8 个并看到自己，结论仍是 `reseeded`。说明站点同伴表有统计延迟，不能凭一次结果硬写。稍晚复测 AGSVPT 详情页返回 HTTP 530，按“打不开不算结论”处理，没有改格子。
-3. **财神结构门禁**：MediaInfo 放独立栏、简介不带 MediaInfo、图片外不包 `[url]`、海报 + 3 张有效截图；先把 259870 这类旧重复草稿和 211128 的拒绝原因做成回放用例。
-4. **幸运中字标签（已核对 2026-11-28）**：LuckAudit 会查「中字」；`wanted_tags` 已有中字推导。61102 编辑页实际已勾「中字」（值 6），23 是「原创」，旧拒绝里的“中字未选”不再成立；后续只在预审里保留“有中文字幕必须勾中字”的断言。
-5. **藏宝阁图片复核**：提交前逐图探测还不够，站点审核时会再查一次；先记录图床稳定性，再决定是否把“提交后 10 分钟再探一次”做成可选步骤。
+3. ~~**财神结构门禁**：MediaInfo 放独立栏、简介不带 MediaInfo、图片外不包 `[url]`、海报 + 3 张有效截图；先把 259870 这类旧重复草稿和 211128 的拒绝原因做成回放用例。~~ **2026-11-28 已完成（代码与单测）**：`SiteRules` 新增 `separateMediainfo` / `descrNoMediainfo` / `descrNoLinkedImages`，只有财神默认打开；`image_floor_detail("cspt")` 给 4 张 = 1 张海报 + 3 张截图；`GateInput.mediainfo_field` 记录独立栏，`descr_has_mediainfo_block` 扫 code/quote/pre/fieldset 块和正文，`has_url_wrapped_image` 扫 `[url]…[img]` 与 `<a>…<img>`；`reseed::form::enforce_structural_rules` 在最终简介装配后把同样三条写进 `required_gaps`，手动 `reseed` 和自动发种都硬拦。单测覆盖“MediaInfo 内嵌简介 + 图片包 URL + 没有独立栏”全红、“独立栏 + 4 张裸图”全绿。真站只读演练没走通：2026-11-28 晚带登录态访问 `upload.php` 仍明确回“你没有发布种子的权限，普通会员请到候选区提交”，收件箱 211299/211298 只是两条种子审核通过、不等于上传权限恢复；没有构造提交字段，也没硬发。
+4. ~~**幸运中字标签（已核对 2026-11-28）**：LuckAudit 会查「中字」；`wanted_tags` 已有中字推导。61102 编辑页实际已勾「中字」（值 6），23 是「原创」，旧拒绝里的“中字未选”不再成立；后续只在预审里保留“有中文字幕必须勾中字”的断言。~~ **2026-11-28 已完成**：`preflight` 对 `luckpt` 把「有中文字幕但没勾中字」从提示改成硬错误；`reseed::form::enforce_chinese_sub_tag` 按最终 `picked_tags` 再查一次，表单实际没勾上「中字」就写 `required_gaps`，上传前中止。只读回放《人民的名义》草稿时，LuckAudit 报「中文字幕未选择中字标签」并让程序中止；这条标题/简介没有「中字」等标记、生成的 MediaInfo 也没有 Text 段，本地 `has_chinese_subs()` 没识别出来，最终靠官方预审拦住。不要把“预检通过”当成 LuckAudit 通过。
+5. ~~**藏宝阁图片复核**：提交前逐图探测还不够，站点审核时会再查一次；先记录图床稳定性，再决定是否把“提交后 10 分钟再探一次”做成可选步骤。~~ **2026-11-28 已完成发后即时复探**：`reseed::post::verify_posted` 抓到新种详情页后，对 `cangbao` 额外解析页面简介，再逐图探测；有打不开的图就追加警告“新种页简介有 N 张图片复探打不开（藏宝阁审核会再查图）”。只警告，不改覆盖状态、不自动换图，也没有新增定时器；10 分钟定时复探暂不做，等图床稳定性有更多记录再决定。只读审阅《大侦探波洛》草稿时，12 张源图剪到 3 张仍达到藏宝阁 3 张底线，说明剪死图和最低图数在真实源上按预期工作。
 6. **AGSVPT「方舟计划」与 LongPT 发布条件**：方舟是 `tag_id=52` 标签/专区，规则页和 FAQ 没写入选条件，不能自动勾所有种子；LongPT 只有授权用户能发、`User` 仅周六 12:00–周日 23:59 可发，真实上传入口仍未定位，程序继续按 `no-form` 中止。
 7. **hdbao 收件箱仍打不开**：浏览器 `ERR_CONNECTION_TIMED_OUT`、直连 500、代理连接重置；保留错误证据，不当作“没有消息”，也不为扫消息改站点配置。
 

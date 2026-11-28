@@ -2329,25 +2329,31 @@ pub(super) fn content_type_is_image(ct: Option<&str>) -> bool {
     }
 }
 
-pub(super) fn prune_dead_images(html: &str, referer: &str) -> (String, usize) {
-    let mut builder = reqwest::blocking::Client::builder()
-        .user_agent(crate::sites::nexusphp::DEFAULT_UA)
-        .no_proxy()
-        .timeout(std::time::Duration::from_secs(8));
-    // 防盗链图床（豆瓣图床实测裸请求 418 回 HTML，带 Referer 才出图）：
-    // 探测时带上目标站上传页 Referer，与浏览器从上传页插图的行为一致。
-    if !referer.is_empty() {
-        let mut headers = HeaderMap::new();
-        if let Ok(v) = HeaderValue::from_str(referer) {
-            headers.insert(REFERER, v);
+/// 图片可达性探测器；一次构造复用连接，Referer 按目标站上传页/详情页带。
+pub(super) struct ImageProbe {
+    client: reqwest::blocking::Client,
+}
+
+impl ImageProbe {
+    pub(super) fn new(referer: &str) -> Option<Self> {
+        let mut builder = reqwest::blocking::Client::builder()
+            .user_agent(crate::sites::nexusphp::DEFAULT_UA)
+            .no_proxy()
+            .timeout(std::time::Duration::from_secs(8));
+        // 防盗链图床（豆瓣图床实测裸请求 418 回 HTML，带 Referer 才出图）：
+        // 探测时带上目标站上传页/详情页 Referer，与浏览器从页面插图的行为一致。
+        if !referer.is_empty() {
+            let mut headers = HeaderMap::new();
+            if let Ok(v) = HeaderValue::from_str(referer) {
+                headers.insert(REFERER, v);
+            }
+            builder = builder.default_headers(headers);
         }
-        builder = builder.default_headers(headers);
+        builder.build().ok().map(|client| Self { client })
     }
-    let Ok(client) = builder.build() else {
-        return (html.to_string(), 0);
-    };
-    prune_dead_images_with_site(html, referer, &mut |url| {
-        client
+
+    pub(super) fn reachable(&self, url: &str) -> bool {
+        self.client
             .get(url)
             .send()
             .map(|r| {
@@ -2357,7 +2363,14 @@ pub(super) fn prune_dead_images(html: &str, referer: &str) -> (String, usize) {
                     )
             })
             .unwrap_or(false)
-    })
+    }
+}
+
+pub(super) fn prune_dead_images(html: &str, referer: &str) -> (String, usize) {
+    let Some(probe) = ImageProbe::new(referer) else {
+        return (html.to_string(), 0);
+    };
+    prune_dead_images_with_site(html, referer, &mut |url| probe.reachable(url))
 }
 
 /// 标签归一：小写、去空白与标点（保留中文等 Unicode 字母数字；与 `norm_token` 不同，后者只留 ASCII）
@@ -2515,6 +2528,9 @@ pub fn apply_site_rules(
     apply_site_rules_tail(prep, rules);
     // 配了 descrOrder 的站：按站点段标题装配简介（没配的站这里直接返回，一字不动）。
     assemble_descr_by_order(prep, rules, ctx);
+    // 财神这类站的结构硬规则：MediaInfo 独立栏、简介不带 MediaInfo、图片不包 URL。
+    // 放在装配之后检查，确保看的是最终要提交的简介。
+    enforce_structural_rules(prep, rules);
     // 剪死图 / 转 BBCode 之后再抽一次独立图片字段：尽量只提交最终简介里真正留下的图。
     let descr = submitted_descr(prep, "").to_string();
     fill_image_fields(
@@ -2524,6 +2540,47 @@ pub fn apply_site_rules(
         prep.poster_field.as_deref(),
         prep.screenshot_field.as_deref(),
     );
+}
+
+/// 幸运站（LuckPT）LuckAudit 硬断言：有中文字幕就必须真的勾上「中字」。
+/// `wanted_tags` 只是“想勾”，表单可能没有该复选框或勾选失败；最终以 `picked_tags`
+/// 为准，没勾上就写 `required_gaps`，上传前硬拦。
+pub fn enforce_chinese_sub_tag(prep: &mut PreparedUpload, info: &ReleaseInfo, site_id: &str) {
+    if site_id != "luckpt" || !info.has_chinese_subs() {
+        return;
+    }
+    if !prep.picked_tags.iter().any(|t| t.contains("中字")) {
+        prep.required_gaps
+            .push("必填缺失：LuckPT 检测到中文字幕，必须勾「中字」标签（LuckAudit 会退回）".into());
+    }
+}
+
+/// 站点结构硬规则（目前财神启用）：MediaInfo 必须落独立栏、简介里不能带
+/// MediaInfo/BDInfo 块、图片外面不能包 `[url]`/`<a>`。检查最终提交值，缺了就写
+/// `required_gaps`；手动 `reseed` 和自动发种都会在上传前中止。
+pub(super) fn enforce_structural_rules(prep: &mut PreparedUpload, rules: &crate::gates::SiteRules) {
+    if rules.separate_mediainfo() {
+        let has_separate = ["technical_info", "media_info", "media_bdinfo", "mediainfo"]
+            .iter()
+            .any(|f| {
+                field_lookup(&prep.fields, f)
+                    .map(|v| !v.trim().is_empty())
+                    .unwrap_or(false)
+            });
+        if !has_separate {
+            prep.required_gaps
+                .push("必填缺失：MediaInfo 必须填在独立栏，不能只放简介".into());
+        }
+    }
+    let descr = submitted_descr(prep, "").to_string();
+    if rules.descr_no_mediainfo() && crate::gates::descr_has_mediainfo_block(&descr) {
+        prep.required_gaps
+            .push("必填缺失：简介里仍带 MediaInfo/BDInfo 块（技术信息只放独立栏）".into());
+    }
+    if rules.descr_no_linked_images() && crate::gates::has_url_wrapped_image(&descr) {
+        prep.required_gaps
+            .push("必填缺失：简介里有图片外层再包 [url]/<a>（站点要求图片裸放）".into());
+    }
 }
 
 /// 门禁里不需要联网的部分（转 BBCode、选档、必填校验）。单测走这里，避免打外网图。

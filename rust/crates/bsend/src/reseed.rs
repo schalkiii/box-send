@@ -442,11 +442,16 @@ pub fn preflight(
         }
     }
 
-    // ① 中字标签
+    // ① 中字标签：LuckAudit 会把“有中文字幕但没勾中字”直接判不通过。
+    // 幸运站按硬错误处理；其他站没有 LuckAudit，仍只提示，避免把没有该复选框的站全拦死。
     if info.has_chinese_subs() && !tags.iter().any(|t| t.contains("中字")) {
-        pf.warnings.push(
-            "检测到中文字幕，确认表单里勾上「中字」类标签（发布时自动勾选；表单没有该复选框才会漏）".into(),
-        );
+        let msg = "检测到中文字幕，必须勾上「中字」标签（LuckAudit 会按未选中字退回）";
+        if site_id == "luckpt" {
+            pf.errors.push(msg.into());
+        } else {
+            pf.warnings
+                .push(format!("{msg}；发布时自动勾选，表单没有该复选框才会漏"));
+        }
     }
     pf
 }
@@ -2696,6 +2701,7 @@ fn run_reseed_inner(
                 info: info.clone(),
             };
             apply_site_rules(&mut prep, &rules, Some(&ctx));
+            enforce_chinese_sub_tag(&mut prep, &info, &req.target_site);
             if pre_audit_supported(&prep.form_html) {
                 log("调用站点官方预审（LuckAudit）…");
                 match run_pre_audit(&tgt, &info, &prep) {

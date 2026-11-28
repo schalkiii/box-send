@@ -100,6 +100,12 @@ pub struct SiteRules {
     pub require_links: Option<bool>,
     /// 是否要求 MediaInfo 非空（缺省 true）
     pub require_mediainfo: Option<bool>,
+    /// 是否要求 MediaInfo 必须落在独立栏，不能内嵌简介（缺省 false；财神 true）
+    pub separate_mediainfo: Option<bool>,
+    /// 是否禁止简介里再出现 MediaInfo/BDInfo 块（缺省 false；财神 true）
+    pub descr_no_mediainfo: Option<bool>,
+    /// 是否禁止图片外面再包一层 URL 链接（缺省 false；财神 true）
+    pub descr_no_linked_images: Option<bool>,
     /// 禁发关键词（名称/副标题/简介命中即 Block）
     #[serde(default)]
     pub banned_keywords: Vec<String>,
@@ -154,6 +160,15 @@ impl SiteRules {
     pub fn require_mediainfo(&self) -> bool {
         self.require_mediainfo.unwrap_or(true)
     }
+    pub fn separate_mediainfo(&self) -> bool {
+        self.separate_mediainfo.unwrap_or(false)
+    }
+    pub fn descr_no_mediainfo(&self) -> bool {
+        self.descr_no_mediainfo.unwrap_or(false)
+    }
+    pub fn descr_no_linked_images(&self) -> bool {
+        self.descr_no_linked_images.unwrap_or(false)
+    }
     pub fn daily_limit(&self) -> u32 {
         self.daily_limit.unwrap_or(2)
     }
@@ -180,6 +195,7 @@ pub struct ImageFloor {
 /// 各站实测站规口径：
 /// - 藏宝阁 / 优堡 / 太乙 / 麒麟：3 张（死图剪掉后不够就拦；只看总图数，不拆海报/截图）
 /// - 熊猫：4 张（站规更严，且要求分段顺序；只看总图数）
+/// - 财神：4 张 = 1 张海报 + 3 张截图（站规明写）
 /// - ptlgs：4 张 = 1 张海报 + 3 张截图（独立字段 `cover` / `screenshots`）
 /// - agsvpt：1 张海报 + 1 张截图（缺海报或截图都会被审核退回）
 /// - tjupt：至少 1 张图（管理要求补海报，按总图兜底，不拆海报/截图）
@@ -194,6 +210,12 @@ pub fn image_floor_detail(site_id: &str) -> Option<ImageFloor> {
             min_total: 4,
             min_poster: 0,
             min_screenshots: 0,
+        }),
+        // 财神站规：至少 1 张海报 + 3 张有效截图，且海报算第一张图。
+        "cspt" => Some(ImageFloor {
+            min_total: 4,
+            min_poster: 1,
+            min_screenshots: 3,
         }),
         "ptlgs" => Some(ImageFloor {
             min_total: 4,
@@ -313,6 +335,8 @@ pub struct GateInput<'a> {
     pub subtitle: &'a str,
     pub descr: &'a str,
     pub mediainfo: &'a str,
+    /// MediaInfo 落到哪个独立字段；`None` 或「内嵌简介」都算没有独立栏
+    pub mediainfo_field: Option<&'a str>,
     pub has_links: bool,
     /// 站内分类文案（选中下拉的 label；None = 未选中）
     pub type_label: Option<&'a str>,
@@ -509,6 +533,49 @@ pub fn evaluate(input: &GateInput<'_>) -> Vec<GateResult> {
         );
     }
 
+    // 财神：MediaInfo 必须落在独立栏，不能内嵌简介
+    if input.rules.separate_mediainfo() {
+        let field = input.mediainfo_field.unwrap_or("");
+        let ok = !field.is_empty() && field != "内嵌简介";
+        add(
+            "G3 MediaInfo 独立栏",
+            ok,
+            if ok {
+                format!("MediaInfo 落在独立栏 {field}")
+            } else {
+                "MediaInfo 没有落到独立栏（不能只塞在简介里）".into()
+            },
+        );
+    }
+
+    // 财神：简介正文里不能再出现 MediaInfo/BDInfo 块
+    if input.rules.descr_no_mediainfo() {
+        let bad = descr_has_mediainfo_block(input.descr);
+        add(
+            "G3 简介不含 MediaInfo",
+            !bad,
+            if bad {
+                "简介里仍带 MediaInfo/BDInfo 块：技术信息只放独立栏，简介里删掉".into()
+            } else {
+                "简介正文没有 MediaInfo/BDInfo 块".into()
+            },
+        );
+    }
+
+    // 财神：图片外面不要再包一层 URL 链接
+    if input.rules.descr_no_linked_images() {
+        let bad = has_url_wrapped_image(input.descr);
+        add(
+            "G3 图片不包 URL",
+            !bad,
+            if bad {
+                "简介里有图片外层再包 [url]/<a>：站点要求图片裸放".into()
+            } else {
+                "简介图片外层没有 URL 链接".into()
+            },
+        );
+    }
+
     // G3 必填：条目链接（规则可放宽）
     if input.rules.require_links() {
         add(
@@ -583,6 +650,80 @@ pub fn evaluate(input: &GateInput<'_>) -> Vec<GateResult> {
     out
 }
 
+/// 简介里是否还含 MediaInfo/BDInfo 块。
+/// 先看 BBCode/HTML 的 code、quote、pre、fieldset 块，再看整段简介本身。
+pub fn descr_has_mediainfo_block(descr: &str) -> bool {
+    let lower = descr.to_ascii_lowercase();
+    for (open, close) in [
+        ("[code]", "[/code]"),
+        ("[quote]", "[/quote]"),
+        ("<pre", "</pre>"),
+        ("<fieldset", "</fieldset>"),
+        ("<code", "</code>"),
+    ] {
+        let mut start = 0;
+        while let Some(p) = lower[start..].find(open) {
+            let p = start + p;
+            let body_start = p + open.len();
+            let Some(q) = lower[body_start..].find(close) else {
+                break;
+            };
+            let body = &descr[body_start..body_start + q];
+            if looks_like_mediainfo_block(body) {
+                return true;
+            }
+            start = body_start + q + close.len();
+        }
+    }
+    looks_like_mediainfo_block(descr)
+}
+
+fn looks_like_mediainfo_block(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    if lower.contains("disc label") && lower.contains("playlist:") && lower.contains("video:") {
+        return true;
+    }
+    const KEYS: [&str; 10] = [
+        "unique id",
+        "disc info",
+        "format",
+        "duration",
+        "bit rate",
+        "width",
+        "height",
+        "codec id",
+        "video:",
+        "video :",
+    ];
+    let hits = KEYS.iter().filter(|k| lower.contains(**k)).count();
+    let lines = text.lines().filter(|l| !l.trim().is_empty()).count();
+    // 两个泛词（Format、Width）在普通文案里也可能出现；至少 3 个 MediaInfo 特征
+    // 加 5 行才按技术块处理，避免把带尺寸说明的普通简介误判。
+    hits >= 3 && lines >= 5
+}
+
+/// 简介里是否有图片被 `[url]` / `<a>` 再包一层。
+pub fn has_url_wrapped_image(descr: &str) -> bool {
+    let lower = descr.to_ascii_lowercase();
+    for (open, close, img) in [("[url", "[/url]", "[img"), ("<a ", "</a>", "<img")] {
+        let mut start = 0;
+        while let Some(p) = lower[start..].find(open) {
+            let p = start + p;
+            let Some(close_at) = lower[p..].find(close).map(|q| p + q) else {
+                break;
+            };
+            let Some(img_at) = lower[p..].find(img).map(|q| p + q) else {
+                break;
+            };
+            if img_at > p && img_at < close_at {
+                return true;
+            }
+            start = close_at + close.len();
+        }
+    }
+    false
+}
+
 /// 门禁汇总：全 Pass 才允许自动发
 pub fn all_passed(results: &[GateResult]) -> bool {
     results.iter().all(|r| r.verdict == Verdict::Pass)
@@ -599,6 +740,7 @@ mod tests {
             subtitle: "国产剧 全41集",
             descr: "简介 https://www.imdb.com/title/tt1/",
             mediainfo: "General\nFormat : MPEG-4",
+            mediainfo_field: Some("technical_info"),
             has_links: true,
             type_label: Some("剧集"),
             core_gaps: &[],
@@ -889,7 +1031,59 @@ mod tests {
             (panda.min_total, panda.min_poster, panda.min_screenshots),
             (4, 0, 0)
         );
+        // 财神：1 张海报 + 3 张截图（211038/211036 就是因为少于 3 张截图被退）
+        let cspt = image_floor_detail("cspt").unwrap();
+        assert_eq!(
+            (cspt.min_total, cspt.min_poster, cspt.min_screenshots),
+            (4, 1, 3)
+        );
         assert!(image_floor_detail("unknown").is_none());
+    }
+
+    #[test]
+    fn cspt_structure_gates_block_mediainfo_in_descr_and_linked_images() {
+        let rules = SiteRules {
+            separate_mediainfo: Some(true),
+            descr_no_mediainfo: Some(true),
+            descr_no_linked_images: Some(true),
+            require_poster: Some(1),
+            require_screenshots: Some(3),
+            ..Default::default()
+        };
+        // 红：MediaInfo 内嵌简介、图片外层包 URL、没有独立 MediaInfo 栏
+        let mut input = base_input(&rules);
+        input.mediainfo_field = Some("内嵌简介");
+        input.descr = "[quote][b]MediaInfo[/b]\n[code]General\nUnique ID : 1\nFormat : AVC\nDuration : 1h\nWidth : 1920\nHeight : 1080[/code][/quote]\n[url=https://a/1.jpg][img]https://a/1.jpg[/img][/url]";
+        let out = evaluate(&input);
+        for gate in [
+            "G3 MediaInfo 独立栏",
+            "G3 简介不含 MediaInfo",
+            "G3 图片不包 URL",
+            "G3 海报",
+            "G3 截图",
+        ] {
+            assert!(
+                out.iter()
+                    .any(|r| r.gate == gate && r.verdict == Verdict::Block),
+                "门禁 {gate} 应拦下：{out:?}"
+            );
+        }
+        // 普通简介只出现 Format、Width 两个泛词，不能被当成 MediaInfo 块
+        let mut prose = base_input(&rules);
+        prose.descr = "Format: 1080p\nWidth: 1920\n第一段正文\n第二段正文\n第三段正文";
+        let out = evaluate(&prose);
+        assert!(
+            out.iter()
+                .any(|r| r.gate == "G3 简介不含 MediaInfo" && r.verdict == Verdict::Pass),
+            "泛词不能误判成 MediaInfo：{out:?}"
+        );
+        // 绿：MediaInfo 在独立栏、简介只放正文和图
+        let mut ok = base_input(&rules);
+        ok.descr = "正文\n[img]https://a/poster.jpg[/img]\n[img]https://a/1.jpg[/img]\n[img]https://a/2.jpg[/img]\n[img]https://a/3.jpg[/img]";
+        ok.poster_count = 1;
+        ok.screenshot_count = 3;
+        let out = evaluate(&ok);
+        assert!(all_passed(&out), "{out:?}");
     }
 
     #[test]
