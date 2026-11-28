@@ -14,7 +14,9 @@ cargo test -p bsend --lib reseed::tests::exist_marker # 跑单条用例
 cargo build --release -p bsend-cli                   # 产物 rust/target/release/bsend.exe
 cargo build --profile gui-release -p bsend-gui       # 无 Windows SDK 也能出 exe：rust/target/gui-release/bsend-gui.exe
 
-# 推送：全局 http.proxy 会让 git 在代理隧道里 TLS reset；直连并指定 openssl 后端
+# 推送：直连 GitHub 现在会超时/连接重置；本机 7890 代理可用。代理不通时再试直连
+git -c http.proxy=http://127.0.0.1:7890 -c http.sslBackend=openssl push origin master
+# 直连（代理挂掉时）
 git -c http.proxy= -c http.sslBackend=openssl push origin master
 
 # 试运行：拉上传页构造字段 + 跑发布前检查，不上传
